@@ -430,6 +430,7 @@ server.start = function( port )
         server.world_state = server.refresh()
 
         server.hook = hook.update("MULTIPLAYER_SERVER_UPDATE")
+        server.chill = hook.timer(30, "MULTIPLAYER_CHILL_TIMER")
         -- borrow client hook to update cache variables
         --server.inputhook = hook.input("MULTIPLAYER_CLIENT_INPUT")
         player.pilot():setNoDeath( true )    -- keep the server running
@@ -672,5 +673,13 @@ server.update = function ()
 end
 
 MULTIPLAYER_SERVER_UPDATE = function() return server.update() end
+
+function MULTIPLAYER_CHILL_TIMER ()
+    for _ii, mpplt in ipairs(server.players) do
+        mpplt:fillAmmo()
+        mpplt:setHeat( 0, true )
+    end
+    server.chill = hook.timer(60, "MULTIPLAYER_CHILL_TIMER")
+end
 
 return server
