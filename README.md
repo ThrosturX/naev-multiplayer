@@ -2,7 +2,8 @@
 
 This plugin provides the necessary files to manage multiplayer in Naev.
 
-The plugin is fairly experimental and as such no backwards compatibility is guaranteed. It is recommended to play on the latest version of Naev (if compatible) and latest version of the plugin for all parties involved. There are many features that haven't been implemented yet, and some that might just get brushed over. I like to stick to the principles that get us all the most amount of fun with the least amount of headaches, so let's make it fun and easy and we'll take it from there.
+The plugin is fairly experimental and as such no backwards compatibility is guaranteed. It is recommended to play on the latest version of Naev (if compatible) and latest version of the plugin for all parties involved.
+There are many features that haven't been implemented yet, and some that might just get brushed over. I like to stick to the principles that get us all the most amount of fun with the least amount of headaches, so let's make it fun and easy and we'll take it from there.
 
 ### Some things to note:
 
@@ -21,7 +22,14 @@ The plugin is fairly experimental and as such no backwards compatibility is guar
 
 ### The chat
 
-There is a basic chat feature. You press your hail button and a text window pops up. Type a short message fast before you are disconnected. Once you have sent your message, you will be resynchronized to where the server says you should be and can continue playing. Everyone will see your message if you are connected, you can confirm you are connected if your message appears in your message log. This is mainly meant for short messages such as "go" or "attack goddard", but can be used for other things as well. Please be civil. Question marks don't work, use something else instead. Perhaps your peers can decide on something like "ma" (a homage to Firefly, "ma" (嗎) is the Chinese equivalent of a question mark).
+There is a basic chat feature. You press your hail button and a text window pops up. Type a short message fast before you are disconnected.
+
+Once you have sent your message, you will be resynchronized to where the server says you should be and can continue playing.
+Everyone will see your message if you are connected, you can confirm you are connected if your message appears in your message log.
+
+This is mainly meant for short messages such as "go" or "attack goddard", but can be used for other things as well. Please be civil.
+
+Question marks don't work, use something else instead. Perhaps your peers can decide on something like "ma" (a homage to Firefly, "ma" (嗎) is the Chinese equivalent of a question mark).
 
 ## Configuration
 
@@ -30,7 +38,8 @@ Insert the following line at the very end of your `conf.lua`: `lua_enet = true`
 
 ### Server configuration
 
-By default, the server tries to use port 6789, which is not ephemeral. You can change the code to use another port, or 0 if you wish to host a server but cannot do any port forwarding. In the case of port 0, you will need to find out what ephemeral port was selected automatically with a tool of your choice. You will probably have to forward the server port in your router setting (reminder: the default is 6789).
+By default, the server tries to use port 6789, which is not ephemeral. You can change the code to use another port, or 0 if you wish to host a server but cannot do any port forwarding.
+In the case of port 0, you will need to find out what ephemeral port was selected automatically with a tool of your choice. You will probably have to forward the server port in your router setting (reminder: the default is 6789).
 
 ## Starting a server
 
@@ -115,5 +124,6 @@ If this was successful, you can now connect to your favorite server with the cli
 
 ### Removing the "Start MP Server" Button (or the other button)
 
-If you don't intend on hosting a server, you might as well remove the button from your info menu. You can edit the `events/multiplayer.lua` file by simply removing the line that contains the label on the button you want to remove, in this case "Start MP Server". Likewise, you can do the same thing to the "Connect to Multiplayer" button if you only want to be able to host a server.
+If you don't intend on hosting a server, you might as well remove the button from your info menu. You can edit the `events/multiplayer.lua` file by simply removing the line that contains the label on the button you want to remove, in this case "Start MP Server".
+Likewise, you can do the same thing to the "Connect to Multiplayer" button if you only want to be able to host a server.
 
