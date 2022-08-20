@@ -510,7 +510,7 @@ server.synchronize_player = function( peer, player_info_str )
         server.playerinfo[ppid] = ppinfo
         
         -- server authority on health
-        local armour, shield, stress = server.players[ppid]:health()
+        local armour, shield, stress = server.players[ppid]:health( true )
         ppinfo.armour = armour
         ppinfo.shield = shield
         ppinfo.stress = stress
@@ -527,12 +527,11 @@ server.synchronize_player = function( peer, player_info_str )
         )
         if ppinfo.armour > armour * 1.02 or ppinfo.shield > shield * 1.02 or ppinfo.stress > stress + 10 then
             broadcast( common.SYNC_PLAYER, syncline, "unreliable" )
-            server.players[ppid]:fillAmmo()
         elseif math.abs(rnd.threesigma()) >= 2.5 then
             sendMessage( peer, common.SYNC_PLAYER, syncline, "reliable" )
-            server.players[ppid]:fillAmmo()
         end
         common.sync_player( ppid, ppinfo, server.players )
+        server.players[ppid]:fillAmmo()
     end
 end
 
@@ -596,7 +595,7 @@ server.refresh = function()
                    target = server.playerinfo[ppid].target
                 end
             end
-            local armour, shield, stress = pplt:health()
+            local armour, shield, stress = pplt:health( true )
             local velx, vely = pplt:vel():get()
             local posx, posy = pplt:pos():get()
             world_state = world_state .. fmt.f("{id} {posx} {posy} {dir} {velx} {vely} {armour} {shield} {stress} {accel} {primary} {secondary} {target}\n", {

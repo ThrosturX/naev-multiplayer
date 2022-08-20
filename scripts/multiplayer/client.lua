@@ -54,7 +54,7 @@ local function _marshal ( players_info )
     local cache = naev.cache()
     local message = common.marshal_me(client.playerinfo.nick, cache.accel, cache.primary, cache.secondary)
     for opid, opplt in pairs(players_info) do
-        -- TODO cache ooplts' ships
+        -- TODO cache opplts' ships
         message = message .. '\n' .. fmt.f( "{id}={ship}", { id = opid, ship = opplt:ship():nameRaw() } )
     end
     return message .. '\n'
@@ -104,6 +104,8 @@ client.start = function( bindaddr, bindport, localport )
     client.pilots = {}
     pilot.clear()
     pilot.toggleSpawn(false)
+    -- TODO HERE: This part was largely so that error messages say "MULTIPLAYER" and
+    -- not just the player ship name, maybe give the player a cargo shuttle called "MULTIPLAYER" instead
     -- give the player a new ship
     local ship_choices_large = {
         "Kestrel",
@@ -274,10 +276,12 @@ client.synchronize = function( world_state )
                     client.pilots[ppid]:setVel(vec2.new(ppinfo.velx, ppinfo.vely))
                 end
                 client.pilots[ppid]:setDir(ppinfo.dir)
+                local armour_fix = math.max(125, ppinfo.armour)
                 client.pilots[ppid]:setHealth(
-                    math.min(100, 5 + ppinfo.armour + rnd.rnd(10, 15)),
-                    math.max( rnd.rnd(0, 2), ppinfo.shield ),
-                    ppinfo.stress
+                    armour_fix,
+                    math.max( rnd.rnd(1, 2), ppinfo.shield ),
+                    ppinfo.stress,
+                    true
                 )
                 pilot.taskClear( client.pilots[ppid] )
                 if ppinfo.weapset then
@@ -319,7 +323,7 @@ client.synchronize = function( world_state )
                 if hard_resync then
                   ppme:setVel( vec2.new(ppinfo.velx, ppinfo.vely) )
                 end
-                print("HARD SYNC " .. tostring(hard_resync))
+                print("SYNC ME -- HARD SYNC: " .. tostring(hard_resync))
                 hard_resync = nil
 --                ppme:effectAdd("Blink", 1)
             end
