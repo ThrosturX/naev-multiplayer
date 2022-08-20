@@ -9,7 +9,7 @@ local escort_outfits = eoutfits.merge{{
    -- Heavy Weapons
    "Turbolaser", "Heavy Ripper Turret", "Railgun Turret",
    "Railgun", "Heavy Laser Turret", "Heavy Ion Turret",
-   "Heavy Laser Turret",
+   "Heavy Laser Turret", "Heavy Razor Turret"
    -- Medium Weapons
    "Heavy Ripper Cannon",
    "Enygma Systems Turreted Fury Launcher",
@@ -18,7 +18,7 @@ local escort_outfits = eoutfits.merge{{
    "Plasma Turret MK2", "EMP Grenade Launcher",
    "TeraCom Headhunter Launcher",
    "TeraCom Medusa Launcher", "TeraCom Vengeance Launcher",
-   "Enygma Systems Spearhead Launcher", "Unicorp Caesar IV Launcher",
+   "Unicorp Caesar IV Launcher",
    "TeraCom Fury Launcher", "TeraCom Headhunter Launcher",
    "TeraCom Imperator Launcher",
    "Laser Cannon MK2", "Razor MK2", "Vulcan Gun", "Plasma Blaster MK2",
