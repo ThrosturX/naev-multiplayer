@@ -330,9 +330,11 @@ MESSAGE_HANDLERS[common.SEND_MESSAGE] = function ( peer, data )
         if secret and ship_choice_themes[secret] then
             ships = ship_choice_themes[secret]
         end
-        local plid = REGISTERED[peer:index()] or "UNREGISTERED"
-        local message =  data[1] .. '\n' .. server.players[plid]:name()
-        return broadcast( common.SEND_MESSAGE, message )
+        local plid = REGISTERED[peer:index()]
+        if server.players[plid] then
+            local message =  data[1] .. '\n' .. server.players[plid]:name()
+            return broadcast( common.SEND_MESSAGE, message )
+        end
     end
 end
 
