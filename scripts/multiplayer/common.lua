@@ -295,6 +295,7 @@ end
 
 common.sync_player = function ( ppid, ppinfo, container, resync )
     local this_pilot = container[ppid]
+    this_pilot:fillAmmo()
     local target = ppinfo.target or "NO TARGET!!"
     if target and container[ target ] then
         container[ppid]:setTarget( container[target] )
