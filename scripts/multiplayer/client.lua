@@ -276,7 +276,7 @@ client.synchronize = function( world_state )
                     client.pilots[ppid]:setVel(vec2.new(ppinfo.velx, ppinfo.vely))
                 end
                 client.pilots[ppid]:setDir(ppinfo.dir)
-                local armour_fix = math.max(125, ppinfo.armour)
+                local armour_fix = math.max(25, ppinfo.armour)
                 client.pilots[ppid]:setHealth(
                     armour_fix,
                     math.max( rnd.rnd(1, 2), ppinfo.shield ),
