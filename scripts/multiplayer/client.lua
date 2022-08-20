@@ -280,8 +280,7 @@ client.synchronize = function( world_state )
                 client.pilots[ppid]:setHealth(
                     armour_fix,
                     math.max( rnd.rnd(1, 2), ppinfo.shield ),
-                    ppinfo.stress,
-                    true
+                    ppinfo.stress
                 )
                 pilot.taskClear( client.pilots[ppid] )
                 if ppinfo.weapset then

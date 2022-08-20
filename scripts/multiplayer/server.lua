@@ -510,7 +510,7 @@ server.synchronize_player = function( peer, player_info_str )
         server.playerinfo[ppid] = ppinfo
         
         -- server authority on health
-        local armour, shield, stress = server.players[ppid]:health( true )
+        local armour, shield, stress = server.players[ppid]:health()
         ppinfo.armour = armour
         ppinfo.shield = shield
         ppinfo.stress = stress
@@ -595,7 +595,7 @@ server.refresh = function()
                    target = server.playerinfo[ppid].target
                 end
             end
-            local armour, shield, stress = pplt:health( true )
+            local armour, shield, stress = pplt:health()
             local velx, vely = pplt:vel():get()
             local posx, posy = pplt:pos():get()
             world_state = world_state .. fmt.f("{id} {posx} {posy} {dir} {velx} {vely} {armour} {shield} {stress} {accel} {primary} {secondary} {target}\n", {
