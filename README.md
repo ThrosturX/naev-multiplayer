@@ -43,7 +43,9 @@ Insert the following line at the very end of your `conf.lua`: `lua_enet = true`
 
 By default, the server tries to use port 6789, which is not ephemeral. You can change the code to use another port, or 0 if you wish to host a server but cannot do any port forwarding.
 
-In the case of port 0, you will need to find out what ephemeral port was selected automatically with a tool of your choice. You will probably have to forward the server port in your router setting (reminder: the default is 6789).
+You will probably have to forward the server port in your router setting (reminder: the default is 6789).
+
+In the case of port 0, you will need to find out what ephemeral port was selected automatically with a tool of your choice, but you should be able to host a server without port forwarding.
 
 ## Starting a server
 
