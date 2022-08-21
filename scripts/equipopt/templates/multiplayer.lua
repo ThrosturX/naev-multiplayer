@@ -9,7 +9,7 @@ local escort_outfits = eoutfits.merge{{
    -- Heavy Weapons
    "Turbolaser", "Heavy Ripper Turret", "Railgun Turret",
    "Railgun", "Heavy Laser Turret", "Heavy Ion Turret",
-   "Heavy Laser Turret", "Heavy Razor Turret"
+   "Heavy Laser Turret", "Heavy Razor Turret",
    -- Medium Weapons
    "Heavy Ripper Cannon",
    "Enygma Systems Turreted Fury Launcher",
