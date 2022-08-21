@@ -81,6 +81,7 @@ If you have a favorite server (such as one hosted regularly by one of your frien
 - Remove the line that registers the server info button
 - Change the label on the connect button to something like "Connect to Favoured"
 - Replace the code that calls `tk.input` with your hard-coded values
+- Change things like the name of the new event and any comments or labels you might want to personalize
 
 If successful, it might look something like this:
 
