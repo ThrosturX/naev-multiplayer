@@ -1,8 +1,8 @@
 # Naev Multiplayer Plugin
 
-![A cartoon-like image of a character with colored 3D glasses](gfx/vn/characters/pers_mpauth.png?raw=true "Multiplayer")
-
 This plugin provides the necessary files to manage multiplayer in Naev.
+
+![A cartoon-like image of a character with colored 3D glasses](gfx/vn/characters/pers_mpauth.png?raw=true "The Original Multiplayer")
 
 The plugin is fairly experimental and as such no backwards compatibility is guaranteed. It is recommended to play on the latest version of Naev (if compatible) and latest version of the plugin for all parties involved.
 
