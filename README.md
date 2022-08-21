@@ -13,7 +13,7 @@ There are many features that haven't been implemented yet, and some that might j
 - Expect some desync, but the server is authoritative 
     - If you shoot on your client but there's nothing to shoot at, you don't lose energy because the server doesn't let you shoot
     - Missiles won't be in sync at all, but they are "predictably" out of sync, so it is a masterable skill
-    - Beams are so out of sync that I removed them from `equiptopts`, it's not even funny
+    - Beams are so out of sync that I removed them from `equipopts`, it's not even funny
     - If you enter a blocking state such as a menu or the chat, you will risk being disconnected by timeout
 - When you die, the server should respawn you in a new ship, but sometimes you might need to reload a save and reconnect
     - If you "respawn" in the same ship, you probably just ate a missile on your client that the server said was a miss, just keep playing
