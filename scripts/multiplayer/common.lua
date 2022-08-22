@@ -246,8 +246,10 @@ common.receivers[common.PLAY_SOUND] = function ( client, message )
         sfx = audio.new( message[1] )
         mp_sounds[message[1]] = sfx
     end
-    for _id, snd in pairs(mp_sounds) do
-        snd:setVolume(0.6)
+    for id, snd in pairs(mp_sounds) do
+        if snd:isLooping() then
+            snd:setVolume(0.6)
+        end
     end
     sfx:play()
     if #message >= 2 then
@@ -273,33 +275,10 @@ common.receivers[common.PLAY_MUSIC] = function ( client, message )
     for _id, snd in pairs(mp_sounds) do
         snd:stop()
     end
+    sfx:setVolume(1.0)
     sfx:play()
 end
 
-common.receivers[common.PLAY_SOUND] = function ( client, message )
-    -- for now, we only allow one sound
-    -- msg[1] is the sound, msg[2] is the message
-    if #message < 1 then
-        -- what you doing server? don't crash me plz
-        return
-    end
-    local sfx = mp_sounds[message[1]]
-    if not sfx then
-        -- TODO: maybe some error handling
-        sfx = audio.new( message[1] )
-        mp_sounds[message[1]] = sfx
-    end
-    for _id, snd in pairs(mp_sounds) do
-        snd:stop()
-    end
-    print(message[1])
-    sfx:play()
-    if #message >= 2 then
-        player.omsgAdd(
-            "#p"..message[2].."#0"
-        )
-    end
-end
 --[[
 --  Server wants to give us a new environment
 --

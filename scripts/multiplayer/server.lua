@@ -757,7 +757,8 @@ function MULTIPLAYER_CHILL_TIMER ()
             mpplt:setTemp( 250, true )
         end
     end
-    server.chill = hook.timer(30, "MULTIPLAYER_CHILL_TIMER")
+    local next_chill = rnd.rnd(30, 90)
+    server.chill = hook.timer(next_chill, "MULTIPLAYER_CHILL_TIMER")
     if rnd.rnd(0, 1) == 0 then
         local chill_song = CHILL_SONGS[rnd.rnd(1, #CHILL_SONGS)]
         broadcast(
@@ -765,7 +766,7 @@ function MULTIPLAYER_CHILL_TIMER ()
             chill_song,
             "reliable"
         )
-        print(chill_song)
+        print("serving guests with " .. chill_song)
     end
 end
 
