@@ -397,7 +397,7 @@ local function toggleOutfit( plid, message, on )
             if ii == 1 then
                 playerID = activated_line
                 if plid ~= playerID then
-                    print("WARNING: Peer trying to activate wrong person's outfit: " .. tostring())
+                    print("WARNING: Peer trying to activate wrong person's outfit: " .. tostring(plid))
                     return
                 end
             else    -- don't fully trust the client
