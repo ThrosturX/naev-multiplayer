@@ -504,6 +504,9 @@ client.update = function( timeout )
         elseif event.type == "disconnect" then
             print(event.peer, " disconnected.")
             common.receivers[common.PLAY_SOUND]( client, { "snd/sounds/jingles/eerie.ogg" } )
+            for _sndid, sfx in pairs(common.mp_sounds) do
+                sfx:setLooping( false )
+            end
             -- try to reconnect
             hook.rm(client.hook)
             hook.timer(6, "reconnect")

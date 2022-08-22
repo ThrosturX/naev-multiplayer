@@ -761,15 +761,13 @@ function MULTIPLAYER_CHILL_TIMER ()
     end
     local next_chill = rnd.rnd(30, 90)
     server.chill = hook.timer(next_chill, "MULTIPLAYER_CHILL_TIMER")
-    if rnd.rnd(0, 1) == 0 then
-        local chill_song = CHILL_SONGS[rnd.rnd(1, #CHILL_SONGS)]
-        broadcast(
-            common.PLAY_MUSIC,
-            chill_song,
-            "reliable"
-        )
-        print("serving guests with " .. chill_song)
-    end
+    local chill_song = CHILL_SONGS[rnd.rnd(1, #CHILL_SONGS)]
+    broadcast(
+        common.PLAY_MUSIC,
+        chill_song,
+        "reliable"
+    )
+    print("serving guests with " .. chill_song)
 end
 
 local ROUND_SOUND = "snd/sounds/jingles/victory.ogg"

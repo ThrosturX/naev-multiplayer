@@ -229,7 +229,7 @@ common.receivers[common.SEND_MESSAGE] = function ( client, message )
 end
 
 
-local mp_sounds = {}
+common.mp_sounds = {}
 --[[
 --  The server wants us to play a sound and/or display
 --  an accompanying message
@@ -241,12 +241,12 @@ common.receivers[common.PLAY_SOUND] = function ( client, message )
         -- what you doing server? don't crash me plz
         return
     end
-    local sfx = mp_sounds[message[1]]
+    local sfx = common.mp_sounds[message[1]]
     if not sfx then
         sfx = audio.new( message[1] )
-        mp_sounds[message[1]] = sfx
+        common.mp_sounds[message[1]] = sfx
     end
-    for id, snd in pairs(mp_sounds) do
+    for id, snd in pairs(common.mp_sounds) do
         if snd:isLooping() then
             snd:setVolume(0.6)
         end
@@ -265,14 +265,14 @@ common.receivers[common.PLAY_MUSIC] = function ( client, message )
         -- what you doing server? don't crash me plz
         return
     end
-    local sfx = mp_sounds[message[1]]
+    local sfx = common.mp_sounds[message[1]]
     if not sfx then
         sfx = audio.new( message[1] )
         sfx:setLooping( true )
-        mp_sounds[message[1]] = sfx
+        common.mp_sounds[message[1]] = sfx
     end
     -- stop any other songs or sounds
-    for _id, snd in pairs(mp_sounds) do
+    for _id, snd in pairs(common.mp_sounds) do
         snd:stop()
     end
     sfx:setVolume(1.0)
