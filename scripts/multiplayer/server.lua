@@ -336,7 +336,7 @@ MESSAGE_HANDLERS[common.REQUEST_UPDATE] = function ( peer, data )
                        )
                        if server.npcs[opid] then
                            sendMessage( peer, common.ADD_NPC, message_data )
-                       else
+                       elseif opid ~= server.hostnick then
                            sendMessage( peer, common.ADD_PILOT, message_data, "reliable" )
                        end
                     else
