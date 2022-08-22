@@ -634,48 +634,50 @@ server.refresh = function()
 
     server.players[server.hostnick] = player.pilot()
     for ppid, pplt in pairs(server.players) do
-        if pplt:exists() and ppid ~= server.hostnick then
-            local accel = 0
-            local primary = 0
-            local secondary = 0
-            local target = server.hostnick
-            if server.playerinfo[ppid] then
-               if server.playerinfo[ppid].accel then
-                  accel = server.playerinfo[ppid].accel
-               end
-               if server.playerinfo[ppid].primary then
-                  primary = server.playerinfo[ppid].primary
-               end
-               if server.playerinfo[ppid].secondary then
-                  secondary = server.playerinfo[ppid].secondary
-               end
-               if server.playerinfo[ppid].target then
-                   target = server.playerinfo[ppid].target
+        if ppid ~= server.hostnick then
+            if pplt:exists() then
+                local accel = 0
+                local primary = 0
+                local secondary = 0
+                local target = server.hostnick
+                if server.playerinfo[ppid] then
+                   if server.playerinfo[ppid].accel then
+                      accel = server.playerinfo[ppid].accel
+                   end
+                   if server.playerinfo[ppid].primary then
+                      primary = server.playerinfo[ppid].primary
+                   end
+                   if server.playerinfo[ppid].secondary then
+                      secondary = server.playerinfo[ppid].secondary
+                   end
+                   if server.playerinfo[ppid].target then
+                       target = server.playerinfo[ppid].target
+                    end
                 end
+                local armour, shield, stress = pplt:health()
+                local velx, vely = pplt:vel():get()
+                local posx, posy = pplt:pos():get()
+                world_state = world_state .. fmt.f("{id} {posx} {posy} {dir} {velx} {vely} {armour} {shield} {stress} {accel} {primary} {secondary} {target}\n", {
+                    id = ppid,
+                    posx = posx,
+                    posy = posy,
+                    dir = pplt:dir(),
+                    velx = velx,
+                    vely = vely,
+                    armour = armour,
+                    shield = shield,
+                    stress = stress,
+                    accel = accel,
+                    primary = primary,
+                    secondary = secondary,
+                    target = target,
+                })
+            else -- it died
+                print("INFO: Player is dead: " .. tostring(ppid) )
+                server.players[ppid]    = nil
+                server.npcs[ppid]       = nil
+                server.playerinfo[ppid] = nil
             end
-            local armour, shield, stress = pplt:health()
-            local velx, vely = pplt:vel():get()
-            local posx, posy = pplt:pos():get()
-            world_state = world_state .. fmt.f("{id} {posx} {posy} {dir} {velx} {vely} {armour} {shield} {stress} {accel} {primary} {secondary} {target}\n", {
-                id = ppid,
-                posx = posx,
-                posy = posy,
-                dir = pplt:dir(),
-                velx = velx,
-                vely = vely,
-                armour = armour,
-                shield = shield,
-                stress = stress,
-                accel = accel,
-                primary = primary,
-                secondary = secondary,
-                target = target,
-            })
-        else -- it died
-            print("INFO: Player is dead: " .. tostring(ppid) )
-            server.players[ppid]    = nil
-            server.npcs[ppid]       = nil
-            server.playerinfo[ppid] = nil
         end
     end
 
