@@ -933,7 +933,7 @@ round_types.team_death = function ()
 
     ROUND_SOUND = "snd/sounds/jingles/success.ogg"
 
-    if rnd.rnd(0, 1) == 0 then
+    if rnd.rnd(0, 1) == 0 and num_players() >= 4 then
         return "team_death"
     end
     return "freeforall"
@@ -992,7 +992,7 @@ end
 local function num_players()
     local count = 0
     for ii, plid in pairs(server.players) do
-        if not server.npcs[plid] then
+        if not server.npcs[plid] and REGISTERED[plid] then
             count = count + 1
         end
     end
@@ -1002,7 +1002,8 @@ end
 function MULTIPLAYER_ROUND_TIMER ( round_type )
     if
         ( not round_type or not round_types[round_type] )
-        or ( round_type == "team_death" and num_players() < 4 )
+        or
+        ( round_type == "team_death" and num_players() < 4 )
     then
         round_type = "freeforall"
     end

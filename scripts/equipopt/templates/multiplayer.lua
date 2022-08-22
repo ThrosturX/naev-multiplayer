@@ -31,7 +31,6 @@ local escort_outfits = eoutfits.merge{{
    "Laser Turret MK1", "Razor Turret MK1", "Turreted Gauss Gun",
    "Plasma Turret MK1",
    "TeraCom Mace Launcher", "TeraCom Banshee Launcher",
-   "Electron Burst Cannon",
    -- Utility
    "Unicorp Light Afterburner",
    "Sensor Array", "Hellburner", "Emergency Shield Booster",
