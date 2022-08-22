@@ -745,13 +745,15 @@ function MULTIPLAYER_CHILL_TIMER ()
         end
     end
     server.chill = hook.timer(30, "MULTIPLAYER_CHILL_TIMER")
-    local chill_song = CHILL_SONGS[rnd.rnd(1, #CHILL_SONGS)]
-    broadcast(
-        common.PLAY_SOUND,
-        chill_song .. "\n",
-        "reliable"
-    )
-    print(chill_song)
+    if rnd.rnd(0, 1) == 0 then
+        local chill_song = CHILL_SONGS[rnd.rnd(1, #CHILL_SONGS)]
+        broadcast(
+            common.PLAY_SOUND,
+            chill_song .. "\n",
+            "reliable"
+        )
+        print(chill_song)
+    end
 end
 
 local ROUND_SOUND = "snd/sounds/jingles/victory.ogg"
@@ -969,7 +971,10 @@ round_types.coopvsnpcs = function ()
 end
 
 function MULTIPLAYER_ROUND_TIMER ( round_type )
-    if not round_type or not round_types[round_type] then
+    if
+        ( not round_type or not round_types[round_type] )
+        or ( round_type == "team_death" and #server.players < 4 )
+    then
         round_type = "freeforall"
     end
     -- set up the new round
