@@ -774,9 +774,9 @@ local ROUND_SOUND = "snd/sounds/jingles/victory.ogg"
 local round_types = {}
 local round_times = {
     freeforall = 30,
-    deathmatch =  120,
-    team_death =  180,
-    coopvsnpcs =  120,
+    deathmatch =  90,
+    team_death =  120,
+    coopvsnpcs =  60,
 }
 round_types.freeforall = function () 
     local mpsystem = "Multiplayer Lobby"
@@ -923,7 +923,7 @@ round_types.team_death = function ()
         end
         the_team.teaminfo = teaminfo
         -- send the team info
-        hook.timer(4, "SEND_TEAM_ASSIGNMENT", the_team)
+        hook.timer(3, "SEND_TEAM_ASSIGNMENT", the_team)
     end
 
     -- reuse deathmatch for ship selection
@@ -931,7 +931,9 @@ round_types.team_death = function ()
 
     ROUND_SOUND = "snd/sounds/jingles/success.ogg"
 
-    return "team_death"
+    if rnd.rnd(0, 1) == 0 then
+        return "team_death"
+    return "freeforall"
 end
 
 function SEND_TEAM_ASSIGNMENT( the_team )
@@ -984,10 +986,20 @@ round_types.coopvsnpcs = function ()
     return "freeforall"
 end
 
+local function num_players()
+    local count = 0
+    for ii, plid in pairs(server.players) do
+        if not server.npcs[plid] then
+            count = count + 1
+        end
+    end
+    return count
+end
+
 function MULTIPLAYER_ROUND_TIMER ( round_type )
     if
         ( not round_type or not round_types[round_type] )
-        or ( round_type == "team_death" and server.host:peer_count() < 4 )
+        or ( round_type == "team_death" and num_players() < 4 )
     then
         round_type = "freeforall"
     end

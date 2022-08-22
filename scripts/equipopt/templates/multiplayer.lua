@@ -12,6 +12,8 @@ local escort_outfits = eoutfits.merge{{
    "Heavy Laser Turret", "Heavy Razor Turret",
    "Repeating Railgun",
    -- Medium Weapons
+   "Grave Lance", "Orion Lance", "Particle Lance",
+   "Electron Burst Cannon",
    "Heavy Ripper Cannon",
    "Enygma Systems Turreted Fury Launcher",
    "Enygma Systems Turreted Headhunter Launcher",
