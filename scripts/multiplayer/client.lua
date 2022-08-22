@@ -1,4 +1,4 @@
--- luacheck: globals MULTIPLAYER_CLIENT_UPDATE MULTIPLAYER_CLIENT_INPUT enterMultiplayer reconnect  (Hook functions passed by name)
+-- luacheck: globals MULTIPLAYER_CLIENT_UPDATE MULTIPLAYER_CLIENT_INPUT enterMultiplayer reconnect control_reestablish (Hook functions passed by name)
 
 local common = require "multiplayer.common"
 local enet = require "enet"
@@ -55,7 +55,9 @@ local function _marshal ( players_info )
     local message = common.marshal_me(client.playerinfo.nick, cache.accel, cache.primary, cache.secondary)
     for opid, opplt in pairs(players_info) do
         -- TODO cache opplts' ships
-        message = message .. '\n' .. fmt.f( "{id}={ship}", { id = opid, ship = opplt:ship():nameRaw() } )
+        if opplt:exists() then
+            message = message .. '\n' .. fmt.f( "{id}={ship}", { id = opid, ship = opplt:ship():nameRaw() } )
+        end
     end
     return message .. '\n'
 end
@@ -165,15 +167,55 @@ client.start = function( bindaddr, bindport, localport )
     }
 end
 
+local omsgid
+local TEMP_FREEZE
+local function control_override( timeout )
+    timeout = timeout or 0.12 
+    TEMP_FREEZE = true
+    player.cinematics(
+        true,
+        {
+            abort = _("Synchronizing..."),
+            no2x = true,
+            gui = false
+        }
+    )
+    omsgid = player.omsgAdd(
+        "#y".._("ESTABLISHING CONTROL").."#0",
+        2
+    )
+    hook.timer( timeout, "control_reestablish" )
+end
+
+function control_reestablish()
+    music.stop( true ) -- let the server direct our musical choices :)
+    player.cinematics(
+        false,
+        {
+            abort = _("Autonav disabled in multiplayer."),
+            no2x = true,
+            gui = true
+        }
+    )
+    TEMP_FREEZE = nil
+    if omsgid then
+        player.omsgChange(
+            omsgid,
+            "#b".._("CONTROL ESTABLISHED").."#0",
+            3
+        )
+    end
+end
+
 local hard_resync
 local MY_SPAWN_POINT = player.pilot():pos()
 client.spawn = function( ppid, shiptype, shipname , outfits, ai )
-    --[[
-    ai = ai or "remote_control"
-    if ai ~= "remote_control" then
-        client.npcs[ppid] = true
+    if
+        client.pilots[ppid]
+        and not client.pilots[ppid]:exists()
+    then
+        client.pilots[ppid] = nil
     end
-    --]]
     ai = "remote_control"
     local mplayerfaction = faction.dynAdd(
         nil, "Multiplayer", "Multiplayer",
@@ -210,11 +252,18 @@ client.spawn = function( ppid, shiptype, shipname , outfits, ai )
             print("respawned pilot for you: " .. tostring(ppid))
             client.alive = true
             hard_resync = true
-            for _ii, oplt in ipairs(client.pilots) do
-                oplt:setHealth(0)
+            for _oplid, oplt in pairs(client.pilots) do
+                if oplt:exists() then
+                    oplt:setHealth(0)
+                end
             end
             -- stay alive to get a new ship if we die
             player.pilot():setNoDeath( true )
+            -- deliberately desync position to get an update
+            player.pilot():setPos(vec2.new(rnd.rnd(-9999, 9999), rnd.rnd(-9999, 9999)))
+            player.pilot():setVel(vec2.new(0, 0))
+            player.pilot():setHealth(100, 100, 100)
+            control_override()
         else
             hard_resync = false
             client.alive = false
@@ -242,12 +291,17 @@ client.synchronize = function( world_state )
     end
     last_resync = last_resync + 1
     local frames_passed = client.server:round_trip_time() / (1000 / FPS)
+    local touched = {}
     for ppid, ppinfo in pairs(world_state.players) do
+        touched[ppid] = true
         if ppid ~= client.playerinfo.nick then
-            if client.pilots[ppid] then
+            if client.pilots[ppid] and client.pilots[ppid]:exists() then
                 local this_pilot = client.pilots[ppid]
                 local target = ppinfo.target or "NO TARGET!!"
-                if target and client.pilots[ target ] then
+                if
+                    target and client.pilots[ target ]
+                    and client.pilots[target]:exists()
+                then
                     client.pilots[ppid]:setTarget( client.pilots[target] )
                 else
                     client.pilots[ppid]:setTarget( player.pilot() )
@@ -276,10 +330,17 @@ client.synchronize = function( world_state )
                     client.pilots[ppid]:setVel(vec2.new(ppinfo.velx, ppinfo.vely))
                 end
                 client.pilots[ppid]:setDir(ppinfo.dir)
-                local armour_fix = math.max(25, ppinfo.armour)
+                local armour_fix = math.max(10, ppinfo.armour)
+                local shield_fix = math.max( 6 + rnd.sigma(), ppinfo.shield )
+                if armour_fix <= 12 then
+                    shield_fix = shield_fix + 6 + rnd.rnd(6, 10)
+                end
+                if ppinfo_armor == 0 then
+                    armour_fix = 0
+                end
                 client.pilots[ppid]:setHealth(
                     armour_fix,
-                    math.max( rnd.rnd(1, 2), ppinfo.shield ),
+                    shield_fix,
                     ppinfo.stress
                 )
                 pilot.taskClear( client.pilots[ppid] )
@@ -329,6 +390,13 @@ client.synchronize = function( world_state )
             -- don't override direction
             -- ppme:setVel( vec2.new(ppinfo.velx, ppinfo.vely) )
             -- ppme:setHealth(ppinfo.armour, ppinfo.shield, ppinfo.stress)
+        end
+    end
+
+    -- clean untouched
+    for plid, pplt in pairs(client.pilots) do
+        if not touched[plid] and pplt:exists() then
+            pplt:disable(true)
         end
     end
 
@@ -468,20 +536,13 @@ function reconnect()
 end
 
 function enterMultiplayer()
-    player.teleport("Somal's Ship Cemetery")
+    player.teleport("Multiplayer Lobby")
     -- register with the server
     tryRegister( client.playerinfo.nick )
 
     client.update( 4000 )
 
-    player.cinematics(
-        false,
-        {
-            abort = _("Autonav disabled in multiplayer."),
-            no2x = true,
-            gui = true
-        }
-    )
+    control_reestablish()
     
     client.hook = hook.update("MULTIPLAYER_CLIENT_UPDATE")
     client.inputhook = hook.input("MULTIPLAYER_CLIENT_INPUT")
@@ -542,7 +603,9 @@ function MULTIPLAYER_CLIENT_INPUT ( inputname, inputpress, args)
     if MP_INPUT_HANDLERS[inputname] then
         MP_INPUT_HANDLERS[inputname]( inputpress, args )
     end
-    soft_sync = 999
+    if not TEMP_FREEZE then
+        soft_sync = 999
+    end
 end
 
 return client

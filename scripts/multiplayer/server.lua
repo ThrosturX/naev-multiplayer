@@ -1,5 +1,5 @@
 --
--- luacheck: globals MULTIPLAYER_SERVER_UPDATE (Hook functions passed by name)
+-- luacheck: globals MULTIPLAYER_SERVER_UPDATE MULTIPLAYER_ROUND_TIMER MULTIPLAYER_CHILL_TIMER SEND_TEAM_ASSIGNMENT (Hook functions passed by name)
 local common = require "multiplayer.common"
 local enet = require "enet"
 local fmt = require "format"
@@ -125,28 +125,29 @@ ship_choice_themes.large_special = {
     "Empire Hawking",
     "Sirius Dogma",
     "Za'lek Mephisto",
+    "Soromid Ira",
 }
 
 local ship_theme = "default"
-local ships = ship_choice_themes[ship_theme]
+local SHIPS = ship_choice_themes[ship_theme]
 
 local function _sanitize_name( suggest )
     local word = suggest:match( "%w+" )
-    return word or "playorDumbf"
+    return word or "SuspiciousPlayer"
 end
 
 local MAX_NPCS = 6
 -- spawn an NPC
-local function createNpc( shiptype )
+local function createNpc( shiptype, force )
     local count = 0
     for _a, _b in pairs(server.npcs) do
         count = count + 1
-        if count >= MAX_NPCS then
+        if count >= MAX_NPCS and not force then
             print("INFO: Canceling NPC creation, limit reached.")
             return
         end
     end
-    shiptype = shiptype or ships[rnd.rnd(1, #ships)]
+    shiptype = shiptype or SHIPS[rnd.rnd(1, #SHIPS)]
     local newnpc = {}
     newnpc.nick = _sanitize_name(pilotname.human():gsub(" ", "t"):gsub("'", "ek"))
     server.npcs[newnpc.nick] = true
@@ -162,6 +163,48 @@ local function createNpc( shiptype )
     server.playerinfo[newnpc.nick] = {}
     pmem = server.players[newnpc.nick]:memory()
     pmem.norun = true
+
+    return newnpc.nick
+end
+
+local function assignPilotToPlayer( playerID, new_ship )
+    local mplayerfaction = faction.dynAdd(
+        nil, "Multiplayer", "Multiplayer",
+        { ai = "remote_control", clear_allies = true, clear_enemies = true }
+    )
+    server.players[playerID] = pilot.add(
+        new_ship,
+        mplayerfaction,
+        random_spawn_point(),
+        playerID,
+        { naked = true }
+    )
+    mp_equip( server.players[playerID] )
+    ai_setup.setup( server.players[playerID] )
+    server.playerinfo[playerID] = {}
+end
+
+local function reshipPlayer( playerID, new_ship )
+    if playerID == server.hostnick then
+        return
+    end
+    if server.players[playerID] and server.players[playerID]:exists() then
+        server.players[playerID]:rm()
+    end
+    if
+        server.npcs[playerID]
+    then
+        if server.players[playerID]:exists() then
+            server.players[playerid]:rm()
+        end
+        server.players[playerID] = nil
+        server.npcs[playerID] = nil
+        server.playerinfo[playerID] = nil
+        createNpc( new_ship, true )
+        return
+    else
+        return assignPilotToPlayer( playerID, new_ship )
+    end
 end
 
 -- registers a player, returns the players unique ID
@@ -174,26 +217,13 @@ local function registerPlayer( playernicksuggest, shiptype, outfits )
     -- create a unique registration ID
     local playerID = shorten( playernicksuggest )
 
-    local mplayerfaction = faction.dynAdd(
-        nil, "Multiplayer", "Multiplayer",
-        { ai = "remote_control", clear_allies = true, clear_enemies = true }
-    )
     -- spawn the pilot server-side
     if playernicksuggest == server.hostnick then
         server.players[playerID] = player.pilot()
     else
         print("ADDING PLAYER " .. playerID )
-        local new_ship = ships[rnd.rnd(1, #ships)]
-        server.players[playerID] = pilot.add(
-            new_ship,
-            mplayerfaction,
-            random_spawn_point(),
-            playerID,
-            { naked = true }
-        )
-        mp_equip( server.players[playerID] )
-        ai_setup.setup( server.players[playerID] )
-        server.playerinfo[playerID] = {}
+        local new_ship = SHIPS[rnd.rnd(1, #SHIPS)]
+        assignPilotToPlayer( playerID, new_ship )
     end
     createNpc( shiptype )
 
@@ -230,7 +260,25 @@ end
 
 local MESSAGE_HANDLERS = {}
 
+-- REGISTERED maps peer:index() to player_id
 local REGISTERED = {}
+-- get the peer from a player id
+local function get_peer( player_id )
+    for pindex, plid in pairs(REGISTERED) do
+        if
+            plid == player_id 
+        then
+            local some_peer = server.host:get_peer(pindex)
+            if
+                some_peer
+                and some_peer:state() == "connected"
+            then
+                return some_peer
+            end
+        end
+    end
+    return nil
+end
 -- player wants to join the server
 MESSAGE_HANDLERS[common.REQUEST_KEY] = function ( peer, data )
     -- peer wants to register as <data>[1] in <data>[2]
@@ -298,10 +346,14 @@ MESSAGE_HANDLERS[common.REQUEST_UPDATE] = function ( peer, data )
             end
 
             -- synchronize this players info
-            server.synchronize_player( peer, data[1] )
+            local in_sync = server.synchronize_player( peer, data[1] )
+            local reliability = "unreliable"
+            if not in_sync then
+                reliability = "reliable"
+            end
 
             -- send this player the requested world state
-            sendMessage( peer, common.RECEIVE_UPDATE, server.world_state, "unreliable" )
+            sendMessage( peer, common.RECEIVE_UPDATE, server.world_state, reliability )
             return
         end
     end
@@ -328,7 +380,7 @@ MESSAGE_HANDLERS[common.SEND_MESSAGE] = function ( peer, data )
         -- cheats section
         local secret = data[1]:match("[%w|_]+")
         if secret and ship_choice_themes[secret] then
-            ships = ship_choice_themes[secret]
+            SHIPS = ship_choice_themes[secret]
         end
         local plid = REGISTERED[peer:index()]
         if server.players[plid] then
@@ -422,7 +474,7 @@ server.start = function( port )
         server.npcs        = {}
         server.playerinfo  = {}
         -- go to multiplayer system
-        player.teleport("Somal's Ship Cemetery")
+        player.teleport("Multiplayer Lobby")
         -- register yourself
         server.hostnick = player.name():gsub(' ', '')
         registerPlayer( server.hostnick, player:pilot():ship():nameRaw() , player:pilot():outfitsList() )
@@ -431,6 +483,7 @@ server.start = function( port )
 
         server.hook = hook.update("MULTIPLAYER_SERVER_UPDATE")
         server.chill = hook.timer(30, "MULTIPLAYER_CHILL_TIMER")
+        server.round = hook.timer(10, "MULTIPLAYER_ROUND_TIMER")
         -- borrow client hook to update cache variables
         --server.inputhook = hook.input("MULTIPLAYER_CLIENT_INPUT")
         player.pilot():setNoDeath( true )    -- keep the server running
@@ -504,6 +557,7 @@ server.synchronize_player = function( peer, player_info_str )
             )
             sendMessage( peer, common.SYNC_PLAYER, syncline, "reliable" )
             server.players[ppid]:fillAmmo()
+            return false
         else
             -- server side sync
             server.players[ppid]:setPos(vec2.new(tonumber(ppinfo.posx), tonumber(ppinfo.posy)))
@@ -528,7 +582,7 @@ server.synchronize_player = function( peer, player_info_str )
                 stress = stress,
             }
         )
-        if ppinfo.armour > armour * 1.02 or ppinfo.shield > shield * 1.02 or ppinfo.stress > stress + 10 then
+        if ppinfo.armour > armour * 1.02 or ppinfo.shield > shield * 1.02 or math.abs(ppinfo.stress - stress) > 8 then
             broadcast( common.SYNC_PLAYER, syncline, "unreliable" )
         elseif math.abs(rnd.threesigma()) >= 2.5 then
             sendMessage( peer, common.SYNC_PLAYER, syncline, "reliable" )
@@ -536,6 +590,7 @@ server.synchronize_player = function( peer, player_info_str )
         common.sync_player( ppid, ppinfo, server.players )
         server.players[ppid]:fillAmmo()
     end
+    return true
 end
 
 server.refresh = function()
@@ -544,7 +599,7 @@ server.refresh = function()
 
     for nid, _bool in pairs(server.npcs) do
         local pplt = server.players[nid]
-        if pplt:exists() then
+        if pplt and pplt:exists() then
             local accel = 1
             local primary = 0
             local secondary = 0
@@ -674,12 +729,279 @@ end
 
 MULTIPLAYER_SERVER_UPDATE = function() return server.update() end
 
+local CHILL_SONGS = {
+    "snd/sounds/songs/feeling-good-05.ogg",
+    "snd/sounds/songs/feeling-good-08.ogg",
+    "snd/sounds/songs/mushroom-background.ogg",
+    "snd/sounds/songs/run-for-your-life-00.ogg",
+    "snd/sounds/songs/space-exploration-08.ogg",
+}
+
 function MULTIPLAYER_CHILL_TIMER ()
-    for _ii, mpplt in ipairs(server.players) do
-        mpplt:fillAmmo()
-        mpplt:setTemp( 0, true )
+    for _plid, mpplt in pairs(server.players) do
+        if mpplt and mpplt:exists() then
+            mpplt:fillAmmo()
+            mpplt:setTemp( 250, true )
+        end
     end
-    server.chill = hook.timer(60, "MULTIPLAYER_CHILL_TIMER")
+    server.chill = hook.timer(30, "MULTIPLAYER_CHILL_TIMER")
+    local chill_song = CHILL_SONGS[rnd.rnd(1, #CHILL_SONGS)]
+    broadcast(
+        common.PLAY_SOUND,
+        chill_song .. "\n",
+        "reliable"
+    )
+    print(chill_song)
+end
+
+local ROUND_SOUND = "snd/sounds/jingles/victory.ogg"
+local round_types = {}
+local round_times = {
+    freeforall = 30,
+    deathmatch =  120,
+    team_death =  180,
+    coopvsnpcs =  120,
+}
+round_types.freeforall = function () 
+    local mpsystem = "Multiplayer Lobby"
+    --player.teleport(mpsystem)
+    broadcast( common.TELEPORT, mpsystem, "reliable" )
+    -- just give everyone a random ship
+    for plid, pplt in pairs(server.players) do
+        local new_ship = SHIPS[rnd.rnd(1, #SHIPS)]
+        reshipPlayer( plid, new_ship ) 
+    end
+    ROUND_SOUND = "snd/sounds/jingles/victory.ogg"
+    local next_choice = rnd.rnd(0, 3)
+    if next_choice == 0 then
+        return "deathmatch"
+    elseif next_choice == 1 then
+        return "team_death"
+    elseif next_choice == 2 then
+        return "coopvsnpcs"
+    else
+        return "freeforall"
+    end
+end
+round_types.deathmatch = function ( silent ) 
+    -- give everyone a random from the same class
+    local choice = rnd.rnd(1, 5)
+    if choice == 1 then
+        player_ships = ship_choice_themes.medium
+    elseif choice == 2 then
+        player_ships = ship_choice_themes.large
+    elseif choice == 3 then
+        player_ships = ship_choice_themes.funny
+    elseif choice == 4 then
+        player_ships = ship_choice_themes.large_special
+    else
+        player_ships = ship_choice_themes.default
+    end
+
+    for plid, pplt in pairs(server.players) do
+        local new_ship = player_ships[rnd.rnd(1, #player_ships)]
+        reshipPlayer( plid, new_ship ) 
+    end
+
+    if silent then
+        return
+    end
+
+    local mpsystem = "Pyro's Pink Slip Storage"
+    broadcast( common.TELEPORT, mpsystem, "reliable" )
+
+    ROUND_SOUND = "snd/sounds/jingles/victory.ogg"
+
+    local choice = rnd.rnd(0, 3)
+    if choice == 0 then
+        return "freeforall"
+    elseif choice == 1 then
+        return "team_death"
+    end
+    return "deathmatch"
+end
+--[[
+--  split all players into 2 groups and team-balance with NPC
+--  teleport group A into blue system and group B into pink system
+--  (client side only, so they know what team they are)
+--  set team A friendly to A and hostile to B and vice versa
+--]]
+round_types.team_death = function ()
+    -- kill all the npcs
+    for nid, _true in pairs(server.npcs) do
+        local npcplt = server.players[nid]
+        if npcplt and npcplt:exists() then
+            local syncline = fmt.f(
+                "{ppid} {energy} {heat} {armour} {shield} {stress}",
+                {
+                    ppid = nid,
+                    energy = 0,
+                    heat = 750,
+                    armour = 0,
+                    shield = 0,
+                    stress = 100,
+                }
+            )
+            broadcast( common.SYNC_PLAYER, syncline, "unreliable" )
+            npcplt:rm()
+            server.npcs[nid] = nil
+            server.players[nid] = nil
+            server.playerinfo[nid] = nil
+        end
+    end
+
+    -- start balancing teams
+    local teams = {}
+    teams.blue = {}
+    teams.pink = {}
+    local next_team = function ()
+        if #teams.blue > #teams.pink then
+            return teams.pink
+        end
+        return teams.blue
+    end
+    for plid, pplt in pairs(server.players) do
+        if plid ~= server.hostnick and not server.npcs[plid] then
+            table.insert(next_team(), plid)
+        end
+    end
+
+    if #teams.blue ~= #teams.pink then
+        local balancer = createNpc()
+        table.insert(teams.pink, balancer)
+    end
+
+    -- consider teams fair
+
+    for color, the_team in pairs( teams ) do
+        -- build the team info
+        local teaminfo = color
+        local xx = 3000
+        local target = "Somal's Ship Cemetery"
+        if color ~= "blue" then
+            xx = -3000
+            target = "Pyro's Pink Slip Storage"
+        end
+        for _j, tplid in ipairs(teams[color]) do
+            -- this might be a slow and unnecessary check
+            local found_peer = get_peer(tplid)
+            if found_peer then
+                teaminfo = teaminfo .. '\n' .. tplid
+                sendMessage(
+                    found_peer,
+                    common.TELEPORT,
+                    target,
+                    "reliable"
+                )
+            end
+            if
+                server.players[tplid]
+                and server.players[tplid]:exists()
+            then
+                server.players[tplid]:setPos(
+                    vec2.new(
+                        xx, rnd.rnd(-500, 500)
+                    )
+                )
+            end
+        end
+        the_team.teaminfo = teaminfo
+        -- send the team info
+        hook.timer(1, "SEND_TEAM_ASSIGNMENT", the_team)
+    end
+
+    -- reuse deathmatch for ship selection
+    round_types.deathmatch( true )
+
+    ROUND_SOUND = "snd/sounds/jingles/success.ogg"
+
+    return "team_death"
+end
+
+function SEND_TEAM_ASSIGNMENT( the_team )
+    for _j, tplid in ipairs(the_team) do
+        local player_peer = get_peer(tplid)
+        if player_peer then
+            -- send the team information
+            sendMessage(
+                player_peer,
+                common.ASSIGN_TEAM,
+                the_team.teaminfo,
+                "unsequenced"
+            )
+        elseif not server.npcs[tplid] then
+            local badplt = server.players[tplid]
+            if badplt and badplt:exists() then
+                badplt:rm()
+            end
+            server.players[tplid] = nil
+            print("Couldn't find the peer for " .. tplid )
+        end
+    end
+
+end
+
+round_types.coopvsnpcs = function ()
+    local mpsystem = "Somal's Ship Cemetery"
+    --player.teleport(mpsystem)
+    broadcast( common.TELEPORT, mpsystem )
+    local npc_ships = ship_choice_themes.large
+    local player_ships
+    local choice = rnd.rnd(1, 3)
+    if choice == 1 then
+        player_ships = ship_choice_themes.small
+    elseif choice == 2 then
+        player_ships = ship_choice_themes.medium
+    elseif choice == 3 then
+        player_ships = ship_choice_themes.funny
+    end
+    for plid, pplt in pairs(server.players) do
+        local new_ship
+        if not server.npcs[plid] then
+            new_ship = player_ships[rnd.rnd(1, #player_ships)]
+        else
+            new_ship = npc_ships[rnd.rnd(1, #npc_ships)]
+        end
+        reshipPlayer( plid, new_ship ) 
+    end
+    ROUND_SOUND = "snd/sounds/meow.ogg"
+    return "freeforall"
+end
+
+function MULTIPLAYER_ROUND_TIMER ( round_type )
+    if not round_type or not round_types[round_type] then
+        round_type = "freeforall"
+    end
+    -- set up the new round
+    local next_timer = round_times[round_type] or 60
+    local next_round = round_types[round_type]()
+    -- reposition, fill ammo and reset heat
+    for plid, mpplt in pairs(server.players) do
+        if mpplt and mpplt:exists() then
+            if round_type ~= "team_death" then
+                mpplt:setPos( random_spawn_point() )
+            end
+            mpplt:fillAmmo()
+            mpplt:setTemp( 0 )
+            if server.npcs[plid] then
+                server.players[plid]:rm()
+            end
+        end
+    end
+    -- set the hook for the next round
+    server.round = hook.timer(next_timer, "MULTIPLAYER_ROUND_TIMER", next_round )
+    broadcast(
+        common.PLAY_SOUND,
+        fmt.f(
+            "{sound}\nStarting a new round of {round} ({timer} seconds)",
+            {
+                sound = ROUND_SOUND,
+                round = round_type,
+                timer = next_timer
+            }
+        ),
+        "unsequenced"
+    )
 end
 
 return server

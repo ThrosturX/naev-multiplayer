@@ -43,6 +43,9 @@ common.REGISTRATION_KEY  = "REGISTERED"
 common.ACTIVATE_OUTFIT   = "ACTIVATE"
 common.DEACTIVATE_OUTFIT = "DEACTIVATE"
 common.SEND_MESSAGE      = "MESSAGE"
+common.PLAY_SOUND        = "SOUND"
+common.TELEPORT          = "TELEPORT"
+common.ASSIGN_TEAM       = "TEAM"
 common.receivers = {}
 
 --[[
@@ -220,6 +223,73 @@ common.receivers[common.SEND_MESSAGE] = function ( client, message )
             oplt:broadcast( message[1], true )
         else
             pilot.comm( player_id or "Unknown", message[1] )
+        end
+    end
+end
+
+
+local mp_sounds = {}
+--[[
+--  The server wants us to play a sound and/or display
+--  an accompanying message
+--]]
+common.receivers[common.PLAY_SOUND] = function ( client, message )
+    -- for now, we only allow one sound
+    -- msg[1] is the sound, msg[2] is the message
+    if #message < 1 then
+        -- what you doing server? don't crash me plz
+        return
+    end
+    local sfx = mp_sounds[message[1]]
+    if not sfx then
+        -- TODO: maybe some error handling
+        sfx = audio.new( message[1] )
+        mp_sounds[message[1]] = sfx
+    end
+    print(message[1])
+    sfx:play()
+    if #message >= 2 then
+        player.omsgAdd(
+            "#p"..message[2].."#0"
+        )
+    end
+end
+
+--[[
+--  Server wants to give us a new environment
+--
+--]]
+common.receivers[common.TELEPORT] = function ( client, message )
+    local target = "Multiplayer Lobby"
+    if #message >= 1 then
+        target = message[1]
+    end
+    player.teleport( target )
+end
+
+--[[
+--  The server wants us to be on a team, we get our team name and
+--  our team members (team name is currently unused)
+--  lines should be: teamname\nmember1\nmember2 ...
+--]]
+common.receivers[common.ASSIGN_TEAM] = function ( client, message )
+    -- assume everyone is an enemy
+    for _plid, pplt in pairs(client.pilots) do
+        if pplt:exists() then
+            pplt:setHostile()
+        end
+    end
+
+    for ii, item in ipairs(message) do
+        if ii >= 2 then
+            local friend = item
+            if
+                client.pilots[friend]
+                and client.pilots[friend]:exists()
+            then
+                client.pilots[friend]:setFriendly()
+                client.pilots[friend]:setInvincPlayer()
+            end
         end
     end
 end

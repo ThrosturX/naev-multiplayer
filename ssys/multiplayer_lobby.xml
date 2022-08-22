@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ssys name="Multiplayer Lobby">
+ <general>
+  <background>plasmastorm</background>
+  <radius>3000.000000</radius>
+  <stars>300</stars>
+  <interference>16.000000</interference>
+  <nebula volatility="0.000020" hue="000.000000">0.000000</nebula>
+ </general>
+ <pos x="318.859840" y="-597.691840"/>
+ <spobs/>
+ <jumps/>
+</ssys>

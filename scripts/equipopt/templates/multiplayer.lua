@@ -10,6 +10,7 @@ local escort_outfits = eoutfits.merge{{
    "Turbolaser", "Heavy Ripper Turret", "Railgun Turret",
    "Railgun", "Heavy Laser Turret", "Heavy Ion Turret",
    "Heavy Laser Turret", "Heavy Razor Turret",
+   "Repeating Railgun",
    -- Medium Weapons
    "Heavy Ripper Cannon",
    "Enygma Systems Turreted Fury Launcher",
@@ -21,6 +22,7 @@ local escort_outfits = eoutfits.merge{{
    "Unicorp Caesar IV Launcher",
    "TeraCom Fury Launcher", "TeraCom Headhunter Launcher",
    "TeraCom Imperator Launcher",
+   "Repeating Banshee Launcher",
    "Laser Cannon MK2", "Razor MK2", "Vulcan Gun", "Plasma Blaster MK2",
    "Ion Cannon",
    -- Small Weapons
@@ -62,7 +64,7 @@ local escort_params = {
       } end,
 	["Pirate Kestrel"] = function () return {
 		prefer = {
-			[ "Enygma Systems Spearhead Launcher"] = 7, ["TeraCom Headhunter Launcher"] = 4,
+			[ "Unicorp Caesar IV Launcher"] = 7, ["TeraCom Headhunter Launcher"] = 4,
 			["TeraCom Medusa Launcher"] = 3, ["Enygma Systems Turreted Fury Launcher"] = 2
 		},
          type_range = {
