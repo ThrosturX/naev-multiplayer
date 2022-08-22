@@ -477,7 +477,7 @@ server.start = function( port )
         player.teleport("Multiplayer Lobby")
         -- register yourself
         server.hostnick = player.name():gsub(' ', '')
-        registerPlayer( server.hostnick, player:pilot():ship():nameRaw() , player:pilot():outfitsList() )
+        -- registerPlayer( server.hostnick, player:pilot():ship():nameRaw() , player:pilot():outfitsList() )
         -- update world state with yourself (weird)
         server.world_state = server.refresh()
 
@@ -923,7 +923,7 @@ round_types.team_death = function ()
         end
         the_team.teaminfo = teaminfo
         -- send the team info
-        hook.timer(1, "SEND_TEAM_ASSIGNMENT", the_team)
+        hook.timer(4, "SEND_TEAM_ASSIGNMENT", the_team)
     end
 
     -- reuse deathmatch for ship selection
