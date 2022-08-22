@@ -933,6 +933,7 @@ round_types.team_death = function ()
 
     if rnd.rnd(0, 1) == 0 then
         return "team_death"
+    end
     return "freeforall"
 end
 
