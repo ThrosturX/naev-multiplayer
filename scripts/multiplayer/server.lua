@@ -634,7 +634,7 @@ server.refresh = function()
 
     server.players[server.hostnick] = player.pilot()
     for ppid, pplt in pairs(server.players) do
-        if pplt:exists() then
+        if pplt:exists() and ppid ~= server.hostnick then
             local accel = 0
             local primary = 0
             local secondary = 0
