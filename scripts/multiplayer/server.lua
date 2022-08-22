@@ -222,7 +222,7 @@ local function registerPlayer( playernicksuggest, shiptype, outfits )
         server.players[playerID] = player.pilot()
     else
         print("ADDING PLAYER " .. playerID )
-        local new_ship = SHIPS[rnd.rnd(1, #SHIPS)]
+        local new_ship = ship_choices.funny[rnd.rnd(1, #ship_choices.funny)] -- SHIPS[rnd.rnd(1, #SHIPS)]
         assignPilotToPlayer( playerID, new_ship )
     end
     createNpc( shiptype )
