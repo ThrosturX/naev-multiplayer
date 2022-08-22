@@ -735,6 +735,19 @@ local CHILL_SONGS = {
     "snd/sounds/songs/mushroom-background.ogg",
     "snd/sounds/songs/run-for-your-life-00.ogg",
     "snd/sounds/songs/space-exploration-08.ogg",
+    "snd/music/flf_battle1.ogg",
+    "snd/music/automat.ogg",
+    "snd/music/battlesomething1.ogg",
+    "snd/music/battlesomething2.ogg",
+    "snd/music/collective1.ogg",
+    "snd/music/collective2.ogg",
+    "snd/music/combat1.ogg",
+    "snd/music/combat2.ogg",
+    "snd/music/combat3.ogg",
+    "snd/music/empire1.ogg",
+    "snd/music/empire2.ogg",
+    "snd/music/dvaered1.ogg",
+    "snd/music/dvaered2.ogg",
 }
 
 function MULTIPLAYER_CHILL_TIMER ()
@@ -748,8 +761,8 @@ function MULTIPLAYER_CHILL_TIMER ()
     if rnd.rnd(0, 1) == 0 then
         local chill_song = CHILL_SONGS[rnd.rnd(1, #CHILL_SONGS)]
         broadcast(
-            common.PLAY_SOUND,
-            chill_song .. "\n",
+            common.PLAY_MUSIC,
+            chill_song,
             "reliable"
         )
         print(chill_song)
@@ -973,7 +986,7 @@ end
 function MULTIPLAYER_ROUND_TIMER ( round_type )
     if
         ( not round_type or not round_types[round_type] )
-        or ( round_type == "team_death" and #server.players < 4 )
+        or ( round_type == "team_death" and server.host:peer_count() < 4 )
     then
         round_type = "freeforall"
     end

@@ -44,6 +44,7 @@ common.ACTIVATE_OUTFIT   = "ACTIVATE"
 common.DEACTIVATE_OUTFIT = "DEACTIVATE"
 common.SEND_MESSAGE      = "MESSAGE"
 common.PLAY_SOUND        = "SOUND"
+common.PLAY_MUSIC        = "MUSIC"
 common.TELEPORT          = "TELEPORT"
 common.ASSIGN_TEAM       = "TEAM"
 common.receivers = {}
@@ -242,6 +243,48 @@ common.receivers[common.PLAY_SOUND] = function ( client, message )
     end
     local sfx = mp_sounds[message[1]]
     if not sfx then
+        sfx = audio.new( message[1] )
+        mp_sounds[message[1]] = sfx
+    end
+    for _id, snd in pairs(mp_sounds) do
+        snd:setVolume(0.6)
+    end
+    sfx:play()
+    if #message >= 2 then
+        player.omsgAdd(
+            "#p"..message[2].."#0"
+        )
+    end
+end
+
+common.receivers[common.PLAY_MUSIC] = function ( client, message )
+    -- msg[1] is the sound
+    if #message < 1 then
+        -- what you doing server? don't crash me plz
+        return
+    end
+    local sfx = mp_sounds[message[1]]
+    if not sfx then
+        sfx = audio.new( message[1] )
+        sfx:setLooping( true )
+        mp_sounds[message[1]] = sfx
+    end
+    -- stop any other songs or sounds
+    for _id, snd in pairs(mp_sounds) do
+        snd:stop()
+    end
+    sfx:play()
+end
+
+common.receivers[common.PLAY_SOUND] = function ( client, message )
+    -- for now, we only allow one sound
+    -- msg[1] is the sound, msg[2] is the message
+    if #message < 1 then
+        -- what you doing server? don't crash me plz
+        return
+    end
+    local sfx = mp_sounds[message[1]]
+    if not sfx then
         -- TODO: maybe some error handling
         sfx = audio.new( message[1] )
         mp_sounds[message[1]] = sfx
@@ -257,7 +300,6 @@ common.receivers[common.PLAY_SOUND] = function ( client, message )
         )
     end
 end
-
 --[[
 --  Server wants to give us a new environment
 --
