@@ -823,7 +823,7 @@ round_types.deathmatch = function ( silent )
         return
     end
 
-    local mpsystem = "Pyro's Pink Slip Storage"
+    local mpsystem = "Multiplayer Arena"
     broadcast( common.TELEPORT, mpsystem, "reliable" )
 
     ROUND_SOUND = "snd/sounds/jingles/victory.ogg"
