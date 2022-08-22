@@ -246,6 +246,9 @@ common.receivers[common.PLAY_SOUND] = function ( client, message )
         sfx = audio.new( message[1] )
         mp_sounds[message[1]] = sfx
     end
+    for _id, snd in pairs(mp_sounds) do
+        snd:stop()
+    end
     print(message[1])
     sfx:play()
     if #message >= 2 then
