@@ -5,7 +5,7 @@ local eparams = require 'equipopt.params'
 
 local function choose_one( t ) return t[ rnd.rnd(1,#t) ] end
 
-local escort_outfits = eoutfits.merge{{
+local mplayer_outfits = eoutfits.merge{{
    -- Heavy Weapons
    "Turbolaser", "Heavy Ripper Turret", "Railgun Turret",
    "Railgun", "Heavy Laser Turret", "Heavy Ion Turret",
@@ -21,6 +21,7 @@ local escort_outfits = eoutfits.merge{{
    "TeraCom Headhunter Launcher",
    "TeraCom Medusa Launcher", "TeraCom Vengeance Launcher",
    "Unicorp Caesar IV Launcher",
+   "Enygma Systems Huntsman Launcher",
    "TeraCom Fury Launcher", "TeraCom Headhunter Launcher",
    "TeraCom Imperator Launcher",
    "Repeating Banshee Launcher",
@@ -54,9 +55,9 @@ local escort_outfits = eoutfits.merge{{
    "Small Shield Booster",
 }}
 
-local escort_class = { "standard", "elite" }
+local mplayer_class = { "elite" }
 
-local escort_params = {
+local mplayer_params = {
    ["Kestrel"] = function () return {
          type_range = {
             ["Launcher"] = { max = 2 },
@@ -64,7 +65,7 @@ local escort_params = {
       } end,
 	["Pirate Kestrel"] = function () return {
 		prefer = {
-			[ "Unicorp Caesar IV Launcher"] = 7, ["TeraCom Headhunter Launcher"] = 4,
+			[ "Unicorp Caesar IV Launcher"] = 7, ["TeraCom Headhunter Launcher"] = 2,
 			["TeraCom Medusa Launcher"] = 3, ["Enygma Systems Turreted Fury Launcher"] = 2
 		},
          type_range = {
@@ -82,11 +83,11 @@ local escort_params = {
 	} end,
 	["Goddard"] = function () return {
 		fighterbay = 1.5,
-		disable = 2,
+		disable = 1.8,
 		move = 1.5,
 		prefer = {
 			["Droid Repair Crew"] = 2, ["Biometal Armour"] = 60, ["Engine Reroute"] = 2,
-			["Hyperbolic Blink Engine"] = 5, ["Enygma Systems Huntsman Launcher"] = 100,
+			["Hyperbolic Blink Engine"] = 5, ["Enygma Systems Huntsman Launcher"] = 2,
 			["Agility Combat AI"] = 100
 		},
 		type_range = {
@@ -95,9 +96,9 @@ local escort_params = {
 	} end,
 }
 
-local escort_cores = {
+local mplayer_cores = {
    ["Pirate Kestrel"] = function (p)
-         local c = ecores.get( p, { systems=escort_class, hulls=escort_class } )
+         local c = ecores.get( p, { systems=mplayer_class, hulls=mplayer_class } )
          table.insert( c, choose_one{ "Nexus Bolt 3500 Engine", "Krain Remige Engine", "Tricon Typhoon Engine", } )
          return c
       end,
@@ -113,12 +114,12 @@ local escort_cores = {
 		 choose_one{ "S&K Superheavy Combat Plating", "S&K Heavy Combat Plating" },
       } end,
 	["Pirate Starbridge"] = function (p)
-         local c = ecores.get( p, { systems=escort_class, hulls=escort_class } )
+         local c = ecores.get( p, { systems=mplayer_class, hulls=mplayer_class } )
          table.insert( c, choose_one{ "Unicorp Falcon 1300 Engine", "Krain Patagium Engine", "Tricon Cyclone Engine"} )
          return c
       end,
    ["Starbridge"] = function (p)
-         local c = ecores.get( p, { systems=escort_class, hulls=escort_class } )
+         local c = ecores.get( p, { systems=mplayer_class, hulls=mplayer_class } )
          table.insert( c, choose_one{ "Unicorp Falcon 1300 Engine", "Krain Patagium Engine", "Tricon Cyclone Engine"} )
          return c
       end,
@@ -139,12 +140,15 @@ local escort_cores = {
    } end,
 }
 
-local escort_params_overwrite = {
-  weap = 2.5, -- Focus on weapons
+local mplayer_params_overwrite = {
+  weap = 2.6, -- Focus on weapons
   disable = 1.4, 
    -- some nice preferable outfits
   prefer = {
-		["Large Shield Booster"] = 2,
+        ["Repeating Railgun"] = 2.7,
+        ["Heavy Razor Turret"] = 2.7,
+        ["Heavy Laser Turret"] = 2.7,
+		["Large Shield Booster"] = 1.5,
 		[ "Shield Capacitor IV"] = 2, ["Biometal Armour"] = 2
    },
 
@@ -152,31 +156,27 @@ local escort_params_overwrite = {
    max_same_stru = 2,
    max_same_util = 2,
    cargo = 0.1,
-   constant = 10,
-   rnd = 0.5,
+   constant = 8,
+   rnd = 0.6,
 }
 
 --[[
--- @brief Does Escort pilot equipping
+-- @brief Does Multiplayer pilot equipping
 --
 --    @param p Pilot to equip
 --]]
-local function equip_escort( p, opt_params )
+local function equip_mplayer( p, opt_params )
    opt_params = opt_params or {}
    local ps = p:ship()
    local sname = ps:nameRaw()
 
    -- Choose parameters and make Pirateish
-   local params = eparams.choose( p, escort_params_overwrite )
+   local params = eparams.choose( p, mplayer_params_overwrite )
    params.rnd = params.rnd * 1.5
-	if ps:size() < 3 then
-      params.max_same_weap = 2
-   else
-      params.max_same_weap = 3
-   end
-   params.max_mass = 0.95 + 1.2*rnd.rnd()
+  params.max_same_weap = 2
+   params.max_mass = 0.98 + 1.5*rnd.rnd()
    -- Per ship tweaks
-   local sp = escort_params[ sname ]
+   local sp = mplayer_params[ sname ]
    if sp then
       params = tmerge_r( params, sp() )
    end
@@ -184,18 +184,18 @@ local function equip_escort( p, opt_params )
 
    -- See cores
    local cores
-   local esccor = escort_cores[ sname ]
+   local esccor = mplayer_cores[ sname ]
    if esccor then
       cores = esccor( p )
    else
-      cores = ecores.get( p, { all=escort_class } )
+      cores = ecores.get( p, { all=mplayer_class } )
    end
 
    local mem = p:memory()
-   mem.equip = { type="escort", level="standard" }
+   mem.equip = { type="mplayer", level="standard" }
 
    -- Try to equip
-   return optimize.optimize( p, cores, escort_outfits, params )
+   return optimize.optimize( p, cores, mplayer_outfits, params )
 end
 
-return equip_escort
+return equip_mplayer

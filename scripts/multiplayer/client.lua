@@ -503,6 +503,7 @@ client.update = function( timeout )
             client.alive = false
         elseif event.type == "disconnect" then
             print(event.peer, " disconnected.")
+            common.receivers[common.PLAY_SOUND]( client, { "snd/sounds/jingles/eerie.ogg" } )
             -- try to reconnect
             hook.rm(client.hook)
             hook.timer(6, "reconnect")
