@@ -34,7 +34,7 @@ local mplayer_outfits = eoutfits.merge{{
    "TeraCom Mace Launcher", "TeraCom Banshee Launcher",
    -- Utility
    "Unicorp Light Afterburner",
-   "Sensor Array", "Hellburner", -- "Emergency Shield Booster", --[[ temporarily disabled ]]--
+   "Sensor Array", "Hellburner", "Emergency Shield Booster", --[[ temporarily disabled ]]--
    "Unicorp Medium Afterburner", "Droid Repair Crew",
    "Scanning Combat AI", "Hunting Combat AI",
    "Photo-Voltaic Nanobot Coating",
@@ -145,6 +145,7 @@ local mplayer_params_overwrite = {
   disable = 1.4, 
    -- some nice preferable outfits
   prefer = {
+        ["Turbolaser"] = 2.8,
         ["Repeating Railgun"] = 2.8,
         ["Heavy Razor Turret"] = 2.8,
         ["Heavy Laser Turret"] = 2.9,

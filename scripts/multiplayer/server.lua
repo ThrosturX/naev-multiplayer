@@ -1,5 +1,5 @@
 --
--- luacheck: globals MULTIPLAYER_SERVER_UPDATE MULTIPLAYER_ROUND_TIMER MULTIPLAYER_CHILL_TIMER SEND_TEAM_ASSIGNMENT (Hook functions passed by name)
+-- luacheck: globals MULTIPLAYER_SERVER_UPDATE MULTIPLAYER_ROUND_TIMER MULTIPLAYER_CHILL_TIMER SEND_TEAM_ASSIGNMENT MULTIPLAYER_SCORE_KEEPER (Hook functions passed by name)
 local common = require "multiplayer.common"
 local enet = require "enet"
 local fmt = require "format"
@@ -182,6 +182,10 @@ local function assignPilotToPlayer( playerID, new_ship )
     mp_equip( server.players[playerID] )
     ai_setup.setup( server.players[playerID] )
     server.playerinfo[playerID] = {}
+    hook.pilot(
+    server.players[playerID],
+    "MULTIPLAYER_SCORE_KEEPER"
+    )
 end
 
 local function reshipPlayer( playerID, new_ship )
@@ -773,7 +777,7 @@ end
 local ROUND_SOUND = "snd/sounds/jingles/victory.ogg"
 local round_types = {}
 local round_times = {
-    freeforall = 30,
+    freeforall = 45,
     deathmatch =  90,
     team_death =  120,
     coopvsnpcs =  60,
@@ -788,15 +792,13 @@ round_types.freeforall = function ()
         reshipPlayer( plid, new_ship ) 
     end
     ROUND_SOUND = "snd/sounds/jingles/victory.ogg"
-    local next_choice = rnd.rnd(0, 3)
+    local next_choice = rnd.rnd(0, 2)
     if next_choice == 0 then
         return "deathmatch"
     elseif next_choice == 1 then
         return "team_death"
     elseif next_choice == 2 then
         return "coopvsnpcs"
-    else
-        return "freeforall"
     end
 end
 round_types.deathmatch = function ( silent ) 
@@ -931,8 +933,11 @@ round_types.team_death = function ()
 
     ROUND_SOUND = "snd/sounds/jingles/success.ogg"
 
-    if rnd.rnd(0, 1) == 0 and num_players() >= 4 then
-        return "team_death"
+    if rnd.rnd(0, 1) == 0 then
+        if num_players() >= 4 then
+            return "team_death"
+        end
+        return "deathmatch"
     end
     return "freeforall"
 end
@@ -1035,6 +1040,16 @@ function MULTIPLAYER_ROUND_TIMER ( round_type )
         ),
         "unsequenced"
     )
+end
+
+local SCORES = {}
+function MULTIPLAYER_SCORE_KEEPER( attacker, victim, _dmg )
+    if
+        attacker and attacker:exists()
+        and REGISTERED[attacker:name()]
+    then
+        SCORES[attacker] = 1 + (SCORES[attacker] or 0)
+    end
 end
 
 return server
