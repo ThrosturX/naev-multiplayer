@@ -1,6 +1,6 @@
 # Naev Multiplayer Plugin
 
-This plugin provides the necessary files to manage multiplayer in Naev.
+This plugin provides the necessary files to manage multiplayer in Naev. It requires the `lue_enet` configuration parameter to be set to true.
 
 ![A cartoon-like image of a character with colored 3D glasses](gfx/vn/characters/pers_mpauth.png?raw=true "The Original Multiplayer")
 
