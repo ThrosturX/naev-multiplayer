@@ -394,7 +394,7 @@ common.sync_player = function ( ppid, ppinfo, container, resync )
     if target and container[ target ] then
         container[ppid]:setTarget( container[target] )
     else
-        container[ppid]:setTarget( player.pilot() )
+        container[ppid]:setTarget( nil )
     end
     local pdiff = vec2.add( this_pilot:pos() , -ppinfo.posx, -ppinfo.posy ):mod()
     if pdiff > 8 then
