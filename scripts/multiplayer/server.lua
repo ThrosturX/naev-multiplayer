@@ -33,6 +33,18 @@ local function random_spawn_point()
     return vec2.new( rnd.rnd(-400, 400), rnd.rnd(-800, 800) )
 end
 
+local function pick_one(t)
+    return t[rnd.rnd(1, #t)]
+end
+
+local function pick_key(t)
+    local key_pool = {}
+    for k, _v in pairs(t) do
+        table.insert(key_pool, k)
+    end
+    return pick_one(key_pool)
+end
+
 local ship_choice_themes = {}
 
 ship_choice_themes.default = {
@@ -183,6 +195,12 @@ local function createNpc( shiptype, force )
     pmem = server.players[newnpc.nick]:memory()
     pmem.norun = true
 
+    hook.pilot(
+        server.players[newnpc.nick],
+        "death",
+        "MULTIPLAYER_SCORE_KEEPER"
+    )
+
     return newnpc.nick
 end
 
@@ -202,9 +220,9 @@ local function assignPilotToPlayer( playerID, new_ship )
     ai_setup.setup( server.players[playerID] )
     server.playerinfo[playerID] = {}
     hook.pilot(
-    server.players[playerID],
-    "death",
-    "MULTIPLAYER_SCORE_KEEPER"
+        server.players[playerID],
+        "death",
+        "MULTIPLAYER_SCORE_KEEPER"
     )
 end
 
@@ -286,6 +304,14 @@ local MESSAGE_HANDLERS = {}
 
 -- REGISTERED maps peer:index() to player_id
 local REGISTERED = {}
+local function is_registered( player_id )
+    for pindex, plid in pairs(REGISTERED) do
+        if plid == player_id then
+            return true
+        end
+    end
+    return false
+end
 -- get the peer from a player id
 local function get_peer( player_id )
     for pindex, plid in pairs(REGISTERED) do
@@ -771,8 +797,8 @@ local CHILL_SONGS = {
     "snd/music/combat2.ogg",
     "snd/music/combat3.ogg",
     "snd/music/empire1.ogg",
-    "snd/music/dvaered1.ogg",
-    "snd/music/dvaered2.ogg",
+  --"snd/music/dvaered1.ogg",
+  --"snd/music/dvaered2.ogg",
 }
 
 function MULTIPLAYER_CHILL_TIMER ()
@@ -798,10 +824,11 @@ end
 local ROUND_SOUND = "snd/sounds/jingles/victory.ogg"
 local round_types = {}
 local round_times = {
-    freeforall = 45,
-    deathmatch =  90,
-    team_death =  120,
-    coopvsnpcs =  60,
+    freeforall = { 20, 30, 45, 50 },
+    deathmatch = { 90, 60, 75, 80 },
+    team_death = { 120, 60, 100 },
+    coopvsnpcs = { 45, 60, 85 },
+    uniformall = { 120 },
 }
 round_types.freeforall = function () 
     local mpsystem = "Multiplayer Lobby"
@@ -1013,6 +1040,44 @@ round_types.coopvsnpcs = function ()
     return "freeforall"
 end
 
+round_types.uniformall = function ()
+    local mpsystem = pick_one(
+        {
+            "Somal's Ship Cemetery",
+            "Pyro's Pink Slip Storage",
+            "Multiplayer Arena",
+            "Multiplayer Lobby",
+        }
+    )
+    broadcast( common.TELEPORT, mpsystem )
+    local theme = pick_key(ship_choice_themes)
+    local ships = pick_one(ship_choice_themes[theme])
+    for plid, pplt in pairs(server.players) do
+        reshipPlayer( plid, ships )
+    end
+    ROUND_SOUND = "snd/sounds/ping.ogg"
+    return "coopvsnpcs"
+end
+
+round_types.scorefight = function ()
+    for plid, pplt in pairs(server.players) do
+        local new_ship
+        local score = SCORE[plid] or 1
+        if score >= 20 then
+            new_ship = pick_one(ship_choice_themes.large_special)
+        elseif score >= 10 then
+            new_ship = pick_one(ship_choice_themes.large)
+        elseif score > 5 then
+            new_ship = pick_one(ship_choice_themes.medium)
+        else
+            new_ship = pick_one(ship_choice_themes.small)
+        end
+        reshipPlayer( plid, new_ship )
+    end
+    ROUND_SOUND = "snd/sounds/jingles/money.ogg"
+    return "freeforall"
+end
+
 local function num_players()
     local count = 0
     for ii, plid in pairs(server.players) do
@@ -1023,16 +1088,24 @@ local function num_players()
     return count
 end
 
+local SCORES = {}
 function MULTIPLAYER_ROUND_TIMER ( round_type )
     if
         ( not round_type or not round_types[round_type] )
         or
         ( round_type == "team_death" and num_players() < 4 )
     then
-        round_type = "freeforall"
+        round_type = pick_one(
+            {
+                "freeforall",
+                "deathmatch",
+                "coopvsnpcs",
+                "uniformall"
+            }
+        )
     end
     -- set up the new round
-    local next_timer = round_times[round_type] or 60
+    local next_timer = pick_one(round_times[round_type]) or 60
     local next_round = round_types[round_type]()
     -- reposition, fill ammo and reset heat
     for plid, mpplt in pairs(server.players) do
@@ -1046,13 +1119,16 @@ function MULTIPLAYER_ROUND_TIMER ( round_type )
                 server.players[plid]:rm()
             end
         end
+        if SCORES[plid] and SCORES[plid] >= 21 then
+            next_round = "scorefight"
+        end
     end
     -- set the hook for the next round
     server.round = hook.timer(next_timer, "MULTIPLAYER_ROUND_TIMER", next_round )
     broadcast(
         common.PLAY_SOUND,
         fmt.f(
-            "{sound}\nStarting a new round of {round} ({timer} seconds)",
+            "{sound}\nStarting a new round of {round} #g({timer} seconds)",
             {
                 sound = ROUND_SOUND,
                 round = round_type,
@@ -1071,14 +1147,60 @@ function MULTIPLAYER_ROUND_TIMER ( round_type )
     print("serving guests with " .. round_song)
 end
 
-local SCORES = {}
-function MULTIPLAYER_SCORE_KEEPER( attacker, victim, _dmg )
+function MULTIPLAYER_SCORE_KEEPER( victim, attacker, _dmg )
+    if not attacker then
+        return
+    end
+    local current_score = (SCORES[attacker:name()] or 0)
+    local aname = attacker:name()
     if
         attacker and attacker:exists()
-        and REGISTERED[attacker:name()]
+        and is_registered( aname )
     then
-        SCORES[attacker] = 1 + (SCORES[attacker] or 0)
+        current_score = 1 + current_score
+        local vname = victim:name()
+        if SCORES[vname] then
+            local vscore = math.min(0, SCORES[vname])
+            if vscore >= 10 then
+                SCORES[vname] = SCORES[vname] - 1
+                current_score = current_score + vscore / 10
+            elseif vscore > 3 then
+                current_score = current_score + 0.2
+            end
+        else    -- noob killing penalty
+            current_score = current_score - 0.5
+        end
+        SCORES[aname] = current_score
+    else
+        return
     end
+
+    if current_score < 1 then
+        return
+    end
+
+    local score_sound = fmt.f(
+        "snd/sounds/gambling/cardSlide{score}.ogg", { score = math.floor(current_score) }
+    )
+
+    if current_score > 8 then
+        score_sound = fmt.f(
+            "snd/sounds/gambling/chipsStack{score}.ogg", { score = 1 + math.floor(current_score - 8) % 6 }
+        )
+    end
+
+    broadcast(
+        common.PLAY_SOUND,
+        fmt.f(
+            "{sound}\n{mplayer}#b has a score of #r{score}",
+            {
+                sound = score_sound,
+                mplayer = attacker,
+                score = current_score
+            }
+        ),
+        "unreliable"
+    )
 end
 
 return server
