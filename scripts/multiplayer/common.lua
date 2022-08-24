@@ -268,7 +268,6 @@ common.receivers[common.PLAY_MUSIC] = function ( client, message )
     local sfx = common.mp_sounds[message[1]]
     if not sfx then
         sfx = audio.new( message[1] )
-        sfx:setLooping( true )
         common.mp_sounds[message[1]] = sfx
     end
     -- stop any other songs or sounds
@@ -276,6 +275,7 @@ common.receivers[common.PLAY_MUSIC] = function ( client, message )
         snd:stop()
     end
     sfx:setVolume(1.0)
+    sfx:setLooping( true )
     sfx:play()
 end
 

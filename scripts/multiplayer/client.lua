@@ -481,6 +481,7 @@ client.update = function( timeout )
             for _sndid, sfx in pairs(common.mp_sounds) do
                 sfx:setLooping( false )
             end
+            player.damageSPFX(1.0)
             -- try to reconnect
             hook.rm(client.hook)
             hook.timer(6, "reconnect")
