@@ -82,6 +82,8 @@ ship_choice_themes.small = {
 }
 
 ship_choice_themes.medium = {
+    "Dvaered Ancestor",
+    "Pirate Ancestor",
     "Pirate Starbridge",
     "Starbridge",
     "Vigilance",
@@ -105,8 +107,13 @@ ship_choice_themes.funny = {
     "Llama",
     "Gawain",
     "Hyena",
+    "Pirate Hyena",
     "Shark",
+    "Pirate Shark",
+    "Empire Shark",
     "Pirate Rhino",
+    "Ancestor",
+    "Schroedinger",
 }
 
 ship_choice_themes.large = {
@@ -136,6 +143,14 @@ local function _sanitize_name( suggest )
     return word or "SuspiciousPlayer"
 end
 
+local function ok_shiptype ( shiptype )
+    if pcall( function() ship.get(shiptype) end ) then
+        return true
+    else
+        return false
+    end
+end
+
 local MAX_NPCS = 6
 -- spawn an NPC
 local function createNpc( shiptype, force )
@@ -148,6 +163,10 @@ local function createNpc( shiptype, force )
         end
     end
     shiptype = shiptype or SHIPS[rnd.rnd(1, #SHIPS)]
+    if not ok_shiptype(shiptype) then
+        shiptype = "Za'lek Hephaestus" -- SHIPS[rnd.rnd(1, #SHIPS)]
+        
+    end
     local newnpc = {}
     newnpc.nick = _sanitize_name(pilotname.human():gsub(" ", "t"):gsub("'", "ek"))
     server.npcs[newnpc.nick] = true
@@ -184,6 +203,7 @@ local function assignPilotToPlayer( playerID, new_ship )
     server.playerinfo[playerID] = {}
     hook.pilot(
     server.players[playerID],
+    "death",
     "MULTIPLAYER_SCORE_KEEPER"
     )
 end
@@ -751,7 +771,6 @@ local CHILL_SONGS = {
     "snd/music/combat2.ogg",
     "snd/music/combat3.ogg",
     "snd/music/empire1.ogg",
-    "snd/music/empire2.ogg",
     "snd/music/dvaered1.ogg",
     "snd/music/dvaered2.ogg",
 }
@@ -765,13 +784,15 @@ function MULTIPLAYER_CHILL_TIMER ()
     end
     local next_chill = rnd.rnd(30, 90)
     server.chill = hook.timer(next_chill, "MULTIPLAYER_CHILL_TIMER")
-    local chill_song = CHILL_SONGS[rnd.rnd(1, #CHILL_SONGS)]
-    broadcast(
-        common.PLAY_MUSIC,
-        chill_song,
-        "reliable"
-    )
-    print("serving guests with " .. chill_song)
+    if false then
+        local chill_song = CHILL_SONGS[rnd.rnd(1, #CHILL_SONGS)]
+        broadcast(
+            common.PLAY_MUSIC,
+            chill_song,
+            "reliable"
+        )
+        print("serving guests with " .. chill_song)
+    end
 end
 
 local ROUND_SOUND = "snd/sounds/jingles/victory.ogg"
@@ -1040,6 +1061,14 @@ function MULTIPLAYER_ROUND_TIMER ( round_type )
         ),
         "unsequenced"
     )
+
+    local round_song = CHILL_SONGS[rnd.rnd(1, #CHILL_SONGS)]
+    broadcast(
+        common.PLAY_MUSIC,
+        round_song,
+        "reliable"
+    )
+    print("serving guests with " .. round_song)
 end
 
 local SCORES = {}

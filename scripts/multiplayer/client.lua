@@ -101,40 +101,14 @@ client.start = function( bindaddr, bindport, localport )
         return "NO_CLIENT_SERVER"
     end
     -- WE ARE GOING IN
-    player.allowSave ( false )  -- no saving or landing for now
     player.allowLand ( false, _("Multiplayer prevents landing.") )
     client.pilots = {}
     pilot.clear()
     pilot.toggleSpawn(false)
     -- TODO HERE: This part was largely so that error messages say "MULTIPLAYER" and
     -- not just the player ship name, maybe give the player a cargo shuttle called "MULTIPLAYER" instead
-    -- give the player a new ship
-    local ship_choices_large = {
-        "Kestrel",
-        "Hawking",
-        "Goddard",
-        "Dvaered Retribution",
-        "Empire Rainmaker",
-        "Pirate Rhino",
-        "Dvaered Arsenal",
-        "Za'lek Mammon"
-    }
-    local ship_choices_small = {
-        "Shark",
-        "Empire Shark",
-        "Gawain",
-        "Pirate Rhino",
-        "Dvaered Ancestor",
-        "Quicksilver",
-        "Pirate Shark",
-        "Zebra" -- lol
-    }
-    local ship_choices = ship_choices_small
-    local player_ship = ship_choices[ rnd.rnd(1, #ship_choices) ]
+    local player_ship = "Cargo Shuttle"
     local mpshiplabel = "MULTIPLAYER SHIP"
-  --local mplayership = player.addShip(player_ship, mpshiplabel, "Multiplayer", true)
-  --player.swapShip( mpshiplabel, false, false )
-  --mp_equip( player.pilot() )
 
     -- send the player off
     player.takeoff()
@@ -540,6 +514,7 @@ function reconnect()
 end
 
 function enterMultiplayer()
+    player.allowSave ( false )  -- no saving free multiplayer ships
     player.teleport("Multiplayer Lobby")
     -- register with the server
     tryRegister( client.playerinfo.nick )
