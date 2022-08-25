@@ -58,6 +58,42 @@ local mplayer_outfits = eoutfits.merge{{
 local mplayer_class = { "elite" }
 
 local mplayer_params = {
+   ["Ancestor"] = function () return {
+		prefer = {
+			[ "Unicorp Caesar IV Launcher"] = 4, ["TeraCom Headhunter Launcher"] = 2,
+			["TeraCom Medusa Launcher"] = 3, ["TeraCom Mace Launcher"] = 2
+		},
+      } end,
+   ["Pirate Ancestor"] = function () return {
+		prefer = {
+			[ "Unicorp Caesar IV Launcher"] = 6,
+			["TeraCom Mace Launcher"] = 5
+		},
+      } end,
+   ["Dvaered Ancestor"] = function () return {
+		prefer = {
+			[ "Unicorp Caesar IV Launcher"] = 4, ["Repeating Banshee Launcher"] = 3,
+			["TeraCom Medusa Launcher"] = 3, ["TeraCom Mace Launcher"] = 2
+		},
+      } end,
+   ["Phalanx"] = function () return {
+		prefer = {
+			[ "Unicorp Caesar IV Launcher"] = 4, ["TeraCom Headhunter Launcher"] = 2,
+			["TeraCom Medusa Launcher"] = 3, ["TeraCom Mace Launcher"] = 2
+		},
+      } end,
+   ["Pirate Phalanx"] = function () return {
+		prefer = {
+			[ "Unicorp Caesar IV Launcher"] = 6,
+			["TeraCom Mace Launcher"] = 5
+		},
+      } end,
+   ["Dvaered Phalanx"] = function () return {
+		prefer = {
+			[ "Unicorp Caesar IV Launcher"] = 4, ["Repeating Banshee Launcher"] = 3,
+			["TeraCom Medusa Launcher"] = 3, ["TeraCom Mace Launcher"] = 2
+		},
+      } end,
    ["Kestrel"] = function () return {
          type_range = {
             ["Launcher"] = { max = 2 },
@@ -65,7 +101,7 @@ local mplayer_params = {
       } end,
 	["Pirate Kestrel"] = function () return {
 		prefer = {
-			[ "Unicorp Caesar IV Launcher"] = 7, ["TeraCom Headhunter Launcher"] = 2,
+			[ "Unicorp Caesar IV Launcher"] = 1, ["TeraCom Headhunter Launcher"] = 2,
 			["TeraCom Medusa Launcher"] = 3, ["Enygma Systems Turreted Fury Launcher"] = 2
 		},
          type_range = {
@@ -145,6 +181,7 @@ local mplayer_params_overwrite = {
   disable = 1.4, 
    -- some nice preferable outfits
   prefer = {
+        ["Unicorp Caesar IV Launcher"] = 0.8,
         ["Turbolaser"] = 2.8,
         ["Repeating Railgun"] = 2.8,
         ["Heavy Razor Turret"] = 2.8,

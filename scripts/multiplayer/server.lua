@@ -96,6 +96,9 @@ ship_choice_themes.small = {
 ship_choice_themes.medium = {
     "Dvaered Ancestor",
     "Pirate Ancestor",
+    "Pirate Phalanx",
+    "Dvaered Phalanx",
+    "Phalanx",
     "Pirate Starbridge",
     "Starbridge",
     "Vigilance",
@@ -833,6 +836,7 @@ local round_times = {
     coopvsnpcs = { 45, 60, 85 },
     uniformall = { 120 },
     scorefight = { 120 },
+    scorefite2 = { 120 },
 }
 round_types.freeforall = function () 
     local mpsystem = "Multiplayer Lobby"
@@ -844,6 +848,7 @@ round_types.freeforall = function ()
         reshipPlayer( plid, new_ship ) 
     end
     ROUND_SOUND = "snd/sounds/jingles/victory.ogg"
+    SHIPS = ship_choice_themes.default
     local next_choice = rnd.rnd(0, 2)
     if next_choice == 0 then
         return "deathmatch"
@@ -858,14 +863,19 @@ round_types.deathmatch = function ( silent )
     local choice = rnd.rnd(1, 5)
     if choice == 1 then
         player_ships = ship_choice_themes.medium
+        SHIPS = ship_choice_themes.small
     elseif choice == 2 then
         player_ships = ship_choice_themes.large
+        SHIPS = ship_choice_themes.medium
     elseif choice == 3 then
         player_ships = ship_choice_themes.funny
+        SHIPS = player_ships
     elseif choice == 4 then
         player_ships = ship_choice_themes.large_special
+        SHIPS = ship_choice_themes.large
     else
         player_ships = ship_choice_themes.default
+        SHIPS = player_ships
     end
 
     for plid, pplt in pairs(server.players) do
@@ -1043,6 +1053,7 @@ round_types.coopvsnpcs = function ()
         end
         reshipPlayer( plid, new_ship ) 
     end
+    SHIPS = ship_choice_themes.small
     ROUND_SOUND = "snd/sounds/meow.ogg"
     return "freeforall"
 end
@@ -1081,10 +1092,51 @@ round_types.scorefight = function ()
         else
             new_ship = pick_one(ship_choice_themes.small)
         end
+        SCORES[plid] = math.max(1, score - ship.get(new_ship):size())
         reshipPlayer( plid, new_ship )
     end
+    SHIPS = ship_choice_themes.medium
     ROUND_SOUND = "snd/sounds/jingles/money.ogg"
     return "freeforall"
+end
+
+round_types.scorefite2 = function ()
+    for plid, pplt in pairs(server.players) do
+        local new_ship
+        local score = SCORES[plid] or 1
+        if score >= 20 then
+            new_ship = pick_one({
+                "Dvaered Ancestor",
+                "Dvaered Vendetta",
+                "Pirate Ancestor",
+                "Pirate Vendetta",
+                "Ancestor",
+                "Vendetta",
+                "Phalanx",
+                "Pirate Phalanx",
+                "Dvaered Phalanx",
+            })
+            SCORES[plid] = math.max(1, score - ship.get(new_ship):size())
+        elseif score >= 15 then
+            new_ship = pick_one(ship_choice_themes.medium)
+        elseif score > 7 then
+            new_ship = pick_one({
+                "Zebra",
+                "Za'lek Mammon",
+                "Empire Rainmaker",
+            })
+        else
+            new_ship = pick_one({
+                "Mule",
+                "Rhino",
+                "Pirate Rhino"
+            })
+        end
+        reshipPlayer( plid, new_ship )
+    end
+    SHIPS = ship_choice_themes.medium
+    ROUND_SOUND = "snd/sounds/jingles/money.ogg"
+    return "deathmatch"
 end
 
 local function num_players()
@@ -1130,7 +1182,13 @@ function MULTIPLAYER_ROUND_TIMER ( round_type )
             end
         end
         if SCORES[plid] and SCORES[plid] >= 21 then
-            next_round = "scorefight"
+            next_round = pick_one({
+                "scorefight",
+                "scorefite2",
+                "team_death",
+                "coopvsnpcs",
+                "uniformall",
+            })
         end
     end
     -- set the hook for the next round
