@@ -1059,6 +1059,7 @@ round_types.uniformall = function ()
     broadcast( common.TELEPORT, mpsystem )
     local theme = pick_key(ship_choice_themes)
     local ships = pick_one(ship_choice_themes[theme])
+    SHIPS = { ships }
     for plid, pplt in pairs(server.players) do
         reshipPlayer( plid, ships )
     end
