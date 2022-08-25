@@ -163,7 +163,7 @@ local function ok_shiptype ( shiptype )
     end
 end
 
-local MAX_NPCS = 6
+local MAX_NPCS = 8
 -- spawn an NPC
 local function createNpc( shiptype, force )
     local count = 0
@@ -1069,7 +1069,7 @@ end
 round_types.scorefight = function ()
     for plid, pplt in pairs(server.players) do
         local new_ship
-        local score = SCORE[plid] or 1
+        local score = SCORES[plid] or 1
         if score >= 20 then
             new_ship = pick_one(ship_choice_themes.large_special)
         elseif score >= 10 then
