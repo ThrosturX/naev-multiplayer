@@ -1066,6 +1066,7 @@ round_types.uniformall = function ()
     return "coopvsnpcs"
 end
 
+local SCORES = {}
 round_types.scorefight = function ()
     for plid, pplt in pairs(server.players) do
         local new_ship
@@ -1096,7 +1097,6 @@ local function num_players()
 end
 
 local CURRENT_MODE = "none"
-local SCORES = {}
 function MULTIPLAYER_ROUND_TIMER ( round_type )
     if
         ( not round_type or not round_types[round_type] )
