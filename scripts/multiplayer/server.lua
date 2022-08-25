@@ -519,6 +519,10 @@ server.start = function( port )
     end
     if not port then port = 6789 end
     server.host = enet.host_create( fmt.f( "*:{port}", { port = port } ) )
+    local message = "SERVER IS RUNNING ON: " .. server.host:get_socket_address()
+    print( message )
+    player.omsgAdd( "#b"..message.."#0" )
+    pilot.comm( "SERVER INFO", "#y" .. message .. "#0" )
     if server.host then
         server.players     = {}
         server.npcs        = {}
