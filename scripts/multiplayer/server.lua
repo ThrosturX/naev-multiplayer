@@ -1195,7 +1195,7 @@ function MULTIPLAYER_SCORE_KEEPER( victim, attacker, _dmg )
         then
             -- team killers get punished, but never back into noob status
             current_score = math.max(1, current_score / 2 - 1)
-        else if SCORES[vname] then
+        elseif SCORES[vname] then
             local vscore = math.min(0, SCORES[vname])
             if vscore >= 10 then
                 SCORES[vname] = SCORES[vname] - (victim:ship():size() / 5)
