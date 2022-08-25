@@ -65,6 +65,7 @@ ship_choice_themes.default = {
     "Empire Hawking",
     "Za'lek Mammon",
     "Za'lek Mephisto",
+    "Sirius Providence",
     "Soromid Reaver",
     "Soromid Nyx",
     "Sirius Dogma",
@@ -91,6 +92,8 @@ ship_choice_themes.small = {
     "Pirate Ancestor",
     "Ancestor",
     "Vendetta",
+    "Empire Lancelot",
+    "Lancelot"
 }
 
 ship_choice_themes.medium = {
@@ -111,7 +114,9 @@ ship_choice_themes.medium = {
     "Soromid Reaver",
     "Pirate Vendetta",
     "Pirate Rhino",
-    "Dvaered Vendetta"
+    "Dvaered Vendetta",
+    "Za'lek Sting",
+    "Za'lek Demon"
 }
 
 ship_choice_themes.funny = {
@@ -123,6 +128,7 @@ ship_choice_themes.funny = {
     "Gawain",
     "Hyena",
     "Pirate Hyena",
+    "Drone (Hyena)",
     "Shark",
     "Pirate Shark",
     "Empire Shark",
@@ -1115,6 +1121,7 @@ round_types.scorefite2 = function ()
                 "Phalanx",
                 "Pirate Phalanx",
                 "Dvaered Phalanx",
+                "Sirius Preacher",
             })
             SCORES[plid] = math.max(1, score - ship.get(new_ship):size())
         elseif score >= 15 then
@@ -1123,6 +1130,7 @@ round_types.scorefite2 = function ()
             new_ship = pick_one({
                 "Zebra",
                 "Za'lek Mammon",
+                "Sirius Providence",
                 "Empire Rainmaker",
             })
         else
