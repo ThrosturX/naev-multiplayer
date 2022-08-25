@@ -55,10 +55,11 @@ If you decide to use port 0, a port will be selected for you as if by the origin
 4. You have a choice of selecting a custom port or picking one at random
     - You should try to use the same port consistently if you plan on hosting a server
     - You might need to forward the port that you choose
-    - If you let the original multiplayer select the port for you, you can use a tool to find your port
+    - If you let the original multiplayer select the port for you, you can use a tool to find your port if you lose the message
 5. Close everything and take off
 6. Leave the server alone, as the simulation must run for the networking code to execute
     - The server cannot be seen by players -- please don't abuse this as the server is not meant to play but can be used to spectate
+    - The server will announce the socket host (including the port, if you tried to get one automatically) in the console, message log, and as an `omsg`
 
 ### Finding your port
 
