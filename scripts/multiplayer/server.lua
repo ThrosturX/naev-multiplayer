@@ -129,6 +129,7 @@ ship_choice_themes.funny = {
     "Hyena",
     "Pirate Hyena",
     "Drone (Hyena)",
+    "Za'lek Heavy Drone",
     "Shark",
     "Pirate Shark",
     "Empire Shark",
