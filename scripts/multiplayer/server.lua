@@ -177,7 +177,6 @@ local function createNpc( shiptype, force )
     shiptype = shiptype or SHIPS[rnd.rnd(1, #SHIPS)]
     if not ok_shiptype(shiptype) then
         shiptype = "Za'lek Hephaestus" -- SHIPS[rnd.rnd(1, #SHIPS)]
-        
     end
     local newnpc = {}
     newnpc.nick = _sanitize_name(pilotname.human():gsub(" ", "t"):gsub("'", "ek"))
@@ -833,6 +832,7 @@ local round_times = {
     team_death = { 120, 60, 100 },
     coopvsnpcs = { 45, 60, 85 },
     uniformall = { 120 },
+    scorefight = { 120 },
 }
 round_types.freeforall = function () 
     local mpsystem = "Multiplayer Lobby"
@@ -896,6 +896,7 @@ end
 --  (client side only, so they know what team they are)
 --  set team A friendly to A and hostile to B and vice versa
 --]]
+local LAST_TEAMS
 round_types.team_death = function ()
     -- kill all the npcs
     for nid, _true in pairs(server.npcs) do
@@ -979,6 +980,8 @@ round_types.team_death = function ()
         -- send the team info
         hook.timer(3, "SEND_TEAM_ASSIGNMENT", the_team)
     end
+
+    TEAMS = teams
 
     -- reuse deathmatch for ship selection
     round_types.deathmatch( true )
@@ -1092,6 +1095,7 @@ local function num_players()
     return count
 end
 
+local CURRENT_MODE = "none"
 local SCORES = {}
 function MULTIPLAYER_ROUND_TIMER ( round_type )
     if
@@ -1108,6 +1112,7 @@ function MULTIPLAYER_ROUND_TIMER ( round_type )
             }
         )
     end
+    CURRENT_MODE = round_type
     -- set up the new round
     local next_timer = pick_one(round_times[round_type]) or 60
     local next_round = round_types[round_type]()
@@ -1151,6 +1156,21 @@ function MULTIPLAYER_ROUND_TIMER ( round_type )
     print("serving guests with " .. round_song)
 end
 
+local function is_same_team(vname, aname)
+    local vcolor, acolor
+    for color, _team in pairs(TEAMS) do
+        for _j, teamplayer in ipairs(TEAMS[color]) do
+            if teamplayer == vname then
+                vcolor = color
+            elseif teamplayer == aname then
+                acolor = color
+            end
+        end
+    end
+
+    return acolor == vcolor
+end
+
 function MULTIPLAYER_SCORE_KEEPER( victim, attacker, _dmg )
     if not attacker then
         return
@@ -1161,17 +1181,29 @@ function MULTIPLAYER_SCORE_KEEPER( victim, attacker, _dmg )
         attacker and attacker:exists()
         and is_registered( aname )
     then
-        current_score = 1 + current_score
+        local points = victim:ship():points() * 0.01
+        if attacker:ship():size() < victim:ship():size() then
+            points = points * 1.2
+        end
+        current_score = points + current_score
         local vname = victim:name()
-        if SCORES[vname] then
+        if (
+            CURRENT_MODE == "coopvsnpcs" and is_registered(vname)
+            ) or (
+            CURRENT_MODE == "team_death" and is_same_team(vname, aname)
+            )
+        then
+            -- team killers get punished, but never back into noob status
+            current_score = math.max(1, current_score / 2 - 1)
+        else if SCORES[vname] then
             local vscore = math.min(0, SCORES[vname])
             if vscore >= 10 then
-                SCORES[vname] = SCORES[vname] - 1
+                SCORES[vname] = SCORES[vname] - (victim:ship():size() / 5)
                 current_score = current_score + vscore / 10
             elseif vscore > 3 then
                 current_score = current_score + 0.2
             end
-        else    -- noob killing penalty
+        elseif is_registered(vname) then -- noob killing penalty
             current_score = current_score - 0.5
         end
         SCORES[aname] = current_score
