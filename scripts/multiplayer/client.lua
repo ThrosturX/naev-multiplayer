@@ -108,7 +108,7 @@ client.start = function( bindaddr, bindport, localport )
     pilot.toggleSpawn(false)
     -- TODO HERE: This part was largely so that error messages say "MULTIPLAYER" and
     -- not just the player ship name, maybe give the player a cargo shuttle called "MULTIPLAYER" instead
-    local player_ship = "Cargo Shuttle"
+    local player_ship = player:pilot():ship():nameRaw() -- "Cargo Shuttle"
     local mpshiplabel = "MULTIPLAYER SHIP"
 
     -- send the player off
