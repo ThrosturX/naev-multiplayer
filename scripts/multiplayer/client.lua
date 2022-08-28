@@ -5,6 +5,7 @@ local enet = require "enet"
 local fmt = require "format"
 local mp_equip = require "equipopt.templates.multiplayer"
 local ai_setup = require "ai.core.setup"
+local luatk = require "luatk"
 -- require "factions.equip.generic"
 
 local client = {}
@@ -223,7 +224,7 @@ client.spawn = function( ppid, shiptype, shipname , outfits, ai )
             for _i, outf in ipairs(outfits) do
                 player.pilot():outfitAdd(outf, 1, true)
             end
-            print("respawned pilot for you: " .. tostring(ppid))
+            print("respawned pilot for you: " .. tostring(ppid) .. " in a " .. shiptype)
             client.alive = true
             hard_resync = true
             for _oplid, oplt in pairs(client.pilots) do
