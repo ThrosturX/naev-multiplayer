@@ -29,8 +29,10 @@ local function shorten( name )
     return newname
 end
 
-local function random_spawn_point()
-    return vec2.new( rnd.rnd(-400, 400), rnd.rnd(-800, 800) )
+local function random_spawn_point( xmax, ymax )
+    xmax = 400 or xmax
+    ymax = 800 or ymax
+    return vec2.new( rnd.rnd(-xmax, xmax), rnd.rnd(-ymax, ymax) )
 end
 
 local function pick_one(t)
@@ -254,6 +256,7 @@ local function reshipPlayer( playerID, new_ship )
         createNpc( new_ship, true )
         return
     else
+        server.players[playerID] = nil
         return assignPilotToPlayer( playerID, new_ship )
     end
 end
@@ -841,7 +844,10 @@ local round_times = {
     deathmatch = { 90, 60, 75, 80 },
     team_death = { 120, 60, 100 },
     coopvsnpcs = { 45, 60, 85 },
-    uniformall = { 120 },
+    uniformall = { 60, 90, 120 },
+    cowboysone = { 60, 90, 120 },
+    cowboystwo = { 60, 90, 120 },
+    cowindians = { 60, 90, 120 },
     scorefight = { 120 },
     scorefite2 = { 120 },
 }
@@ -1085,6 +1091,72 @@ round_types.uniformall = function ()
     return "coopvsnpcs"
 end
 
+round_types.cowboysone = function ()
+    local mpsystem = pick_one(
+        {
+            "Somal's Ship Cemetery",
+            "Pyro's Pink Slip Storage",
+            "Multiplayer Arena",
+            "Multiplayer Lobby",
+        }
+    )
+    broadcast( common.TELEPORT, mpsystem )
+    local theme = pick_key(ship_choice_themes)
+    local ship1 = pick_one(ship_choice_themes[theme])
+    local ship2 = pick_one(ship_choice_themes[theme])
+    SHIPS = { ship1, ship2 }
+    for plid, pplt in pairs(server.players) do
+        reshipPlayer( plid, pick_one(SHIPS) )
+    end
+    ROUND_SOUND = "snd/sounds/ping.ogg"
+    return "cowboystwo"
+end
+
+round_types.cowboystwo = function ()
+    local mpsystem = pick_one(
+        {
+            "Somal's Ship Cemetery",
+            "Pyro's Pink Slip Storage",
+            "Multiplayer Arena",
+            "Multiplayer Lobby",
+        }
+    )
+    broadcast( common.TELEPORT, mpsystem )
+    local them1 = pick_key(ship_choice_themes)
+    local them2 = pick_key(ship_choice_themes)
+    local ship1 = pick_one(ship_choice_themes[them1])
+    local ship2 = pick_one(ship_choice_themes[them2])
+    SHIPS = { ship1, ship2 }
+    for plid, pplt in pairs(server.players) do
+        reshipPlayer( plid, pick_one(SHIPS) )
+    end
+    ROUND_SOUND = "snd/sounds/ping.ogg"
+    return "cowindians"
+end
+
+round_types.cowindians = function ()
+    local mpsystem = pick_one(
+        {
+            "Somal's Ship Cemetery",
+            "Pyro's Pink Slip Storage",
+            "Multiplayer Arena",
+            "Multiplayer Lobby",
+        }
+    )
+    broadcast( common.TELEPORT, mpsystem )
+    local them1 = pick_key(ship_choice_themes)
+    local them2 = pick_key(ship_choice_themes)
+    local ship1 = pick_one(ship_choice_themes[them2])
+    local ship2 = pick_one(ship_choice_themes[them2])
+    local shoops = { ship1, ship2 }
+    SHIPS = ship_choice_themes[them1]
+    for plid, pplt in pairs(server.players) do
+        reshipPlayer( plid, pick_one(shoops) )
+    end
+    ROUND_SOUND = "snd/sounds/ping.ogg"
+    return "team_death"
+end
+
 local SCORES = {}
 round_types.scorefight = function ()
     for plid, pplt in pairs(server.players) do
@@ -1170,7 +1242,8 @@ function MULTIPLAYER_ROUND_TIMER ( round_type )
                 "freeforall",
                 "deathmatch",
                 "coopvsnpcs",
-                "uniformall"
+                "uniformall",
+                "cowboysone"
             }
         )
     end
@@ -1182,7 +1255,7 @@ function MULTIPLAYER_ROUND_TIMER ( round_type )
     for plid, mpplt in pairs(server.players) do
         if mpplt and mpplt:exists() then
             if round_type ~= "team_death" then
-                mpplt:setPos( random_spawn_point() )
+                mpplt:setPos( random_spawn_point( 1000, 2000 ) )
             end
             mpplt:fillAmmo()
             mpplt:setTemp( 0 )
