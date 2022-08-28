@@ -261,6 +261,7 @@ local function reshipPlayer( playerID, new_ship )
     end
 end
 
+local REGISTRATIONS = {}
 -- registers a player, returns the players unique ID
 local function registerPlayer( playernicksuggest, shiptype, outfits )
     playernicksuggest = _sanitize_name( playernicksuggest )
@@ -280,6 +281,8 @@ local function registerPlayer( playernicksuggest, shiptype, outfits )
         assignPilotToPlayer( playerID, new_ship )
     end
     createNpc( shiptype )
+
+    REGISTRATIONS[playerID] = { ship = shiptype, outfits = outfits }
 
     return playerID
 end
@@ -850,6 +853,7 @@ local round_times = {
     cowindians = { 60, 90, 120 },
     scorefight = { 120 },
     scorefite2 = { 120 },
+    registered = { 88, 99 }
 }
 round_types.freeforall = function () 
     local mpsystem = "Multiplayer Lobby"
@@ -1095,7 +1099,6 @@ round_types.cowboysone = function ()
     local mpsystem = pick_one(
         {
             "Somal's Ship Cemetery",
-            "Pyro's Pink Slip Storage",
             "Multiplayer Arena",
             "Multiplayer Lobby",
         }
@@ -1108,15 +1111,13 @@ round_types.cowboysone = function ()
     for plid, pplt in pairs(server.players) do
         reshipPlayer( plid, pick_one(SHIPS) )
     end
-    ROUND_SOUND = "snd/sounds/ping.ogg"
+    ROUND_SOUND = "snd/sounds/wormhole.ogg"
     return "cowboystwo"
 end
 
 round_types.cowboystwo = function ()
     local mpsystem = pick_one(
         {
-            "Somal's Ship Cemetery",
-            "Pyro's Pink Slip Storage",
             "Multiplayer Arena",
             "Multiplayer Lobby",
         }
@@ -1130,14 +1131,13 @@ round_types.cowboystwo = function ()
     for plid, pplt in pairs(server.players) do
         reshipPlayer( plid, pick_one(SHIPS) )
     end
-    ROUND_SOUND = "snd/sounds/ping.ogg"
+    ROUND_SOUND = "snd/sounds/spacewhale1.ogg"
     return "cowindians"
 end
 
 round_types.cowindians = function ()
     local mpsystem = pick_one(
         {
-            "Somal's Ship Cemetery",
             "Pyro's Pink Slip Storage",
             "Multiplayer Arena",
             "Multiplayer Lobby",
@@ -1153,8 +1153,21 @@ round_types.cowindians = function ()
     for plid, pplt in pairs(server.players) do
         reshipPlayer( plid, pick_one(shoops) )
     end
-    ROUND_SOUND = "snd/sounds/ping.ogg"
+    ROUND_SOUND = "snd/sounds/spacewhale1.ogg"
     return "team_death"
+end
+
+round_types.registered = function ()
+    for plid, reg in pairs(REGISTRATIONS) do
+        reshipPlayer( plid, reg.ship )
+        server.players[plid]:outfitRm( "all" )
+        server.players[plid]:outfitRm( "cores" )
+        for _i, outf in ipairs(reg.outfits) do
+            server.players[plid]:outfitAdd( outf, 1, true )
+        end
+    end
+    ROUND_SOUND = "snd/sounds/spacewhale2.ogg"
+    return "cowindians"
 end
 
 local SCORES = {}
@@ -1243,7 +1256,8 @@ function MULTIPLAYER_ROUND_TIMER ( round_type )
                 "deathmatch",
                 "coopvsnpcs",
                 "uniformall",
-                "cowboysone"
+                "cowboysone",
+                "registered"
             }
         )
     end
@@ -1270,6 +1284,7 @@ function MULTIPLAYER_ROUND_TIMER ( round_type )
                 "team_death",
                 "coopvsnpcs",
                 "uniformall",
+                "registered"
             })
         end
     end
