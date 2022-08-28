@@ -280,7 +280,7 @@ local function registerPlayer( playernicksuggest, shiptype, outfits )
         local new_ship = ship_choice_themes.small[rnd.rnd(1, #ship_choice_themes.small)] -- SHIPS[rnd.rnd(1, #SHIPS)]
         assignPilotToPlayer( playerID, new_ship )
     end
-    createNpc( shiptype )
+    createNpc( "Cargo Shuttle" )
 
     REGISTRATIONS[playerID] = { ship = shiptype, outfits = outfits }
 
@@ -860,7 +860,7 @@ round_types.freeforall = function ()
     --player.teleport(mpsystem)
     broadcast( common.TELEPORT, mpsystem, "reliable" )
     -- just give everyone a random ship
-    for plid, pplt in pairs(server.players) do
+    for plid, _reg in pairs(REGISTRATIONS) do
         local new_ship = SHIPS[rnd.rnd(1, #SHIPS)]
         reshipPlayer( plid, new_ship ) 
     end
@@ -895,9 +895,18 @@ round_types.deathmatch = function ( silent )
         SHIPS = player_ships
     end
 
+    local touched = {}
     for plid, pplt in pairs(server.players) do
         local new_ship = player_ships[rnd.rnd(1, #player_ships)]
         reshipPlayer( plid, new_ship ) 
+        touched[plid] = true
+    end
+
+    for plid, pplt in pairs(REGISTRATIONS) do
+        if not touched[plid] then
+            local new_ship = player_ships[rnd.rnd(1, #player_ships)]
+            reshipPlayer( plid, new_ship ) 
+        end
     end
 
     if silent then
