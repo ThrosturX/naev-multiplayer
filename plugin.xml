@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugin name="Sea of Multiplayer">
     <author>ThrosturX</author>
-    <version>0.1</version>
-    <compatibility>^0\.10\..*</compatibility>
+    <version>0.11</version>
+    <compatibility>0\.(10|11)\..*</compatibility>
     <priority>1</priority>
+    <description>Allows you to play multiplayer with OTHER PEOPLE ONLINE like a real boss.</description>
 </plugin>
