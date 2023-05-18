@@ -485,7 +485,7 @@ client.update = function( timeout )
             player.damageSPFX(1.0)
             -- try to reconnect
             hook.rm(client.hook)
-            hook.timer(6, "reconnect")
+            hook.timer(3, "reconnect")
             client.alive = nil
             return -- deal with the rest later
         else
