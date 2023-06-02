@@ -517,6 +517,10 @@ function reconnect()
 end
 
 function enterMultiplayer()
+    -- remove any potential hail hooks set by other plugins (e.g. crewmates plugin)
+    if mem.hail_hook then
+        hook.rm( mem.hail_hook )
+    end
     player.allowSave ( false )  -- no saving free multiplayer ships
     player.teleport("Multiplayer Lobby")
     -- register with the server
@@ -525,7 +529,7 @@ function enterMultiplayer()
     client.update( 4000 )
 
     control_reestablish()
-    
+
     client.hook = hook.update("MULTIPLAYER_CLIENT_UPDATE")
     client.inputhook = hook.input("MULTIPLAYER_CLIENT_INPUT")
 end
