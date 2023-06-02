@@ -564,10 +564,14 @@ MP_INPUT_HANDLERS.hail = function ( press )
     if press then
         hail_pressed = true
     elseif hail_pressed then
-        message = tk.input("COMMUNICATION", 0, 32, "Broadcast:")
-        if message and message:len() > 0 then
-            safe_send( common.SEND_MESSAGE .. '\n' .. message )
-        end
+        luatk.vn( function()
+            luatk.msgInput("COMMUNICATION", "Broadcast:", 32, function (msg)
+                if msg and msg:len() > 0 then
+                   safe_send( common.SEND_MESSAGE .. '\n' .. msg )
+                end
+            end )
+        end )
+        vn.run()
     end
     if not player.pilot():target() then
         last_resync = 300
