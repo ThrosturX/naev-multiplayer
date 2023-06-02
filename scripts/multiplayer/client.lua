@@ -6,6 +6,7 @@ local fmt = require "format"
 local mp_equip = require "equipopt.templates.multiplayer"
 local ai_setup = require "ai.core.setup"
 local luatk = require "luatk"
+local vn = require "vn"
 -- require "factions.equip.generic"
 
 local client = {}
