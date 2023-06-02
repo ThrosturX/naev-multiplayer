@@ -520,6 +520,7 @@ function enterMultiplayer()
     -- remove any potential hail hooks set by other plugins (e.g. crewmates plugin)
     if mem.hail_hook then
         hook.rm( mem.hail_hook )
+        mem.hail_hook = nil
     end
     player.allowSave ( false )  -- no saving free multiplayer ships
     player.teleport("Multiplayer Lobby")
