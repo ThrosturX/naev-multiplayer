@@ -9,14 +9,14 @@ local mplayer_outfits = eoutfits.merge{{
    -- Heavy Weapons
    "Turbolaser", "Heavy Ripper Turret", "Railgun Turret",
    "Railgun", "Heavy Laser Turret", "Heavy Ion Turret",
-   "Heavy Laser Turret", "Heavy Razor Turret",
+   "Heavy Laser Turret", "Disruptor Battery S2",
    "Repeating Railgun",
    -- Medium Weapons
    "Grave Lance", "Orion Lance", "Particle Lance",
    "Heavy Ripper Cannon",
    "Enygma Systems Turreted Fury Launcher",
    "Enygma Systems Turreted Headhunter Launcher",
-   "Laser Turret MK2", "Razor Turret MK2", "Turreted Vulcan Gun",
+   "Laser Turret MK2", "Razor Battery S2", "Turreted Vulcan Gun",
    "Plasma Turret MK2", "EMP Grenade Launcher",
    "TeraCom Headhunter Launcher",
    "TeraCom Medusa Launcher", "TeraCom Vengeance Launcher",
@@ -25,11 +25,11 @@ local mplayer_outfits = eoutfits.merge{{
    "TeraCom Fury Launcher", "TeraCom Headhunter Launcher",
    "TeraCom Imperator Launcher",
    "Repeating Banshee Launcher",
-   "Laser Cannon MK2", "Razor MK2", "Vulcan Gun", "Plasma Blaster MK2",
+   "Laser Cannon MK2", "Razor Artillery S2", "Vulcan Gun", "Plasma Blaster MK2",
    "Ion Cannon",
    -- Small Weapons
-   "Laser Cannon MK1", "Razor MK1", "Gauss Gun", "Plasma Blaster MK1",
-   "Laser Turret MK1", "Razor Turret MK1", "Turreted Gauss Gun",
+   "Laser Cannon MK1", "Razor Artillery S1", "Gauss Gun", "Plasma Blaster MK1",
+   "Laser Turret MK1", "Turreted Gauss Gun",
    "Plasma Turret MK1",
    "TeraCom Mace Launcher", "TeraCom Banshee Launcher",
    -- Utility
@@ -135,12 +135,12 @@ local mplayer_params = {
 local mplayer_cores = {
    ["Pirate Kestrel"] = function (p)
          local c = ecores.get( p, { systems=mplayer_class, hulls=mplayer_class } )
-         table.insert( c, choose_one{ "Nexus Bolt 3500 Engine", "Krain Remige Engine", "Tricon Typhoon Engine", } )
+         table.insert( c, choose_one{ "Nexus Bolt 3000 Engine", "Krain Remige Engine", "Tricon Typhoon Engine", } )
          return c
       end,
 	["Kestrel"] = function () return {
          choose_one{ "Unicorp PT-2200 Core System", "Milspec Orion 8601 Core System", "Milspec Thalos 9802 Core System", "Milspec Orion 9901 Core System" },
-         choose_one{ "Nexus Bolt 3500 Engine", "Krain Remige Engine", "Tricon Typhoon Engine", },
+         choose_one{ "Nexus Bolt 3000 Engine", "Krain Remige Engine", "Tricon Typhoon Engine", },
 		 choose_one{ "Unicorp D-48 Heavy Plating", "S&K Heavy Combat Plating" },
 
       } end,
@@ -151,12 +151,12 @@ local mplayer_cores = {
       } end,
 	["Pirate Starbridge"] = function (p)
          local c = ecores.get( p, { systems=mplayer_class, hulls=mplayer_class } )
-         table.insert( c, choose_one{ "Unicorp Falcon 1300 Engine", "Krain Patagium Engine", "Tricon Cyclone Engine"} )
+         table.insert( c, choose_one{ "Unicorp Falcon 1400 Engine", "Krain Patagium Engine", "Tricon Cyclone Engine"} )
          return c
       end,
    ["Starbridge"] = function (p)
          local c = ecores.get( p, { systems=mplayer_class, hulls=mplayer_class } )
-         table.insert( c, choose_one{ "Unicorp Falcon 1300 Engine", "Krain Patagium Engine", "Tricon Cyclone Engine"} )
+         table.insert( c, choose_one{ "Unicorp Falcon 1400 Engine", "Krain Patagium Engine", "Tricon Cyclone Engine"} )
          return c
       end,
    ["Shark"] = function () return {
@@ -184,7 +184,7 @@ local mplayer_params_overwrite = {
         ["Unicorp Caesar IV Launcher"] = 0.8,
         ["Turbolaser"] = 2.8,
         ["Repeating Railgun"] = 2.8,
-        ["Heavy Razor Turret"] = 2.8,
+        ["Disruptor Battery S2"] = 2.8,
         ["Heavy Laser Turret"] = 2.9,
 		["Large Shield Booster"] = 1.5,
 		[ "Shield Capacitor IV"] = 2, ["Biometal Armour"] = 2
