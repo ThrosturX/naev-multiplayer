@@ -1,5 +1,6 @@
 -- luacheck: globals: REMOTE_CONTROL_ACCEL REMOTE_CONTROL_SWITCH_WEAPSET REMOTE_CONTROL_SHOOT (Hook functions passed by name)
---
+local atk = require "ai.core.attack.util"
+
 -- swifter control rate than usual because we are reactive
 control_rate = 0.16
 
@@ -22,11 +23,13 @@ end
 function REMOTE_CONTROL_SHOOT ( secondary )
     if secondary then
         mem.rc_scoot = true
+        atk.secondary()
     else
         mem.rc_shoot = true
+        atk.primary()
     end
 --  print( "rc shoot " .. tostring(secondary) )
-    ai.shoot( secondary )
+--    ai.shoot( secondary ) -- deprecated
     ai.accel( mem.rc_accel )
     ai.poptask()
 end
