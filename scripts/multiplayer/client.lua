@@ -103,7 +103,7 @@ client.start = function( bindaddr, bindport, localport )
         return "NO_CLIENT_SERVER"
     end
     -- WE ARE GOING IN
-    player.allowLand ( false, _("Multiplayer prevents landing.") )
+    player.landAllow ( false, _("Landing is disabled in multiplayer. If you're not in a multiplayer system, something's gone wrong!") )
     client.pilots = {}
     pilot.clear()
     pilot.toggleSpawn(false)
@@ -220,8 +220,8 @@ client.spawn = function( ppid, shiptype, shipname , outfits, ai )
     --      client.pilots[ppid] = player.pilot()
             -- the server tells us to spawn in a new ship or acknowledges this ship
             local mpshiplabel = "MPSHIP" .. tostring(rnd.rnd(10000, 99999)) .. shipname
-            local mplayership = player.addShip(shiptype, mpshiplabel, "Multiplayer", true)
-            player.swapShip( mpshiplabel, false, false )
+            local mplayership = player.shipAdd(shiptype, mpshiplabel, "Multiplayer", true)
+            player.shipSwap( mpshiplabel, false, false )
             for _i, outf in ipairs(outfits) do
                 player.pilot():outfitAdd(outf, 1, true)
             end
@@ -294,7 +294,7 @@ client.synchronize = function( world_state )
                     -- apply minor velocity prediction
                     local stats = this_pilot:stats()
                     local angle = vec2.newP(0, ppinfo.dir)
-                    local acceleration = stats.thrust / stats.mass
+                    local acceleration = stats.accel / stats.mass
                     local dv = vec2.mul(angle, acceleration)
                     local rtt = client.server:round_trip_time()
                     local pdv = vec2.new(
