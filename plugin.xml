@@ -5,4 +5,5 @@
     <compatibility>0\.(10|11)\..*</compatibility>
     <priority>1</priority>
     <description>Allows you to play multiplayer with OTHER PEOPLE ONLINE like a real boss.</description>
+    <source>https://github.com/ThrosturX/naev-multiplayer.git</source>
 </plugin>
