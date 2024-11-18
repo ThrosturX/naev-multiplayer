@@ -44,7 +44,7 @@ local usable_outfits = {
    ["Feral Rage III"]            = "feral_rage",
    ["The Bite"]                  = "bite",
    ["The Bite - Improved"]       = "bite",
-   ["The Bite - Blood Lust"]     = {"bite", "bite_lust"},
+   ["The Bite - Blood Lust"]     = "bite_lust",
    -- afterburners
    ["Unicorp Light Afterburner"] = "afterburner",
    ["Unicorp Medium Afterburner"] = "afterburner",
@@ -544,6 +544,8 @@ MP_INPUT_HANDLERS.accel = function ( press )
     else
         naev.cache().accel = 0
     end
+    -- update active outfits
+    activate_outfits()
 end
 
 MP_INPUT_HANDLERS.primary = function ( press )
