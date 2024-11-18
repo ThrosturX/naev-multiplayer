@@ -139,9 +139,9 @@ local mplayer_cores = {
          return c
       end,
 	["Kestrel"] = function () return {
-         choose_one{ "Unicorp PT-2200 Core System", "Milspec Orion 8601 Core System", "Milspec Thalos 9802 Core System", "Milspec Orion 9901 Core System" },
+         choose_one{ "Unicorp PT-1750 Core System", "Milspec Orion 8601 Core System", "Milspec Thalos 9802 Core System", "Milspec Orion 9901 Core System" },
          choose_one{ "Nexus Bolt 3000 Engine", "Krain Remige Engine", "Tricon Typhoon Engine", },
-		 choose_one{ "Unicorp D-48 Heavy Plating", "S&K Heavy Combat Plating" },
+		 choose_one{ "Unicorp D-38 Heavy Plating", "S&K Heavy Combat Plating" },
 
       } end,
 	["Goddard"] = function () return {
@@ -172,7 +172,7 @@ local mplayer_cores = {
    ["Mule"] = function() return {
 		 choose_one{ "Milspec Orion 5501 Core System", "Milspec Thalos 5402 Core System", "Unicorp PT-310 Core System" },
 		 "Melendez Buffalo XL Engine",
-		 choose_one{"S&K Medium Combat Plating", "Unicorp D-24 Medium Plating", "S&K Medium-Heavy Combat Plating", "Patchwork Medium Plating" },
+		 choose_one{"S&K Medium Combat Plating", "Unicorp D-23 Medium Plating", "S&K Medium-Heavy Combat Plating", "Patchwork Medium Plating" },
    } end,
 }
 

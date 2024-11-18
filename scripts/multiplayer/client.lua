@@ -372,7 +372,7 @@ client.synchronize = function( world_state )
     -- clean untouched
     for plid, pplt in pairs(client.pilots) do
         if not touched[plid] and pplt:exists() then
-            pplt:disable(true)
+            pplt:setDisable(true)
         end
     end
 
