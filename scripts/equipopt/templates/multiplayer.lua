@@ -141,7 +141,7 @@ local mplayer_cores = {
 	["Kestrel"] = function () return {
          choose_one{ "Unicorp PT-1750 Core System", "Milspec Orion 8601 Core System", "Milspec Thalos 9802 Core System", "Milspec Orion 9901 Core System" },
          choose_one{ "Nexus Bolt 3000 Engine", "Krain Remige Engine", "Tricon Typhoon Engine", },
-		 choose_one{ "Unicorp D-38 Heavy Plating", "S&K Heavy Combat Plating" },
+		 choose_one{ "Unicorp D-58 Heavy Plating", "S&K Heavy Combat Plating" },
 
       } end,
 	["Goddard"] = function () return {
