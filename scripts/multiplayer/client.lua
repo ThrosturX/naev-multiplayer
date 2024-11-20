@@ -116,17 +116,18 @@ client.start = function( bindaddr, bindport, localport )
     player.takeoff()
     hook.timer(1, "enterMultiplayer")
     -- some consistency stuff
+    -- 20-11-2024 NOTE: This needs to be revisited after changes to weapsets
     naev.keyEnable( "speed", false )
-    naev.keyEnable( "weapset1", false )
-    naev.keyEnable( "weapset2", false )
-    naev.keyEnable( "weapset3", false )
-    naev.keyEnable( "weapset4", false )
-    naev.keyEnable( "weapset5", false )
-    naev.keyEnable( "weapset6", false )
-    naev.keyEnable( "weapset7", false )
+--  naev.keyEnable( "weapset1", false )
+--  naev.keyEnable( "weapset2", false )
+--  naev.keyEnable( "weapset3", false )
+--  naev.keyEnable( "weapset4", false )
+--  naev.keyEnable( "weapset5", false )
+--  naev.keyEnable( "weapset6", false )
+--  naev.keyEnable( "weapset7", false )
 --  naev.keyEnable( "weapset8", false ) -- shield booster
 --  naev.keyEnable( "weapset9", false ) -- afterburner, that's fine
-    naev.keyEnable( "weapset0", false )
+--  naev.keyEnable( "weapset0", false )
     player.cinematics(
         true,
         {
