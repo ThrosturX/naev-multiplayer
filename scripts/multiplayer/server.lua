@@ -553,6 +553,7 @@ server.start = function( port )
         server.hook = hook.update("MULTIPLAYER_SERVER_UPDATE")
         server.chill = hook.timer(30, "MULTIPLAYER_CHILL_TIMER")
         server.round = hook.timer(10, "MULTIPLAYER_ROUND_TIMER")
+        server.inputhook = hook.input("MULTIPLAYER_UNPAUSE")
         -- borrow client hook to update cache variables
         --server.inputhook = hook.input("MULTIPLAYER_CLIENT_INPUT")
         player.pilot():setNoDeath( true )    -- keep the server running

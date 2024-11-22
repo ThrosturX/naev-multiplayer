@@ -1,6 +1,10 @@
 local fmt = require "format"
 local ai_setup = require "ai.core.setup"
 
+function MULTIPLAYER_UNPAUSE ( inputname, inputpress, args )
+    naev.unpause()
+end
+
 --  each line is <player_id> <pos> <dir> <vel> <armour> <shield> <stress>
 local function unmarshal( player_info )
     local nice_player = {
@@ -274,7 +278,12 @@ common.receivers[common.PLAY_MUSIC] = function ( client, message )
     for _id, snd in pairs(common.mp_sounds) do
         snd:stop()
     end
-    sfx:setVolume(1.0)
+
+    local vol = music.getVolume()
+
+    music.stop(true)
+
+    sfx:setVolume(vol)
     sfx:setLooping( true )
     sfx:play()
 end

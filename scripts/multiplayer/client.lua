@@ -573,6 +573,7 @@ MP_INPUT_HANDLERS.hail = function ( press )
     if press then
         hail_pressed = true
     elseif hail_pressed then
+        vn.reset()
         luatk.vn( function()
             luatk.msgInput("COMMUNICATION", "Broadcast:", 32, function (msg)
                 if msg and msg:len() > 0 then
@@ -593,13 +594,16 @@ MP_INPUT_HANDLERS.weapset8 = activate_outfits
 MP_INPUT_HANDLERS.weapset9 = activate_outfits
 
 MULTIPLAYER_CLIENT_UPDATE = function() return client.update() end
-function MULTIPLAYER_CLIENT_INPUT ( inputname, inputpress, args)
+function MULTIPLAYER_CLIENT_INPUT ( inputname, inputpress, args )
     if MP_INPUT_HANDLERS[inputname] then
         MP_INPUT_HANDLERS[inputname]( inputpress, args )
+--  else
+--      print(fmt.f("no handler for input {input}", { input = inputname } ))
     end
     if not TEMP_FREEZE then
         soft_sync = 999
     end
+    naev.unpause()
 end
 
 return client
