@@ -181,6 +181,11 @@ common.receivers[common.SYNC_PLAYER] = function ( client, message )
 end
 
 local function toggleOutfit( client, message, on )
+--  print("toggleOutfit")
+--  for ii, mm in pairs(message) do
+--      print(fmt.f("{ii}={mm}", { ii = ii, mm = mm } ))
+--  end
+--  print(on)
     if #message >= 2 then
         local playerID
         for ii, activated_line in ipairs( message ) do
@@ -190,7 +195,7 @@ local function toggleOutfit( client, message, on )
                 outf = activated_line
                 clplt = client.pilots[playerID]
                 if clplt and clplt:exists() then
-                    --print(outf .. " turned " .. tostring(on))
+                    print(outf .. " turned " .. tostring(on))
                     clplt:outfitToggle(clplt:memory()._o[outf], on)
                 end
             end

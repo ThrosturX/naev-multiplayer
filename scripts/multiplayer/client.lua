@@ -30,26 +30,15 @@ local client = {}
 --]]
 
 
--- borrowed from ai.core.attack.setup
-local usable_outfits = {
-   ["Emergency Shield Booster"]  = "shield_booster",
-   ["Berserk Chip"]              = "berserk_chip",
-   ["Combat Hologram Projector"] = "hologram_projector",
-   ["Neural Accelerator Interface"] = "neural_interface",
-   ["Blink Drive"]               = "blink_drive",
-   ["Hyperbolic Blink Engine"]   = "blink_engine",
-   ["Unicorp Jammer"]            = "jammer",
-   ["Milspec Jammer"]            = "jammer",
-   -- Bioships
-   ["Feral Rage III"]            = "feral_rage",
-   ["The Bite"]                  = "bite",
-   ["The Bite - Improved"]       = "bite",
-   ["The Bite - Blood Lust"]     = "bite_lust",
-   -- afterburners
-   ["Unicorp Light Afterburner"] = "afterburner",
-   ["Unicorp Medium Afterburner"] = "afterburner",
-   ["Hellburner"] = "afterburner",
-   ["Hades Torch"] = "afterburner",
+local outfit_types = {
+    ["Afterburner"] = "afterburner",
+    ["Shield Modification"] = "shield_booster",
+    ["Blink Drive"] = "blink_drive",
+--  ["The Bite"] = "bite",
+--  ["Blink Engine"] = "blink_engine",
+--  [""] = "",
+--  [""] = "",
+--  ["MISSING"] = "none",
 }
 
 local function _marshal ( players_info )
@@ -394,12 +383,30 @@ local function activate_outfits( )
     local actives = player.pilot():actives()
     local message
     for ii, oo in ipairs(actives) do
-        if usable_outfits[oo.name] then
-            if oo.state == "on" then
-                activelines = activelines .. usable_outfits[oo.name] .. "\n"
-            elseif oo.state == "off" then
-                deactilines = deactilines .. usable_outfits[oo.name] .. "\n"
+--      print(fmt.f("{i} is {x}", {i = ii, x=oo} ))
+        if oo and oo.state == "on" then
+            print(fmt.f("activate {thing}", { thing=oo.outfit } ))
+            for jj, pp in pairs(oo) do
+                print(fmt.f("{i}: {x}", {i = jj, x=pp} ))
             end
+        end
+        local outf_class = outfit_types[tostring(oo.type)]
+        if oo.state ~= "off" then
+            print(outf_class)
+            print(oo.outfit)
+            if tostring(oo.outfit) == 'Hyperbolic Blink Engine' then
+                outf_class = "blink_engine"
+            end
+            print(outf_class)
+        end
+        if outf_class then
+            if oo.state ~= "off" then
+                activelines = activelines .. outf_class .. "\n"
+            elseif oo.state == "off" then
+                deactilines = deactilines .. outf_class .. "\n"
+            end
+        else
+            print(fmt.f("{outf} of type {otype} doesn't have a known class yet", { outf = oo.outfit, otype=oo.type } ))
         end
     end
     if activelines:len() > 0 then
@@ -412,6 +419,7 @@ local function activate_outfits( )
             }
         )
         safe_send( message )
+        print("sent " .. message)
     end
     if deactilines:len() > 0 then
         message = fmt.f(
@@ -589,9 +597,16 @@ MP_INPUT_HANDLERS.hail = function ( press )
 end
 
 
+MP_INPUT_HANDLERS.weapset1 = activate_outfits
+MP_INPUT_HANDLERS.weapset2 = activate_outfits
+MP_INPUT_HANDLERS.weapset3 = activate_outfits
+MP_INPUT_HANDLERS.weapset4 = activate_outfits
+MP_INPUT_HANDLERS.weapset5 = activate_outfits
+MP_INPUT_HANDLERS.weapset6 = activate_outfits
 MP_INPUT_HANDLERS.weapset7 = activate_outfits
 MP_INPUT_HANDLERS.weapset8 = activate_outfits
 MP_INPUT_HANDLERS.weapset9 = activate_outfits
+MP_INPUT_HANDLERS.weapset0 = activate_outfits
 
 MULTIPLAYER_CLIENT_UPDATE = function() return client.update() end
 function MULTIPLAYER_CLIENT_INPUT ( inputname, inputpress, args )

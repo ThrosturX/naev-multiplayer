@@ -468,12 +468,25 @@ local function toggleOutfit( plid, message, on )
             else    -- don't fully trust the client
                 outf = activated_line
                 clplt = server.players[playerID]
+                if on then
+                    print(clplt)
+                    print(outf)
+                end
                 if clplt and clplt:exists() then
                     local memo = clplt:memory()._o
                     if memo then
+                        for ii, mm in pairs(memo) do
+                            print(fmt.f("memo {ii}={mm}", { ii = ii, mm = mm } ) )
+                        end
                         local outno = memo[outf]
                         if outno then
                             clplt:outfitToggle(outno, on)
+                        end
+                        if on then
+                            print("activate " .. tostring(outno))
+                            for kk, vv in pairs(clplt:outfits()) do
+                                print(fmt.f("{kk}: {vv}", { kk=kk, vv=vv } ) )
+                            end
                         end
                     end
                 end
@@ -497,6 +510,12 @@ end
 
 MESSAGE_HANDLERS[common.ACTIVATE_OUTFIT] = function ( peer, data )
     local plid = REGISTERED[peer:index()]
+    if not plid then
+        print("Peer registration not found for peer #" .. tostring(peer:index()))
+        for pk, pv in pairs(REGISTERED) do
+            print(fmt.f("{pk}: {pv}", {pk=pk, pv=pv}))
+        end
+    end
     toggleOutfit( plid, data , true )
     return outfit_handler( peer, data)
 end
@@ -591,10 +610,10 @@ server.synchronize_player = function( peer, player_info_str )
         local fudge = 16
         local speed2 = math.min(
             stats.speed_max * stats.speed_max,
-            math.abs(ppinfo.velx + fudge * ppinfo.vely + fudge)
+            (math.abs(ppinfo.velx) + fudge) * (math.abs(ppinfo.vely) + fudge)
         ) * 3
         local mdiff = (
-            math.abs( vec2.new( ppinfo.velx + fudge, ppinfo.vely + fudge):mod() * fudge ) + fudge 
+            math.abs( vec2.new( math.abs(ppinfo.velx) + fudge, math.abs(ppinfo.vely) + fudge):mod() * fudge ) + fudge 
         ) * frames_passed
         if dist2 >= speed2 or dist2 > (mdiff * mdiff) then
             print("WARNING: Refusing to synchronize player " .. ppid)

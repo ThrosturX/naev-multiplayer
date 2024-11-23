@@ -53,6 +53,11 @@ local mplayer_outfits = eoutfits.merge{{
    -- Small Structural
    "Battery I", "Shield Capacitor I", "Reactor Class I",
    "Small Shield Booster",
+
+   -- experimental
+   "Flicker Drive",
+   "Blink Drive",
+   "Hyperbolic Blink Engine",
 }}
 
 local mplayer_class = { "elite" }
