@@ -591,6 +591,7 @@ server.start = function( port )
 end
 
 local FPS = 60
+local resync_players = {}
 -- synchronize one player update after receiving
 server.synchronize_player = function( peer, player_info_str )
   --print( player_info_str )
@@ -617,6 +618,15 @@ server.synchronize_player = function( peer, player_info_str )
         ) * frames_passed
         if dist2 >= speed2 or dist2 > (mdiff * mdiff) then
             print("WARNING: Refusing to synchronize player " .. ppid)
+            local rsp = resync_players[ppid]
+            if not rsp then
+                resync_players[ppid] = 1
+                return false
+            elseif rsp < 3 then
+                resync_players[ppid] = rsp + 1
+                return false
+            end
+            resync_players[ppid] = nil
             --[[
             if rnd.rnd(0, 160) == 0 then
                 common.sync_player( ppid, ppinfo, server.players )
@@ -678,6 +688,9 @@ server.synchronize_player = function( peer, player_info_str )
         end
         common.sync_player( ppid, ppinfo, server.players )
         server.players[ppid]:fillAmmo()
+    end
+    if resync_players[ppid] then
+        resync_players[ppid] = nil
     end
     return true
 end
