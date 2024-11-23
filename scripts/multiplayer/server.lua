@@ -1317,6 +1317,8 @@ function MULTIPLAYER_ROUND_TIMER ( round_type )
             mpplt:setTemp( 0 )
             if server.npcs[plid] then
                 server.players[plid]:rm()
+            else
+                resync_players[plid] = 99
             end
         end
         if SCORES[plid] and SCORES[plid] >= 21 then

@@ -55,7 +55,6 @@ local mplayer_outfits = eoutfits.merge{{
    "Small Shield Booster",
 
    -- experimental
-   "Flicker Drive",
    "Blink Drive",
    "Hyperbolic Blink Engine",
 }}
