@@ -274,7 +274,13 @@ client.synchronize = function( world_state )
                 end
                 local pdiff = math.abs( vec2.add( this_pilot:pos() , -ppinfo.posx, -ppinfo.posy ):mod() )
                 if hard_resync or (resync and pdiff > 6) then
-                    client.pilots[ppid]:setPos(vec2.new(ppinfo.posx, ppinfo.posy))
+                    print("resync with pdiff " .. tostring(pdiff))
+                    if pdiff > 20 then
+                        client.pilots[ppid]:setPos(vec2.new(ppinfo.posx, ppinfo.posy))
+                    else
+                        local avg_pos = (vec2.new(ppinfo.posx, ppinfo.posy) + this_pilot:pos()) / 2
+                        client.pilots[ppid]:setPos( avg_pos )
+                    end
                     client.pilots[ppid]:setVel(vec2.new(ppinfo.velx, ppinfo.vely))
                 elseif pdiff > 8 then
                     last_resync = last_resync * pdiff

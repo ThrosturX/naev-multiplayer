@@ -406,6 +406,7 @@ MESSAGE_HANDLERS[common.REQUEST_UPDATE] = function ( peer, data )
                        end
                     else
                        -- player is dead
+                        resync_players[opid] = 99
                     end
                 end
             end
@@ -469,24 +470,23 @@ local function toggleOutfit( plid, message, on )
                 outf = activated_line
                 clplt = server.players[playerID]
                 if on then
-                    print(clplt)
-                    print(outf)
+                    print(fmt.f("{pilot} wants to activate {outfit}", { pilot=tostring(clplt), outfit=tostring(outf) } ))
                 end
                 if clplt and clplt:exists() then
                     local memo = clplt:memory()._o
                     if memo then
-                        for ii, mm in pairs(memo) do
-                            print(fmt.f("memo {ii}={mm}", { ii = ii, mm = mm } ) )
-                        end
+                    --  for ii, mm in pairs(memo) do
+                    --      print(fmt.f("memo {ii}={mm}", { ii = ii, mm = mm } ) )
+                    --  end
                         local outno = memo[outf]
                         if outno then
                             clplt:outfitToggle(outno, on)
                         end
                         if on then
                             print("activate " .. tostring(outno))
-                            for kk, vv in pairs(clplt:outfits()) do
-                                print(fmt.f("{kk}: {vv}", { kk=kk, vv=vv } ) )
-                            end
+                        --  for kk, vv in pairs(clplt:outfits()) do
+                        --      print(fmt.f("{kk}: {vv}", { kk=kk, vv=vv } ) )
+                        --  end
                         end
                     end
                 end
@@ -622,7 +622,7 @@ server.synchronize_player = function( peer, player_info_str )
             if not rsp then
                 resync_players[ppid] = 1
                 return false
-            elseif rsp < 3 then
+            elseif rsp < 1 then
                 resync_players[ppid] = rsp + 1
                 return false
             end
