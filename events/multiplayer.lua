@@ -40,6 +40,9 @@ function startMultiplayerServer( hostport )
 
     -- you are a server now, stay like that!
     player.infoButtonUnregister( mpbtn )
+
+    mem.multiplayer.last_served_port = port
+    evt.save()
 end
 
 local function connectMultiplayer( hostname, hostport, localport )
@@ -87,7 +90,7 @@ local GREETINGS = {
     _("Welcome to the multiplayer experience. Please note that addiction is not guaranteed but highly likely."),
     _("I am the original multiplayer. I wish you a pleasant experience."),
     _("Freedom of speech means that you can say anything you want. It doesn't mean you'll get away with it, though."),
-    _("Please note that hosting a server on a non-ephemeral port might require port forwarding. Don't shame me by dimilitarizing your router!"),
+    _("Please note that hosting a server on a non-ephemeral port might require port forwarding. Don't shame me by demilitarizing your router!"),
     _("My first programming project was actually a wallhack for the half-life engine. I learned a lot, but the most valuable lesson was that cheating is really boring and removes all of the satisfaction from winning. Please remember to be kind, but don't feel compelled to keep playing if you feel uncomfortable."),
     _("If you have any good ideas for multiplayer, feel free to drop them under the 'Issues' tab on GitHub!"),
     _("Greetings captain {name}. Welcome to the Multiplayer experience. Expect carnage, desynchronization, error messages, erratic music and even sound effects. Don't expect how long it will suck you in, don't even worry about it..."),
@@ -100,6 +103,9 @@ local function vnMultiplayer()
     }
     if mem.multiplayer.last_server then
         table.insert( choices, { fmt.f( _("Reconnect to {nick}"), mem.multiplayer.last_server ), "reconnect" } )
+    end
+    if mem.multiplayer.last_served_port then
+        table.insert( choices, { fmt.f( _("Host a server on {port}"), { port = mem.multiplayer.last_served_port } ), "rehost" } )
     end
     vn.clear()
     vn.scene()
@@ -152,6 +158,15 @@ local function vnMultiplayer()
         end )
     end
 
+    local port
+    if mem.multiplayer.last_served_port then
+        vn.label("rehost")
+        vn.func( function()
+            port = mem.multiplayer.last_served_port
+            vn.jump( "host_port" )
+        end )
+    end
+
     vn.label("host")
     mpvn(
         _("What port do you want to serve on?")
@@ -163,7 +178,6 @@ local function vnMultiplayer()
         }
     )
 
-    local port
     vn.label("host_ephemeral")
     vn.func( function() port = "0" end )
     -- deliberate fallthrough
