@@ -165,7 +165,7 @@ local function control_override( timeout )
 end
 
 function control_reestablish()
-    music.stop( true ) -- let the server direct our musical choices :)
+    music.stop( ) -- let the server direct our musical choices :)
     player.cinematics(
         false,
         {

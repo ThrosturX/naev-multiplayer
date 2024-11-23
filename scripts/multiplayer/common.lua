@@ -281,8 +281,6 @@ common.receivers[common.PLAY_MUSIC] = function ( client, message )
 
     local vol = music.getVolume()
 
-    music.stop(true)
-
     sfx:setVolume(vol)
     sfx:setLooping( true )
     sfx:play()
