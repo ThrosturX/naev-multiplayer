@@ -466,6 +466,7 @@ local function toggleOutfit( plid, message, on )
                     print("WARNING: Peer trying to activate wrong person's outfit: " .. tostring(plid))
                     return
                 end
+                resync_players[plid] = -30
             else    -- don't fully trust the client
                 outf = activated_line
                 clplt = server.players[playerID]
@@ -622,7 +623,7 @@ server.synchronize_player = function( peer, player_info_str )
             if not rsp then
                 resync_players[ppid] = 1
                 return false
-            elseif rsp < 1 then
+            elseif rsp < 2 then
                 resync_players[ppid] = rsp + 1
                 return false
             end

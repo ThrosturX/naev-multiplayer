@@ -241,7 +241,7 @@ client.spawn = function( ppid, shiptype, shipname , outfits, ai )
             player.pilot():setPos(vec2.new(rnd.rnd(-9999, 9999), rnd.rnd(-9999, 9999)))
             player.pilot():setVel(vec2.new(0, 0))
             player.pilot():setHealth(100, 100, 100)
-            player.pilot():intrinsicSet("detection", -8)
+            player.pilot():intrinsicSet("Detection", -8)
             control_override()
         else
             hard_resync = false
