@@ -196,7 +196,12 @@ local function toggleOutfit( client, message, on )
                 clplt = client.pilots[playerID]
                 if clplt and clplt:exists() then
                     print(outf .. " turned " .. tostring(on))
-                    clplt:outfitToggle(clplt:memory()._o[outf], on)
+                    local oid = clplt:memory()._o[outf]
+                    if oid then
+                        clplt:outfitToggle(oid, on)
+                    else
+                        print(fmt.f("Warning: Couldn't find outfit {outf} for {plyr}", { outf = outf, plyr = clplt} ))
+                    end
                 end
             end
         end
