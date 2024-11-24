@@ -229,6 +229,7 @@ client.spawn = function( ppid, shiptype, shipname , outfits, ai )
             player.pilot():setPos(vec2.new(rnd.rnd(-9999, 9999), rnd.rnd(-9999, 9999)))
             player.pilot():setVel(vec2.new(0, 0))
             player.pilot():setHealth(100, 100, 100)
+            player.pilot():intrinsicSet("detection", -8)
             control_override()
         else
             hard_resync = false
@@ -274,9 +275,12 @@ client.synchronize = function( world_state )
                 end
                 local pdiff = math.abs( vec2.add( this_pilot:pos() , -ppinfo.posx, -ppinfo.posy ):mod() )
                 if hard_resync or (resync and pdiff > 6) then
-                    print("resync with pdiff " .. tostring(pdiff))
-                    if pdiff > 20 then
+                    if pdiff >= 100 then
                         client.pilots[ppid]:setPos(vec2.new(ppinfo.posx, ppinfo.posy))
+
+                    elseif pdiff > 12 or pdiff < 1 then
+                        local new_pos = 0.25 * vec2.new(ppinfo.posx, ppinfo.posy) + 0.75 * this_pilot:pos()
+                        client.pilots[ppid]:setPos(new_pos)
                     else
                         local avg_pos = (vec2.new(ppinfo.posx, ppinfo.posy) + this_pilot:pos()) / 2
                         client.pilots[ppid]:setPos( avg_pos )
@@ -398,16 +402,20 @@ local function activate_outfits( )
         end
         local outf_class = outfit_types[tostring(oo.type)]
         if oo.state ~= "off" then
-            print(outf_class)
-            print(oo.outfit)
             if tostring(oo.outfit) == 'Hyperbolic Blink Engine' then
                 outf_class = "blink_engine"
             end
-            print(outf_class)
         end
         if outf_class then
             if oo.state ~= "off" then
-                activelines = activelines .. outf_class .. "\n"
+                if oo.state == "cooldown" then
+                    if oo.cooldown > 0.9 then
+                        activelines = activelines .. outf_class .. "\n"
+                    end
+                else -- state is on
+                    print(outf_class .. " is in state " .. tostring(oo.state))
+                    activelines = activelines .. outf_class .. "\n"
+                end
             elseif oo.state == "off" then
                 deactilines = deactilines .. outf_class .. "\n"
             end
@@ -582,8 +590,8 @@ MP_INPUT_HANDLERS.secondary = function ( press )
 end
 
 local hail_pressed
-MP_INPUT_HANDLERS.hail = function ( press )
-    player.commClose()
+MP_INPUT_HANDLERS.autohail = function ( press )
+--  player.commClose()
     if press then
         hail_pressed = true
     elseif hail_pressed then
