@@ -179,7 +179,8 @@ function control_reestablish()
     -- remove any fleet ships
     local fleet = player.fleetList()
     for fk, fv in pairs(fleet) do
-        player.shipDeploy(fv)
+        player.shipDeploy(tostring(fv))
+        fv:setHealth(0)
     end
 
 end
