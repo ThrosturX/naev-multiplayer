@@ -75,9 +75,10 @@ end
 
 -- we are about to connect to a server, so we will disable client-side NPC
 -- spawning for the sake of consistency
+local was_connected = nil
 client.start = function( bindaddr, bindport, localport )
     if not localport then localport = rnd.rnd(1234,6788) end
-    if not player.isLanded() then
+    if not player.isLanded() and not was_connected then
         return "PLAYER_NOT_LANDED"
     end
 
@@ -131,6 +132,8 @@ client.start = function( bindaddr, bindport, localport )
         ship = player_ship,
         outfits = common.marshal_outfits(player.pilot():outfitsList())
     }
+
+    was_connected = true
 end
 
 local omsgid
@@ -171,6 +174,14 @@ function control_reestablish()
             3
         )
     end
+    
+    
+    -- remove any fleet ships
+    local fleet = player.fleetList()
+    for fk, fv in pairs(fleet) do
+        player.shipDeploy(fv)
+    end
+
 end
 
 local hard_resync
@@ -590,7 +601,7 @@ MP_INPUT_HANDLERS.secondary = function ( press )
 end
 
 local hail_pressed
-MP_INPUT_HANDLERS.autohail = function ( press )
+MP_INPUT_HANDLERS.hail = function ( press )
 --  player.commClose()
     if press then
         hail_pressed = true
