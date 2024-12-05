@@ -51,6 +51,7 @@ common.PLAY_SOUND        = "SOUND"
 common.PLAY_MUSIC        = "MUSIC"
 common.TELEPORT          = "TELEPORT"
 common.ASSIGN_TEAM       = "TEAM"
+common.CHECK_SYNC        = "CHECK_SYNC"
 common.receivers = {}
 
 --[[
@@ -448,6 +449,28 @@ common.sync_player = function ( ppid, ppinfo, container, resync )
             pilot.pushtask( container[ppid], "REMOTE_CONTROL_ACCEL", 1 )
         else -- if resync then
             pilot.pushtask( container[ppid], "REMOTE_CONTROL_ACCEL", 0 )
+        end
+    end
+end
+
+--[[
+--  To check if the player is in the right ship
+--  message should be "your ship"
+--]]
+common.receivers[common.CHECK_SYNC] = function ( client, message )
+    local p_ship = player.pilot():ship():nameRaw()
+    if p_ship ~= message[1] then
+        player.omsgAdd(
+            "#p" ..  "I'm in the wrong ship. I should be in a " .. message[1] .. " instead of a " .. p_ship .. "#0"
+        )
+        client.reconnect()
+    end
+end
+
+common.stop_sounds = function ()
+    for id, snd in pairs(common.mp_sounds) do
+        if not snd:isStopped() then
+            snd:stop()
         end
     end
 end

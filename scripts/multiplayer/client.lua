@@ -535,7 +535,7 @@ client.update = function( timeout )
     
     if soft_sync > 0 then
         -- tell the server what we know and ask for next resync
-        safe_send( common.REQUEST_UPDATE .. '\n' .. _marshal( client.pilots ) )
+        safe_send( common.REQUEST_UPDATE  .. '\n' .. _marshal( client.pilots ) )
         soft_sync = 0
     else
         soft_sync = soft_sync + 1
@@ -543,12 +543,22 @@ client.update = function( timeout )
 end
 
 function reconnect()
+    -- reset all pilots' hostility
+    for ppid, pplt in pairs(client.pilots) do
+        pplt:setHostile(false)
+    end
+
     client.server = client.host:connect( fmt.f("{addr}:{port}", { addr = client.conaddr, port = client.conport } ) )
  
     tryRegister( client.playerinfo.nick )
 
     client.update( 4000 )
     client.hook = hook.update("MULTIPLAYER_CLIENT_UPDATE")
+end
+
+client.reconnect = function ()
+    client.host:disconnect()
+    reconnect()
 end
 
 function enterMultiplayer()
@@ -622,6 +632,9 @@ MP_INPUT_HANDLERS.hail = function ( press )
     end
 end
 
+
+-- stop sounds if ESC is pressed, in case the player is leaving the multiplayer session
+MP_INPUT_HANDLERS.menu = common.stop_sounds
 
 MP_INPUT_HANDLERS.weapset1 = activate_outfits
 MP_INPUT_HANDLERS.weapset2 = activate_outfits

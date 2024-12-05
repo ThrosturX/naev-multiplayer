@@ -362,6 +362,7 @@ MESSAGE_HANDLERS[common.REQUEST_KEY] = function ( peer, data )
     end
 end
 
+local resync_players = {}
 -- player wants to sync
 MESSAGE_HANDLERS[common.REQUEST_UPDATE] = function ( peer, data )
     -- peer just wants an updated world state
@@ -571,6 +572,7 @@ server.start = function( port )
         server.world_state = server.refresh()
 
         server.hook = hook.update("MULTIPLAYER_SERVER_UPDATE")
+        server.pinghook = hook.timer(1, "MULTIPLAYER_SYNC_UPDATE")
         server.chill = hook.timer(30, "MULTIPLAYER_CHILL_TIMER")
         server.round = hook.timer(10, "MULTIPLAYER_ROUND_TIMER")
         server.inputhook = hook.input("MULTIPLAYER_UNPAUSE")
@@ -592,7 +594,6 @@ server.start = function( port )
 end
 
 local FPS = 60
-local resync_players = {}
 -- synchronize one player update after receiving
 server.synchronize_player = function( peer, player_info_str )
   --print( player_info_str )
@@ -832,7 +833,22 @@ server.update = function ()
     end
 end
 
+server.check_players = function ()
+    for ppid, pplt in pairs(server.players) do
+        local p_ship = pplt:ship():nameRaw()
+        local peer = get_peer(ppid)
+        if peer and pplt:exists() then
+            sendMessage( peer, common.CHECK_SYNC, p_ship, "unreliable" )
+        end
+    end
+    local timer_sec = 3
+    server.pinghook = hook.timer(timer_sec, "MULTIPLAYER_SYNC_UPDATE")
+
+end
+
 MULTIPLAYER_SERVER_UPDATE = function() return server.update() end
+
+MULTIPLAYER_SYNC_UPDATE = function () return server.check_players() end
 
 local CHILL_SONGS = {
     "snd/sounds/songs/feeling-good-05.ogg",
