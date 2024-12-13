@@ -557,7 +557,9 @@ function reconnect()
 end
 
 client.reconnect = function ()
-    client.host:disconnect()
+    if client.host then
+        client.host:disconnect()
+    end
     reconnect()
 end
 
