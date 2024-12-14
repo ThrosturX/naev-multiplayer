@@ -519,7 +519,7 @@ MESSAGE_HANDLERS[common.ACTIVATE_OUTFIT] = function ( peer, data )
         end
     end
     toggleOutfit( plid, data , true )
-    return outfit_handler( peer, data)
+    return outfit_handler( peer, data )
 end
 MESSAGE_HANDLERS[common.DEACTIVATE_OUTFIT] = function ( peer, data )
     local plid = REGISTERED[peer:index()]
