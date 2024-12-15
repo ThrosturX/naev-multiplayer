@@ -475,7 +475,7 @@ local function tryRegister( nick )
 end
 
 local sync_frames = 0
-local last_usync = naev.ticks()
+local updates_per_second = 15
 client.update = function( timeout )
     timeout = timeout or 0
     --[[
@@ -536,12 +536,11 @@ client.update = function( timeout )
     end
 
     if skipped_frames >= sync_frames then
-        sync_frames = naev.fps() / 15
+        sync_frames = naev.fps() / updates_per_second
         -- tell the server what we know and ask for next resync
         safe_send( common.REQUEST_UPDATE  .. '\n' .. _marshal( client.pilots ) )
         skipped_frames = 0
-        last_usync = naev.ticks()
-    elseif naev.ticks() > last_usync then
+    else
         skipped_frames = skipped_frames + 1
     end
 end
@@ -561,8 +560,8 @@ function reconnect()
 end
 
 client.reconnect = function ()
-    if client.host then
-        client.host:disconnect()
+    if client.server then
+        client.server:disconnect_now()
     end
     reconnect()
 end

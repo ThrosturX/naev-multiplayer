@@ -363,12 +363,25 @@ MESSAGE_HANDLERS[common.REQUEST_KEY] = function ( peer, data )
 end
 
 local resync_players = {}
+local context_sync = {}
+local context_limit = 16
 -- player wants to sync
 MESSAGE_HANDLERS[common.REQUEST_UPDATE] = function ( peer, data )
     -- peer just wants an updated world state
     local player_id
     if #data >= 1 then
         player_id = data[1]:match( "%w+" )
+        -- before we do anything, let's make sure we didn't already update this player recently
+        if context_sync[player_id] == nil then
+            context_sync[player_id] = 0
+        elseif context_sync[player_id] > context_limit then
+            print(fmt.f("INFO: player with id {mpid} already received too many updates in this context at {val}", { mpid = player_id, val=context_sync[player_id] } ))
+            return
+        else
+            -- we now assume the player will be updated in this context
+            context_sync[player_id] = context_sync[player_id] + 1
+        end
+
       --print("player'id: " .. player_id)
         if player_id and server.players[player_id] then
             -- update pilots
@@ -523,6 +536,12 @@ MESSAGE_HANDLERS[common.ACTIVATE_OUTFIT] = function ( peer, data )
 end
 MESSAGE_HANDLERS[common.DEACTIVATE_OUTFIT] = function ( peer, data )
     local plid = REGISTERED[peer:index()]
+    if not plid then
+        print("Peer registration not found for peer #" .. tostring(peer:index()))
+        for pk, pv in pairs(REGISTERED) do
+            print(fmt.f("{pk}: {pv}", {pk=pk, pv=pv}))
+        end
+    end
     toggleOutfit( plid, data , false )
     return outfit_handler( peer, data)
 end
@@ -797,12 +816,29 @@ server.refresh = function()
 end
 
 -- do I need to explain this?
+local valid_contexts_per_second = 30
+local max_context_frames = 0
+local this_context_frames = 1
 server.update = function ()
     player.autonavReset()
 --    synchronize the server peer
 --    server.synchronize_player ( common.marshal_me( player.name() ) )
     -- refresh our world state before updating clients
     server.refresh()
+
+    -- validate the current context
+    if this_context_frames >= max_context_frames then
+        -- clear the context
+        for cplid, _val in pairs(context_sync) do
+            context_sync[cplid] = nil
+        end
+        -- calculate next context window
+        max_context_frames = naev.fps() / valid_contexts_per_second
+        this_context_frames = 1
+    else
+        -- increment the counter
+        this_context_frames = this_context_frames + 1
+    end
 
     -- handle requests from clients
     local event = server.host:service()
@@ -835,10 +871,12 @@ end
 
 server.check_players = function ()
     for ppid, pplt in pairs(server.players) do
-        local p_ship = pplt:ship():nameRaw()
-        local peer = get_peer(ppid)
-        if peer and pplt:exists() then
-            sendMessage( peer, common.CHECK_SYNC, p_ship, "unreliable" )
+        if pplt:exists() then
+            local p_ship = pplt:ship():nameRaw()
+            local peer = get_peer(ppid)
+            if peer and pplt:exists() then
+                sendMessage( peer, common.CHECK_SYNC, p_ship, "unreliable" )
+            end
         end
     end
     local timer_sec = 3

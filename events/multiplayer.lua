@@ -41,7 +41,7 @@ function startMultiplayerServer( hostport )
     -- you are a server now, stay like that!
     player.infoButtonUnregister( mpbtn )
 
-    mem.multiplayer.last_served_port = port
+    mem.multiplayer.last_served_port = hostport
     evt.save()
 end
 
