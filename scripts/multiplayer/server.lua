@@ -376,6 +376,7 @@ MESSAGE_HANDLERS[common.REQUEST_UPDATE] = function ( peer, data )
             context_sync[player_id] = 0
         elseif context_sync[player_id] > context_limit then
             print(fmt.f("INFO: player with id {mpid} already received too many updates in this context at {val}", { mpid = player_id, val=context_sync[player_id] } ))
+            context_sync[player_id] = context_sync[player_id] + 1 -- increment counter for debug message
             return
         else
             -- we now assume the player will be updated in this context
