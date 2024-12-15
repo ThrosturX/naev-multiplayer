@@ -256,8 +256,8 @@ client.spawn = function( ppid, shiptype, shipname , outfits, ai )
 end
 
 local RESYNC_INTERVAL = 64 + rnd.rnd(36, 72)
-local soft_sync = 0
 local last_resync
+local skipped_frames = 0
 local FPS = 60
 -- TODO HERE: refactor some common.sync_player (resync=true regularly)
 client.synchronize = function( world_state )
@@ -366,7 +366,7 @@ client.synchronize = function( world_state )
             local mdiff = (
                 math.abs( vec2.new( ppinfo.velx + fudge, ppinfo.vely + fudge):mod() * fudge ) + fudge 
             ) * frames_passed
-            if pdiff > mdiff * 1.36 or ( resync and (pdiff >= mdiff and soft_sync == 0)) or hard_resync then
+            if pdiff > mdiff * 1.36 or ( resync and (pdiff >= mdiff and skipped_frames == 0)) or hard_resync then
                 ppme:setPos( vec2.new(ppinfo.posx, ppinfo.posy) )
                 if hard_resync then
                   ppme:setVel( vec2.new(ppinfo.velx, ppinfo.vely) )
@@ -474,6 +474,8 @@ local function tryRegister( nick )
     )
 end
 
+local sync_frames = 0
+local last_usync = naev.ticks()
 client.update = function( timeout )
     timeout = timeout or 0
     --[[
@@ -532,13 +534,15 @@ client.update = function( timeout )
         end
         event = client.host:service()
     end
-    
-    if soft_sync > 0 then
+
+    if skipped_frames >= sync_frames then
+        sync_frames = naev.fps() / 15
         -- tell the server what we know and ask for next resync
         safe_send( common.REQUEST_UPDATE  .. '\n' .. _marshal( client.pilots ) )
-        soft_sync = 0
-    else
-        soft_sync = soft_sync + 1
+        skipped_frames = 0
+        last_usync = naev.ticks()
+    elseif naev.ticks() > last_usync then
+        skipped_frames = skipped_frames + 1
     end
 end
 
@@ -657,7 +661,7 @@ function MULTIPLAYER_CLIENT_INPUT ( inputname, inputpress, args )
 --      print(fmt.f("no handler for input {input}", { input = inputname } ))
     end
     if not TEMP_FREEZE then
-        soft_sync = 999
+        skipped_frames = 999
     end
     naev.unpause()
 end
