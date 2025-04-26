@@ -323,7 +323,7 @@ client.synchronize = function( world_state )
                 if armour_fix <= 12 then
                     shield_fix = shield_fix + 6 + rnd.rnd(6, 10)
                 end
-                if ppinfo_armor == 0 then
+                if ppinfo.armor == 0 then
                     armour_fix = 0
                 end
                 client.pilots[ppid]:setHealth(
