@@ -59,11 +59,11 @@ If you decide to use port 0, a port will be selected for you as if by the origin
 5. Close everything and take off
 6. Leave the server alone, as the simulation must run for the networking code to execute
     - The server cannot be seen by players -- please don't abuse this as the server is not meant to play but can be used to spectate
-    - The server will announce the socket host (including the port, if you tried to get one automatically) in the console, message log, and as an `omsg`
+    - The server will announce the socket host (including the port, if you tried to get one automatically) in the game console, message log, and as an `omsg`
 
 ### Finding your port
 
-Simply run the following command immediately after starting a server:
+Simply run the following command in a system terminal immediately after starting a server:
 
     ss -tulpn | grep naev
 
