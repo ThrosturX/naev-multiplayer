@@ -371,7 +371,17 @@ end
 
 local handled_frame = {}
 
-local function handleMessage ( event )
+
+server.handleMessage = function ( peer, msg_type, msg_data )
+    if handled_frame[peer:index()] == msg_type then
+        print( "INFO: Already handled a " .. msg_type .. " from peer " .. tostring(peer:index()) )
+    end
+    handled_frame[event.peer] = msg_type
+
+    return MESSAGE_HANDLERS[msg_type]( peer, msg_data )
+end
+
+server.handleMsgRaw = function ( event )
     local msg_type
     local msg_data = {}
     for line in event.data:gmatch("[^\n]+") do
@@ -382,49 +392,65 @@ local function handleMessage ( event )
         end
     end
 
-    if handled_frame[event.peer:index()] == msg_type then
-        print( "Already handled a " .. msg_type .. " from peer " .. tostring(event.peer:index()) )
-    end
-    handled_frame[event.peer] = msg_type
+    return server.handleMessage( event.peer, msg_type, msg_data )
+end
 
-    return MESSAGE_HANDLERS[msg_type]( event.peer, msg_data )
+local function handleMessage ( event )
+    print("WARNING: Using defunct local handleMessage, use server.HandleMsgRaw instead")
+    return server.handleMsgRaw( event )
+end
+
+-- create a ready-to-start server
+server.create = function ( port )
+    if not port then port = 0 end -- get a random port
+    server.host = enet.host_create( fmt.f( "*:{port}", { port = port } ) )
+    local message = "P2P host is running on: " .. server.host:get_socket_address()
+    print( message )
 end
 
 -- start a new listenserver
 server.start = function( port )
-    if player.isLanded() then
-        return "ERROR_SERVER_LANDED"
+    -- reset any hooks
+    server.stop()
+    if server.host == nil then
+        print( "ERROR: No server host!" )
+        return "NO_SERVER_HOST"
     end
-    if not port then port = 6789 end
-    server.host = enet.host_create( fmt.f( "*:{port}", { port = port } ) )
-    local message = "SERVER IS RUNNING ON: " .. server.host:get_socket_address()
+    local message = "P2P SERVER HAS STARTED ON: " .. server.host:get_socket_address()
     print( message )
     player.omsgAdd( "#b"..message.."#0" )
     pilot.comm( "SERVER INFO", "#y" .. message .. "#0" )
-    if server.host then
-        server.players     = {}
-        server.npcs        = {}
-        server.playerinfo  = {}
-        -- go to multiplayer system
-        player.teleport("Multiplayer Lobby")
-        -- register yourself
-        server.hostnick = player.name():gsub(' ', '')
-        -- registerPlayer( server.hostnick, player:pilot():ship():nameRaw() , player:pilot():outfitsList() )
-        -- update world state with yourself (weird)
-        server.world_state = server.refresh()
+    -- TODO: npcs should be the npcs in the game, check update too!
+    server.players     = {}
+    server.npcs        = {}
+    server.playerinfo  = {}
+    -- register yourself
+    server.hostnick = player.name():gsub(' ', '_')
+    registerPlayer( server.hostnick, player:pilot():ship():nameRaw() , player:pilot():outfitsList() )
+    -- update world state with yourself (weird)
+    server.world_state = server.refresh()
 
-        server.hook = hook.update("MULTIPLAYER_P2P_UPDATE")
-        server.pinghook = hook.timer(1, "MULTIPLAYER_P2P_SYNC")
-        -- NOTE: This server has no inputhook, because it runs on a client
+    server.hook = hook.update("MULTIPLAYER_P2P_UPDATE")
+    server.pinghook = hook.timer(1, "MULTIPLAYER_P2P_SYNC")
+    -- NOTE: This server has no inputhook, because it runs on a client
 
-        player.cinematics(
-            false,
-            {
-                abort = _("Autonav disabled in multiplayer."),
-                no2x = true,
-                gui = false -- TODO: Is this right?
-            }
-        )
+    player.cinematics(
+        false,
+        {
+            abort = _("Autonav disabled in multiplayer."),
+            no2x = true,
+            gui = false -- TODO: Is this right?
+        }
+    )
+end
+
+server.stop = function ()
+    if server.hook ~= nil then
+        print("P2P Server hook has been removed.")
+        hook.rm( server.hook )
+    end
+    if server.pinghook ~= nil then
+        hook.rm( server.pinghook )
     end
 end
 
@@ -638,7 +664,7 @@ local this_context_frames = 1
 server.update = function ()
     player.autonavReset()
 --    synchronize the server peer
---    server.synchronize_player ( common.marshal_me( player.name() ) )
+    server.synchronize_player ( common.marshal_me( player.name() ) )
     -- refresh our world state before updating clients
     server.refresh()
 
@@ -686,6 +712,7 @@ server.update = function ()
     end
 end
 
+-- TODO: Revise this
 server.check_players = function ()
     for ppid, pplt in pairs(server.players) do
         if pplt:exists() then

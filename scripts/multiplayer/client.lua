@@ -1,4 +1,4 @@
--- luacheck: globals MULTIPLAYER_CLIENT_UPDATE MULTIPLAYER_CLIENT_INPUT enterMultiplayer reconnect control_reestablish (Hook functions passed by name)
+-- luacheck: globals P2P_ENTER_SYSTEM MULTIPLAYER_CLIENT_UPDATE MULTIPLAYER_CLIENT_INPUT enterMultiplayer reconnect control_reestablish (Hook functions passed by name)
 
 local common = require "multiplayer.common"
 local p2p_relay = require "multiplayer.relay"
@@ -150,12 +150,36 @@ client.start_peer = function()
     end
 
     -- TODO: hook on "enter" to find a server and connect to it
+    client.ehook = hook.enter( "P2P_ENTER_SYSTEM" )
 end
 
--- a hook on enter should call this method
+-- the logic we go through when entering a system
 client.entered_system = function()
-    -- TODO
+    if client.relay == nil then
+        print("ERROR: Calling p2p enter hook without a client relay!")
+        return "ERROR_NO_CLIENT_RELAY"
+    end
+    -- 1. try to find the owner of this system and connect
+
+    print("WARNING: peer search not available, creating server...")
+    local syst = system.cur():nameRaw()
+    local err = client.relay.join(syst)
+    if err == nil then
+        -- success
+        return nil
+    end
+
+    print("DEBUG: <relay.join> " .. err)
+
+    -- 2. else start hosting and advertise ourselves
+    client.relay.open()
+
+    -- TODO do we need to connect to ourselves?
+    -- let's decide later if we like listenserver pattern or not
 end
+
+P2P_ENTER_SYSTEM = function() return client.entered_system() end
+
 
 local omsgid
 local TEMP_FREEZE
@@ -532,6 +556,7 @@ client.update = function( timeout )
         elseif event.type == "connect" then
             print(event.peer, " connected.")
             if client.relay == nil then
+                -- this is not a p2p session, spawn in a random place and let the server fix it
                 player.pilot():setPos( vec2.new( rnd.rnd(-3000, 3000), rnd.rnd(-2000, 2000) ) )
             end
             -- register with the server
@@ -681,7 +706,12 @@ MP_INPUT_HANDLERS.weapset8 = activate_outfits
 MP_INPUT_HANDLERS.weapset9 = activate_outfits
 MP_INPUT_HANDLERS.weapset0 = activate_outfits
 
-MULTIPLAYER_CLIENT_UPDATE = function() return client.update() end
+MULTIPLAYER_CLIENT_UPDATE = function()
+    if client.relay ~= nil then
+        client.relay.update()
+    end
+    return client.update()
+end
 function MULTIPLAYER_CLIENT_INPUT ( inputname, inputpress, args )
     if MP_INPUT_HANDLERS[inputname] then
         MP_INPUT_HANDLERS[inputname]( inputpress, args )
