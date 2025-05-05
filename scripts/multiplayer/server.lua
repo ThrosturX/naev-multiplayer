@@ -565,7 +565,7 @@ local function handleMessage ( event )
     end
     handled_frame[event.peer] = msg_type
 
-    return MESSAGE_HANDLERS[msg_type]( event.peer, msg_data)
+    return MESSAGE_HANDLERS[msg_type]( event.peer, msg_data )
 end
 
 -- start a new listenserver
