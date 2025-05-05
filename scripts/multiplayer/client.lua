@@ -1,26 +1,25 @@
 -- luacheck: globals MULTIPLAYER_CLIENT_UPDATE MULTIPLAYER_CLIENT_INPUT enterMultiplayer reconnect control_reestablish (Hook functions passed by name)
 
 local common = require "multiplayer.common"
+local p2p_relay = require "multiplayer.relay"
 local enet = require "enet"
 local fmt = require "format"
-local mp_equip = require "equipopt.templates.multiplayer"
 local ai_setup = require "ai.core.setup"
 local luatk = require "luatk"
 local vn = require "vn"
--- require "factions.equip.generic"
 
 local client = {}
 --[[
---      client.host
---      client.server
---      client.playerinfo { nick, ship?, outfits... }
---
---      client.pilots = { playerid = pilot, ... }
---
---      client.start()      -- DEATHMATCH MODE
---      client.start_peer() -- UNIVERSE SHARE MODE
---      client.synchronize( world_state )
---      client.update()
+      client.host
+      client.server
+      client.playerinfo { nick, ship?, outfits... }
+
+      client.pilots = { playerid = pilot, ... }
+
+      client.start()      -- DEATHMATCH MODE
+      client.start_peer() -- UNIVERSE SHARE MODE
+      client.synchronize( world_state )
+      client.update()
 --]]
 
 
@@ -29,10 +28,12 @@ local outfit_types = {
     ["Shield Modification"] = "shield_booster",
     ["Blink Drive"] = "blink_drive",
     ["Bioship Organ"] = "bite",
---  ["Blink Engine"] = "blink_engine",
---  [""] = "",
---  [""] = "",
---  ["MISSING"] = "none",
+--[[
+  ["Blink Engine"] = "blink_engine",
+  [""] = "",
+  [""] = "",
+  ["MISSING"] = "none",
+--]]
 }
 
 -- converts a world_state into information about "me" and a list of players I know about
@@ -77,7 +78,7 @@ end
 -- spawning for the sake of consistency
 local was_connected = nil
 client.start = function( bindaddr, bindport, localport )
-    if client.peer_nodes ~= nil then
+    if client.relay ~= nil then
         return "CLIENT_CONFIGURED_FOR_PEERPLAY"
     end
 
@@ -132,14 +133,13 @@ end
 
 -- like client.start, but instead of entering the multiplayer lobby,
 -- it tries to connect to other peers
-client.start_peer = function( hosting_object )
-    -- store potential peers in here
-    client.peer_nodes = {}
+client.start_peer = function()
+    -- store potential peers in the relay
     -- peer play clients have to be able to host
-    -- the hosting_object handles peer-to-peer communication
+    -- the relay object handles peer-to-peer communication
     -- until a server is established,
     -- at which point one of the peers acts as the server
-    client.relay = hosting_object
+    client.relay = p2p_relay.start() -- start takes argument port choice
     if not client.relay then
         return "NO_CLIENT_RELAY"
     end
@@ -531,7 +531,7 @@ client.update = function( timeout )
             receiveMessage( event.data )
         elseif event.type == "connect" then
             print(event.peer, " connected.")
-            if client.peer_nodes == nil then
+            if client.relay == nil then
                 player.pilot():setPos( vec2.new( rnd.rnd(-3000, 3000), rnd.rnd(-2000, 2000) ) )
             end
             -- register with the server
@@ -541,7 +541,7 @@ client.update = function( timeout )
             print(event.peer, " disconnected.")
             common.receivers[common.PLAY_SOUND]( client, { "snd/sounds/jingles/eerie.ogg" } )
             player.damageSPFX(1.0)
-            if client.peer_nodes ~= nil then
+            if client.relay ~= nil then
                 -- TODO:
                 -- 1. save the current state into the client.server host_object
                 -- 2. try to reconnect to the last server
