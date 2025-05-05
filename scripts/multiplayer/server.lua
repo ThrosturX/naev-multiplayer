@@ -1,5 +1,5 @@
 --
--- luacheck: globals MULTIPLAYER_SERVER_UPDATE MULTIPLAYER_ROUND_TIMER MULTIPLAYER_CHILL_TIMER SEND_TEAM_ASSIGNMENT MULTIPLAYER_SCORE_KEEPER (Hook functions passed by name)
+-- luacheck: globals MULTIPLAYER_SERVER_UPDATE MULTIPLAYER_SYNC_UPDATE MULTIPLAYER_ROUND_TIMER MULTIPLAYER_CHILL_TIMER SEND_TEAM_ASSIGNMENT MULTIPLAYER_SCORE_KEEPER (Hook functions passed by name)
 local common = require "multiplayer.common"
 local enet = require "enet"
 local fmt = require "format"
@@ -483,8 +483,8 @@ local function toggleOutfit( plid, message, on )
                 end
                 resync_players[plid] = -30
             else    -- don't fully trust the client
-                outf = activated_line
-                clplt = server.players[playerID]
+                local outf = activated_line
+                local clplt = server.players[playerID]
                 if on then
                     print(fmt.f("{pilot} wants to activate {outfit}", { pilot=tostring(clplt), outfit=tostring(outf) } ))
                 end
