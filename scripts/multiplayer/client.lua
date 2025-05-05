@@ -17,16 +17,10 @@ local client = {}
 --
 --      client.pilots = { playerid = pilot, ... }
 --
---      client.start()
+--      client.start()      -- DEATHMATCH MODE
+--      client.start_peer() -- UNIVERSE SHARE MODE
 --      client.synchronize( world_state )
 --      client.update()
---]]
-
--- converts a world_state into information about "me" and a list of players I know about
---[[
---      my_player_id <my_stats>
---      other_player_id
---      ...
 --]]
 
 
@@ -41,6 +35,12 @@ local outfit_types = {
 --  ["MISSING"] = "none",
 }
 
+-- converts a world_state into information about "me" and a list of players I know about
+--[[
+--      my_player_id <my_stats>
+--      other_player_id
+--      ...
+--]]
 local function _marshal ( players_info )
     local cache = naev.cache()
     local message = common.marshal_me(client.playerinfo.nick, cache.accel, cache.primary, cache.secondary)
@@ -77,6 +77,10 @@ end
 -- spawning for the sake of consistency
 local was_connected = nil
 client.start = function( bindaddr, bindport, localport )
+    if client.peer_nodes ~= nil then
+        return "CLIENT_CONFIGURED_FOR_PEERPLAY"
+    end
+
     if not localport then localport = rnd.rnd(1234,6788) end
     if not player.isLanded() and not was_connected then
         return "PLAYER_NOT_LANDED"
@@ -108,16 +112,6 @@ client.start = function( bindaddr, bindport, localport )
     -- some consistency stuff
     -- 20-11-2024 NOTE: This needs to be revisited after changes to weapsets
     naev.keyEnable( "speed", false )
---  naev.keyEnable( "weapset1", false )
---  naev.keyEnable( "weapset2", false )
---  naev.keyEnable( "weapset3", false )
---  naev.keyEnable( "weapset4", false )
---  naev.keyEnable( "weapset5", false )
---  naev.keyEnable( "weapset6", false )
---  naev.keyEnable( "weapset7", false )
---  naev.keyEnable( "weapset8", false ) -- shield booster
---  naev.keyEnable( "weapset9", false ) -- afterburner, that's fine
---  naev.keyEnable( "weapset0", false )
     player.cinematics(
         true,
         {
@@ -134,6 +128,33 @@ client.start = function( bindaddr, bindport, localport )
     }
 
     was_connected = true
+end
+
+-- like client.start, but instead of entering the multiplayer lobby,
+-- it tries to connect to other peers
+client.start_peer = function( hosting_object )
+    -- store potential peers in here
+    client.peer_nodes = {}
+    -- peer play clients have to be able to host
+    -- the hosting_object handles peer-to-peer communication
+    -- until a server is established,
+    -- at which point one of the peers acts as the server
+    client.relay = hosting_object
+    if not client.relay then
+        return "NO_CLIENT_RELAY"
+    end
+
+    client.host = enet.host_create("*:0") -- use ephemeral for client
+    if not client.host then
+        return "NO_CLIENT_HOST"
+    end
+
+    -- TODO: hook on "enter" to find a server and connect to it
+end
+
+-- a hook on enter should call this method
+client.entered_system = function()
+    -- TODO
 end
 
 local omsgid
@@ -510,20 +531,28 @@ client.update = function( timeout )
             receiveMessage( event.data )
         elseif event.type == "connect" then
             print(event.peer, " connected.")
-            player.pilot():setPos( vec2.new( rnd.rnd(-3000, 3000), rnd.rnd(-2000, 2000) ) )
+            if client.peer_nodes == nil then
+                player.pilot():setPos( vec2.new( rnd.rnd(-3000, 3000), rnd.rnd(-2000, 2000) ) )
+            end
             -- register with the server
             tryRegister( client.playerinfo.nick )
             client.alive = false
         elseif event.type == "disconnect" then
             print(event.peer, " disconnected.")
             common.receivers[common.PLAY_SOUND]( client, { "snd/sounds/jingles/eerie.ogg" } )
-          --for _sndid, sfx in pairs(common.mp_sounds) do
-          --    sfx:setLooping( false )
-          --end
             player.damageSPFX(1.0)
-            -- try to reconnect
-            hook.rm(client.hook)
-            hook.timer(3, "reconnect")
+            if client.peer_nodes ~= nil then
+                -- TODO:
+                -- 1. save the current state into the client.server host_object
+                -- 2. try to reconnect to the last server
+                -- 3. else try to find a new server
+                -- 4. else start hosting and advertise ourselves
+
+            else
+                -- try to reconnect to the deathmatch arena
+                hook.rm(client.hook)
+                hook.timer(3, "reconnect")
+            end
             client.alive = nil
             return -- deal with the rest later
         else
