@@ -39,6 +39,10 @@ function startP2pMultiplayer()
     end
     -- We don't have good settings to put here yet, so disable it all
     player.infoButtonUnregister( mpbtn )
+
+
+    mem.multiplayer.p2phook = client.ehook
+    evt.save()
 end
 
 function startMultiplayerServer( hostport )
@@ -286,4 +290,8 @@ function load()
     mpbtn = player.infoButtonRegister( _("Multiplayer"), vnMultiplayer, 3 )
   --serverbtn = player.infoButtonRegister( _("Start MP Server"), startMultiplayerServer, 3 )
   --clientbtn = player.infoButtonRegister( _("Connect Multiplayer"), connectMultiplayer, 3 )
+  local p2phook = mem.multiplayer.p2phook
+  if p2phook ~= nil then
+      hook.rm(p2phook)
+  end
 end
