@@ -40,7 +40,7 @@ function startP2pMultiplayer()
     -- We don't have good settings to put here yet, so disable it all
     player.infoButtonUnregister( mpbtn )
 end
-t
+
 function startMultiplayerServer( hostport )
     local fail = mplayerserver.start( hostport )
     if fail then
