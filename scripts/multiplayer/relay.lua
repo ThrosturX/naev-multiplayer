@@ -10,7 +10,7 @@ local RELAY_MESSAGES = {}
 RELAY_MESSAGES.advertise = function ( peer, data )
     if data and #data >= 1 then
         if relay.peers[data] ~= nil then
-            print(fmt.f("Warning, replacing existing host for {syst} at {addr}", { syst = data[0], addr = peer }))
+            print(fmt.f("Warning: replacing existing host for {syst} at {addr}", { syst = data[0], addr = peer }))
         end
         relay.peers[data] = tostring(peer)
     end
@@ -25,14 +25,23 @@ RELAY_MESSAGES.deadvertise = function ( peer, data )
     end
 end
 
+local function broadcast ( key, data, reliability )
+    if not RELAY_MESSAGES.key then
+        print("error: " .. tostring(key) .. " not found in RELAY_MESSAGES.")
+        return nil
+    end
 
+    reliability = reliability or "unsequenced"
+    local message = fmt.f( "{key}\n{msgdata}\n", { key = key, msgdata = data } )
+    return relay.host:broadcast( message, 0, reliability )
+end
 
 -- Ctor for peer-to-peer relay
 relay.start = function( port )
     if not port then port = 0 end
     relay.host = enet.host_create( fmt.f( "*:{port}", { port = port } ) )
 
-    -- TODO: revise boilerplate requirements
+    -- TODO: revise boilerplate requirements (and add bootstrap peer?)
     relay.peers = {}
     relay.server = syst_server.create()
 
@@ -42,6 +51,7 @@ end
 
 -- opens the server for hosting
 relay.open = function ()
+    relay.hosting = true
     relay.server.start()
 
     local syst = system.cur():nameRaw()
@@ -50,6 +60,7 @@ relay.open = function ()
 end
 
 relay.close = function()
+    relay.hosting = nil
     relay.server.stop()
 
     local syst = system.cur():nameRaw()
@@ -113,22 +124,28 @@ relay.respond = function ( recipient, msg_type, msg_data )
     -- TODO HERE: appropriate response
     -- or, failing that, a generic error message
     -- send it to the recipient
+    print( fmt.f("WARNING: Not able to respond to message of type {mtype} from {mrec} containing {mdat}", { mtype = msg_type, mrec = recipient, mdat = msg_data }) )
 end
 
--- try to join the peer hosting <syst_name>
-relay.join = function ( syst_name )
-    return "ERR_NOT_IMPLEMENTED"
+-- try to find the peer hosting <syst_name>
+relay.find_peer = function ( syst_name )
+    -- 0. (optional) request up-to-date information
+
+    -- 1. find the peer that hosts syst_name
+    local host_peer = relay.peers[syst_name]
+    if host_peer ~= nil then
+        return host_peer
+    end
+
+    return nil
 end
 
 relay.advertise = function ( syst_name )
-    -- TODO MESSAGE HERE
-    local message = fmt.f( "{key}\n{msgdata}\n", { key = "advertise", msgdata = syst_name } )
-    relay.host:broadcast( message, 0, "unsequenced" )
+    return broadcast( "advertise", syst_name )
 end
 
 relay.deadvertise = function ( syst_name )
-    local message = fmt.f( "{key}\n{msgdata}\n", { key = "deadvertise", msgdata = syst_name } )
-    relay.host:broadcast( message, 0, "unsequenced" )
+    return broadcast( "deadvertise", syst_name )
 end
 
 return relay

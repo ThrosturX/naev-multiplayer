@@ -149,8 +149,43 @@ client.start_peer = function()
         return "NO_CLIENT_HOST"
     end
 
-    -- TODO: hook on "enter" to find a server and connect to it
+    -- hook on "enter" to find a server and connect to it
     client.ehook = hook.enter( "P2P_ENTER_SYSTEM" )
+end
+
+-- we should already be connected to this peer via the relay
+client.join = function( peer_host )
+    naev.keyEnable( "speed", false )
+    -- we're about to join a different peer, save the game state in case it fails and we need to revert
+    client.relay.server.refresh()
+
+    -- clear our local system of everything
+    pilot.clear()
+    -- disable NPC spawning
+    pilot.toggleSpawn(false)
+
+    -- set the host server
+    client.server = peer_host
+
+    if not client.server then
+        return "NO_CLIENT_SERVER"
+    end
+
+    -- request an update from our host peer
+    tryRegister( client.playerinfo.nick )
+    client.update( 4000 )
+
+    control_reestablish()
+
+    client.hook = hook.update("MULTIPLAYER_CLIENT_UPDATE")
+    client.inputhook = hook.input("MULTIPLAYER_CLIENT_INPUT")
+end
+
+client.disconnected = function ()
+    -- enable NPC spawning again
+    pilot.toggleSpawn(true)
+    -- TODO: Any other cleanup needed?
+    naev.keyEnable( "speed", true )
 end
 
 -- the logic we go through when entering a system
@@ -159,17 +194,27 @@ client.entered_system = function()
         print("ERROR: Calling p2p enter hook without a client relay!")
         return "ERROR_NO_CLIENT_RELAY"
     end
+
+    -- reconfigure the playerinfo for multiplayer
+    client.playerinfo = {
+        nick = player.name():gsub(' ', ''),
+        ship = player:pilot():ship():nameRaw(),
+        outfits = common.marshal_outfits(player.pilot():outfitsList())
+    }
     -- 1. try to find the owner of this system and connect
 
     print("WARNING: peer search not available, creating server...")
     local syst = system.cur():nameRaw()
-    local err = client.relay.join(syst)
-    if err == nil then
-        -- success
-        return nil
+    local peer = client.relay.find_peer( syst )
+    if peer ~= nil then
+        -- success, join it
+        local err = client.join( peer )
+        if err == nil then
+            return nil
+        end
+        print("DEBUG: <relay.join> " .. err)
     end
 
-    print("DEBUG: <relay.join> " .. err)
 
     -- 2. else start hosting and advertise ourselves
     client.relay.open()

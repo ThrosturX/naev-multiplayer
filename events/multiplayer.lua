@@ -16,7 +16,7 @@ local fmt           = require "format"
 local mplayerclient = require "multiplayer.client"
 local mplayerserver = require "multiplayer.server"
 local vn = require "vn"
--- luacheck: globals load startMultiplayerServer (Hook functions passed by name)
+-- luacheck: globals load startMultiplayerServer startP2pMultiplayer (Hook functions passed by name)
 
 local function pick_one ( ipair )
     return ipair[ rnd.rnd( 1, #ipair ) ]
@@ -31,6 +31,16 @@ end
 
 local mpbtn
 
+function startP2pMultiplayer()
+    local err = mplayerclient.start_peer()
+    if err then
+        print(err)
+        return
+    end
+    -- We don't have good settings to put here yet, so disable it all
+    player.infoButtonUnregister( mpbtn )
+end
+t
 function startMultiplayerServer( hostport )
     local fail = mplayerserver.start( hostport )
     if fail then
@@ -60,7 +70,7 @@ local function connectMultiplayer( hostname, hostport, localport )
     end
 
     if target then
-        fail = mplayerclient.start( hostname, hostport, localport )
+        local fail = mplayerclient.start( hostname, hostport, localport )
         if fail then
             print("ERROR: " .. fail )
         else
@@ -100,6 +110,7 @@ local function vnMultiplayer()
     local choices = {
         { _("Connect"), "connect_menu" },
         { _("Host Server"), "host" },
+        { _("World Sharing (P2P)"), "worldshare" },
     }
     if mem.multiplayer.last_server then
         table.insert( choices, { fmt.f( _("Reconnect to {nick}"), mem.multiplayer.last_server ), "reconnect" } )
@@ -166,6 +177,17 @@ local function vnMultiplayer()
             vn.jump( "host_port" )
         end )
     end
+
+    vn.label("worldshare")
+    vn.func( function()
+        if player.isLanded() then
+            player.takeoff()
+        end
+        print("START P2P")
+        hook.timer(1, "startP2pMultiplayer", system.cur())
+        vn.jump("enjoy")
+    end )
+    vn.done()
 
     vn.label("host")
     mpvn(
