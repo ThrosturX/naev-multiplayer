@@ -9,9 +9,11 @@ local default_relay = conf.relay_server or "localhost:60939"
 local RELAY_MESSAGES = {}
 
 -- <peer> advertises to be hosting <data>
+-- (optionally, <peer> advertises <data> hosted by <other_peer>)
 RELAY_MESSAGES.advertise = function ( peer, data )
     if data and #data >= 1 then
         if relay.peers[data] ~= nil then
+            -- TODO: Check here if data is <solar_system> and if it contains a <peer_addr>
             print(fmt.f("Warning: replacing existing host for {syst} at {addr}", { syst = data[0], addr = peer }))
         end
         relay.peers[data] = tostring(peer)
