@@ -1,9 +1,11 @@
 local common = require "multiplayer.common"
-local syst_server = require "multiplayer.syst_server"
+local conf = require "conf"
 local enet = require "enet"
 local fmt = require "format"
+local syst_server = require "multiplayer.syst_server"
 
 local relay = {}
+local default_relay = conf.relay_server or "localhost:60939"
 local RELAY_MESSAGES = {}
 
 -- <peer> advertises to be hosting <data>
