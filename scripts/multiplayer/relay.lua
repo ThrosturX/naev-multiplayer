@@ -1,16 +1,16 @@
 local common = require "multiplayer.common"
-local conf = require "conf"
 local enet = require "enet"
 local fmt = require "format"
 local syst_server = require "multiplayer.syst_server"
 
 local relay = {}
-local default_relay = conf.relay_server or "localhost:60939"
+local default_relay = "localhost:60939"
+local DEFAULT_PEER = "Multiplayer Hub"
 local RELAY_MESSAGES = {}
 
 -- <peer> advertises to be hosting <data>
 -- (optionally, <peer> advertises <data> hosted by <other_peer>)
-RELAY_MESSAGES.advertise = function ( peer, data )
+RELAY_MESSAGES["advertise"] = function ( peer, data )
     if data and #data >= 1 then
         if relay.peers[data] ~= nil then
             -- TODO: Check here if data is <solar_system> and if it contains a <peer_addr>
@@ -21,7 +21,7 @@ RELAY_MESSAGES.advertise = function ( peer, data )
 end
 
 -- <peer> announces end of service for <data>
-RELAY_MESSAGES.deadvertise = function ( peer, data )
+RELAY_MESSAGES["deadvertise"] = function ( peer, data )
     if data and #data >= 1 then
         if relay.peers[data] == tostring(peer) then
             relay.peers[data] = nil
@@ -30,7 +30,7 @@ RELAY_MESSAGES.deadvertise = function ( peer, data )
 end
 
 local function broadcast ( key, data, reliability )
-    if not RELAY_MESSAGES.key then
+    if RELAY_MESSAGES[key] == nil then
         print("error: " .. tostring(key) .. " not found in RELAY_MESSAGES.")
         return nil
     end
@@ -47,6 +47,7 @@ relay.start = function( port )
 
     -- TODO: revise boilerplate requirements (and add bootstrap peer?)
     relay.peers = {}
+    relay.peers[DEFAULT_PEER] = default_relay
     relay.server = syst_server.create()
 
     -- return self, since this is the "constructor"
@@ -63,7 +64,7 @@ relay.open = function ()
     relay.advertise( syst )
 end
 
-relay.close = function()
+relay.close = function ()
     relay.hosting = nil
     relay.server.stop()
 
@@ -134,6 +135,9 @@ end
 -- try to find the peer hosting <syst_name>
 relay.find_peer = function ( syst_name )
     -- 0. (optional) request up-to-date information
+    local root_relay = relay.host:connect( relay.peers[DEFAULT_PEER] )
+
+    -- TODO
 
     -- 1. find the peer that hosts syst_name
     local host_peer = relay.peers[syst_name]

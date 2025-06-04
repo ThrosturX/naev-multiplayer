@@ -406,6 +406,8 @@ server.create = function ( port )
     server.host = enet.host_create( fmt.f( "*:{port}", { port = port } ) )
     local message = "P2P host is running on: " .. server.host:get_socket_address()
     print( message )
+
+    return server
 end
 
 -- start a new listenserver
@@ -457,7 +459,11 @@ end
 local FPS = 60
 -- synchronize one player update after receiving
 server.synchronize_player = function( peer, player_info_str )
-  --print( player_info_str )
+    if peer == nil then
+        print("error: peer is nil")
+        return nil
+    end
+    print( player_info_str )
     local frames_passed = peer:round_trip_time() / (1000 / FPS)
     local ppinfo = common.unmarshal( player_info_str )
     local ppid = ppinfo.id
@@ -599,50 +605,48 @@ server.refresh = function()
 
     server.players[server.hostnick] = player.pilot()
     for ppid, pplt in pairs(server.players) do
-        if ppid ~= server.hostnick then
-            if pplt:exists() then
-                local accel = 0
-                local primary = 0
-                local secondary = 0
-                local target = server.hostnick
-                if server.playerinfo[ppid] then
-                   if server.playerinfo[ppid].accel then
-                      accel = server.playerinfo[ppid].accel
-                   end
-                   if server.playerinfo[ppid].primary then
-                      primary = server.playerinfo[ppid].primary
-                   end
-                   if server.playerinfo[ppid].secondary then
-                      secondary = server.playerinfo[ppid].secondary
-                   end
-                   if server.playerinfo[ppid].target then
-                       target = server.playerinfo[ppid].target
-                    end
+        if pplt:exists() then
+            local accel = 0
+            local primary = 0
+            local secondary = 0
+            local target = server.hostnick
+            if server.playerinfo[ppid] then
+               if server.playerinfo[ppid].accel then
+                  accel = server.playerinfo[ppid].accel
+               end
+               if server.playerinfo[ppid].primary then
+                  primary = server.playerinfo[ppid].primary
+               end
+               if server.playerinfo[ppid].secondary then
+                  secondary = server.playerinfo[ppid].secondary
+               end
+               if server.playerinfo[ppid].target then
+                   target = server.playerinfo[ppid].target
                 end
-                local armour, shield, stress = pplt:health()
-                local velx, vely = pplt:vel():get()
-                local posx, posy = pplt:pos():get()
-                world_state = world_state .. fmt.f("{id} {posx} {posy} {dir} {velx} {vely} {armour} {shield} {stress} {accel} {primary} {secondary} {target}\n", {
-                    id = ppid,
-                    posx = posx,
-                    posy = posy,
-                    dir = pplt:dir(),
-                    velx = velx,
-                    vely = vely,
-                    armour = armour,
-                    shield = shield,
-                    stress = stress,
-                    accel = accel,
-                    primary = primary,
-                    secondary = secondary,
-                    target = target,
-                })
-            else -- it died
-                print("INFO: Player is dead: " .. tostring(ppid) )
-                server.players[ppid]    = nil
-                server.npcs[ppid]       = nil
-                server.playerinfo[ppid] = nil
             end
+            local armour, shield, stress = pplt:health()
+            local velx, vely = pplt:vel():get()
+            local posx, posy = pplt:pos():get()
+            world_state = world_state .. fmt.f("{id} {posx} {posy} {dir} {velx} {vely} {armour} {shield} {stress} {accel} {primary} {secondary} {target}\n", {
+                id = ppid,
+                posx = posx,
+                posy = posy,
+                dir = pplt:dir(),
+                velx = velx,
+                vely = vely,
+                armour = armour,
+                shield = shield,
+                stress = stress,
+                accel = accel,
+                primary = primary,
+                secondary = secondary,
+                target = target,
+            })
+        else -- it died
+            print("INFO: Player is dead: " .. tostring(ppid) )
+            server.players[ppid]    = nil
+            server.npcs[ppid]       = nil
+            server.playerinfo[ppid] = nil
         end
     end
 
@@ -663,8 +667,6 @@ local max_context_frames = 0
 local this_context_frames = 1
 server.update = function ()
     player.autonavReset()
---    synchronize the server peer
-    server.synchronize_player ( common.marshal_me( player.name() ) )
     -- refresh our world state before updating clients
     server.refresh()
 

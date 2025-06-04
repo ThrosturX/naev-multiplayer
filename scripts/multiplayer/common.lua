@@ -2,7 +2,9 @@ local fmt = require "format"
 local ai_setup = require "ai.core.setup"
 
 function MULTIPLAYER_UNPAUSE ( inputname, inputpress, args )
-    naev.unpause()
+    if not player.isLanded() then
+        naev.unpause()
+    end
 end
 
 --  each line is <player_id> <pos> <dir> <vel> <armour> <shield> <stress>

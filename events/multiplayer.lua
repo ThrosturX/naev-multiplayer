@@ -41,7 +41,7 @@ function startP2pMultiplayer()
     player.infoButtonUnregister( mpbtn )
 
 
-    mem.multiplayer.p2phook = client.ehook
+    mem.multiplayer.p2phook = mplayerclient.ehook
     evt.save()
 end
 

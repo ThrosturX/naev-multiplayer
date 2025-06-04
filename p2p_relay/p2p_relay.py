@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class ServerRelay:
     def __init__(self, host: str = "0.0.0.0", port: int = 60939, max_peers: int = 100, timeout: float = 600.0):
         """
-        Initialize the Nauckyev multiplayer server relay (root node).
+        Initialize the Naev multiplayer server relay (root node).
         
         Args:
             host: IP address to bind the server (default: 0.0.0.0 for all interfaces)
