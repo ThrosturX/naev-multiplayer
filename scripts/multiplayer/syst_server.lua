@@ -427,7 +427,7 @@ server.start = function( port )
     server.npcs        = {}
     server.playerinfo  = {}
     -- register yourself
-    server.hostnick = player.name():gsub(' ', '_')
+    server.hostnick = _sanitize_name( player.name():gsub(' ', '_') )
     registerPlayer( server.hostnick, player:pilot():ship():nameRaw() , player:pilot():outfitsList() )
     -- update world state with yourself (weird)
     server.world_state = server.refresh()

@@ -137,6 +137,7 @@ relay.find_peer = function ( syst_name )
     -- 0. (optional) request up-to-date information
     local root_relay = relay.host:connect( relay.peers[DEFAULT_PEER] )
 
+    root_relay:send("Hello, world!")
     -- TODO
 
     -- 1. find the peer that hosts syst_name

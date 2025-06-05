@@ -177,6 +177,7 @@ client.join = function( peer_host )
 
     control_reestablish()
 
+    naev.keyEnable( "speed", false )
     client.hook = hook.update("MULTIPLAYER_CLIENT_UPDATE")
     client.inputhook = hook.input("MULTIPLAYER_CLIENT_INPUT")
 end
@@ -217,10 +218,14 @@ client.entered_system = function()
 
 
     -- 2. else start hosting and advertise ourselves
+    client.pilots = {}
     client.relay.open()
+    client.server = client.relay.host
 
     -- TODO do we need to connect to ourselves?
     -- let's decide later if we like listenserver pattern or not
+    client.hook = hook.update("MULTIPLAYER_CLIENT_UPDATE")
+    client.inputhook = hook.input("MULTIPLAYER_CLIENT_INPUT")
 end
 
 P2P_ENTER_SYSTEM = function() return client.entered_system() end
@@ -481,6 +486,12 @@ client.synchronize = function( world_state )
 end
 
 local function safe_send ( dat )
+    if client.relay and client.relay.hosting ~= nil then
+        -- TODO: Do the client/server side logic here
+        --print("DEBUG: safe_send as the server...\n")
+        --print(tostring(dat))
+        return nil
+    end
     if client.server:state() == "connected" then
         client.server:send( dat )
     else
@@ -760,8 +771,8 @@ end
 function MULTIPLAYER_CLIENT_INPUT ( inputname, inputpress, args )
     if MP_INPUT_HANDLERS[inputname] then
         MP_INPUT_HANDLERS[inputname]( inputpress, args )
---  else
---      print(fmt.f("no handler for input {input}", { input = inputname } ))
+    else
+        print(fmt.f("no handler for input {input}", { input = inputname } ))
     end
     if not TEMP_FREEZE then
         skipped_frames = 999
