@@ -587,7 +587,7 @@ server.start = function( port )
         player.teleport("Multiplayer Lobby")
         -- register yourself
         server.hostnick = player.name():gsub(' ', '')
-        -- registerPlayer( server.hostnick, player:pilot():ship():nameRaw() , player:pilot():outfitsList() )
+        registerPlayer( server.hostnick, player:pilot():ship():nameRaw() , player:pilot():outfitsList() )
         -- update world state with yourself (weird)
         server.world_state = server.refresh()
 
@@ -697,7 +697,7 @@ server.synchronize_player = function( peer, player_info_str )
             {
                 ppid = ppid,
                 energy = server.players[ppid]:energy(),
-                heat = server.players[ppid]:temp(),
+                heat = 0, -- server.players[ppid]:temp(), -- TODO: Defunct
                 armour = armour,
                 shield = shield,
                 stress = stress,
@@ -913,7 +913,7 @@ function MULTIPLAYER_CHILL_TIMER ()
     for _plid, mpplt in pairs(server.players) do
         if mpplt and mpplt:exists() then
             mpplt:fillAmmo()
-            mpplt:setTemp( 250, true )
+--          mpplt:setTemp( 250, true ) -- TODO deprecated
         end
     end
     local next_chill = rnd.rnd(30, 90)
@@ -1370,7 +1370,7 @@ function MULTIPLAYER_ROUND_TIMER ( round_type )
                 mpplt:setPos( random_spawn_point( 1000, 2000 ) )
             end
             mpplt:fillAmmo()
-            mpplt:setTemp( 0 )
+--          mpplt:setTemp( 0 )
             if server.npcs[plid] then
                 server.players[plid]:rm()
             else

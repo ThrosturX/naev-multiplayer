@@ -175,7 +175,7 @@ common.receivers[common.SYNC_PLAYER] = function ( client, message )
                     return
                 end
             sync_pilot:setEnergy(sync_player.stats[1])
-            sync_pilot:setTemp(sync_player.stats[2], false)
+--            sync_pilot:setTemp(sync_player.stats[2], false) -- TODO: Heat no longer exists
             sync_pilot:setHealth(sync_player.stats[3], sync_player.stats[4], sync_player.stats[5])
             sync_pilot:fillAmmo()
             ai_setup.setup( sync_pilot )

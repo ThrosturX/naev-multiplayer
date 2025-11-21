@@ -25,6 +25,7 @@ local client = {}
 
 local outfit_types = {
     ["Afterburner"] = "afterburner",
+    ["Unicorp Light Afterburner"] = "afterburner",
     ["Shield Modification"] = "shield_booster",
     ["Blink Drive"] = "blink_drive",
     ["Bioship Organ"] = "bite",
@@ -336,7 +337,7 @@ client.spawn = function( ppid, shiptype, shipname , outfits, ai )
             player.pilot():setPos(vec2.new(rnd.rnd(-9999, 9999), rnd.rnd(-9999, 9999)))
             player.pilot():setVel(vec2.new(0, 0))
             player.pilot():setHealth(100, 100, 100)
-            player.pilot():intrinsicSet("Detection", -8)
+--            player.pilot():intrinsicSet("Detection", -8) -- TODO: stat renamed
             control_override()
         else
             hard_resync = false
@@ -513,7 +514,7 @@ local function activate_outfits( )
                 print(fmt.f("{i}: {x}", {i = jj, x=pp} ))
             end
         end
-        local outf_class = outfit_types[tostring(oo.type)]
+        local outf_class = outfit_types[tostring(oo.outfit)]
         if oo.state ~= "off" then
             if tostring(oo.outfit) == 'Hyperbolic Blink Engine' then
                 outf_class = "blink_engine"
@@ -533,7 +534,7 @@ local function activate_outfits( )
                 deactilines = deactilines .. outf_class .. "\n"
             end
         else
-            print(fmt.f("{outf} of type {otype} doesn't have a known class yet", { outf = oo.outfit, otype=oo.type } ))
+            print(fmt.f("{outf} doesn't have a known class yet", { outf = oo.outfit } ))
         end
     end
     if activelines:len() > 0 then
@@ -658,7 +659,9 @@ end
 function reconnect()
     -- reset all pilots' hostility
     for ppid, pplt in pairs(client.pilots) do
-        pplt:setHostile(false)
+        if pplt:exists() then
+            pplt:setHostile(false)
+        end
     end
 
     client.server = client.host:connect( fmt.f("{addr}:{port}", { addr = client.conaddr, port = client.conport } ) )

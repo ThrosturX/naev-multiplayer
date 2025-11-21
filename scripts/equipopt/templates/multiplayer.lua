@@ -195,7 +195,7 @@ local mplayer_params_overwrite = {
         ["Disruptor Battery S2"] = 2.8,
         ["Heavy Laser Turret"] = 2.9,
 		["Large Shield Booster"] = 1.5,
-		[ "Shield Capacitor IV"] = 2, ["Biometal Armour"] = 2
+		["Shield Capacitor IV"] = 2, ["Biometal Armour"] = 2
    },
 
    -- not too much diversity, but some
@@ -230,7 +230,8 @@ local function equip_mplayer( p, opt_params )
 
    -- See cores
    local cores
-   local esccor = mplayer_cores[ sname ]
+-- local esccor = mplayer_cores[ sname ]
+   local escor = nil -- TODO (update changes)
    if esccor then
       cores = esccor( p )
    else
