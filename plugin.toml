@@ -1,0 +1,8 @@
+identifier = "multiplayer"
+name = "Sea of Multiplayers"
+author = "ThrosturX"
+version = "0.12.1"
+abstract = "Allows you to play multiplayer with OTHER PEOPLE ONLINE like a real boss."
+naev_version = ">= 0.13.0"
+source = { git = "https://github.com/ThrosturX/naev-multiplayer.git" }
+
