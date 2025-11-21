@@ -143,40 +143,44 @@ local mplayer_cores = {
          return c
       end,
 	["Kestrel"] = function () return {
-         choose_one{ "Unicorp PT-1750 Core System", "Milspec Orion 8601 Core System", "Milspec Thalos 9802 Core System", "Milspec Orion 9901 Core System" },
+         choose_one{ "Unicorp PT-550 Core System", "Milspec Orion 8601 Core System", "Milspec Thalos 8502 Core System", "Milspec Orion 8601 Core System" },
          choose_one{ "Nexus Bolt 3000 Engine", "Krain Remige Engine", "Tricon Typhoon Engine", },
-		 choose_one{ "Unicorp D-58 Heavy Plating", "S&K Heavy Combat Plating" },
+		 choose_one{ "Unicorp D-58 Heavy Plating", "S&K Battle Plating" },
 
       } end,
 	["Goddard"] = function () return {
-         choose_one{ "Milspec Thalos 9802 Core System", "Milspec Orion 9901 Core System" },
-         choose_one{ "Tricon Typhoon II Engine", "Melendez Mammoth XL Engine"},
-		 choose_one{ "S&K Superheavy Combat Plating", "S&K Heavy Combat Plating" },
+         choose_one{ "Milspec Thalos 8502 Core System", "Milspec Orion 8601 Core System" },
+         choose_one{ "Tricon Typhoon Engine", "Melendez Mammoth Engine"},
+		 choose_one{ "S&K War Plating", "S&K Battle Plating" },
       } end,
 	["Pirate Starbridge"] = function (p)
          local c = ecores.get( p, { systems=mplayer_class, hulls=mplayer_class } )
-         table.insert( c, choose_one{ "Unicorp Falcon 1400 Engine", "Krain Patagium Engine", "Tricon Cyclone Engine"} )
+         local engine = choose_one{ "Unicorp Falcon 700 Engine", "Krain Patagium Twin Engine", "Tricon Cyclone Engine"} 
+         table.insert( c, engine )
+         table.insert( c, engine )
          return c
       end,
    ["Starbridge"] = function (p)
          local c = ecores.get( p, { systems=mplayer_class, hulls=mplayer_class } )
-         table.insert( c, choose_one{ "Unicorp Falcon 1400 Engine", "Krain Patagium Engine", "Tricon Cyclone Engine"} )
+         local engine = choose_one{ "Unicorp Falcon 700 Engine", "Krain Patagium Twin Engine", "Tricon Cyclone Engine"} 
+         table.insert( c, engine )
+         table.insert( c, engine )
          return c
       end,
    ["Shark"] = function () return {
          choose_one{ "Milspec Orion 2301 Core System", "Milspec Thalos 2202 Core System" },
          "Tricon Zephyr Engine",
-         choose_one{ "Nexus Light Stealth Plating", "S&K Ultralight Combat Plating" },
+         choose_one{ "Nexus Shadow Weave", "S&K Skirmish Plating" },
       } end,
    ["Empire Shark"] = function () return {
          choose_one{ "Milspec Orion 2301 Core System", "Milspec Thalos 2202 Core System" },
          "Tricon Zephyr Engine",
-         choose_one{ "Nexus Light Stealth Plating", "S&K Ultralight Combat Plating" },
+         choose_one{ "Nexus Shadow Weave", "S&K Skirmish Plating" },
       } end,
    ["Mule"] = function() return {
-		 choose_one{ "Milspec Orion 5501 Core System", "Milspec Thalos 5402 Core System", "Unicorp PT-310 Core System" },
-		 "Melendez Buffalo XL Engine",
-		 choose_one{"S&K Medium Combat Plating", "Unicorp D-23 Medium Plating", "S&K Medium-Heavy Combat Plating", "Patchwork Medium Plating" },
+		 choose_one{ "Milspec Orion 4801 Core System", "Milspec Thalos 4702 Core System", "Unicorp PT-200 Core System" },
+		 "Melendez Buffalo Engine",
+		 choose_one{"S&K Battle Plating", "Unicorp D-23 Medium Plating", "S&K Battle Plating", "Patchwork Medium Plating" },
    } end,
 }
 
