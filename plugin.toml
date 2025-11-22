@@ -1,9 +1,13 @@
 identifier = "multiplayer"
 name = "Sea of Multiplayers"
 author = "ThrosturX"
+license = "AGPLv3"
 version = "0.12.9"
 abstract = "Allows you to play multiplayer with OTHER PEOPLE ONLINE like a real boss."
 description = "Play online with your friends in a battle arena. Don't forget to set `lua_enet = true` in your `conf.lua`, as networking features are disabled by default. One Naev instance needs to run as the server (e.g. in the background on one of the players' machines). A world-sharing (peer to peer) mode is coming soon™."
+tags = [ "combat", "multiplayer" ]
+release_status = "development"
+image_url = "https://github.com/ThrosturX/naev-multiplayer/blob/main/gfx/vn/characters/pers_mpauth.png?raw=true"
 naev_version = ">= 0.13.0"
 source = { git = "https://github.com/ThrosturX/naev-multiplayer.git" }
 
