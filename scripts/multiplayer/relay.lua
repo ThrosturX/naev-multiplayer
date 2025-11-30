@@ -4,7 +4,7 @@ local fmt = require "format"
 local syst_server = require "multiplayer.syst_server"
 
 local relay = {}
-local default_relay = "localhost:60939"
+local default_relay = "89.168.87.174:60939"
 local DEFAULT_PEER = "Multiplayer Hub"
 local RELAY_MESSAGES = {}
 
@@ -110,6 +110,7 @@ relay.process = function ( event )
     -- process it now
     if RELAY_MESSAGES.msg_type ~= nil then
         RELAY_MESSAGES.msg_type( event.peer, msg_data )
+        -- review note: did I forget to `return` here?
     end
 
     -- we're still here, keep processing
