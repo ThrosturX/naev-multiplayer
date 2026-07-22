@@ -52,7 +52,7 @@ end
 
 local function new_world ( player_name )
    local world={clock=0,pilots={},next_id=1,spawn=true,player_name=player_name,
-      speed_enabled=true,autonav_resets=0}
+      speed_enabled=true,autonav_resets=0,unpauses=0}
    local pilot_methods={}
    pilot_methods.__index=pilot_methods
    function pilot_methods:exists () return not self.removed end
@@ -78,22 +78,28 @@ local function new_world ( player_name )
    function pilot_methods:setHealth (a,s,t) self.armour=a; self.shield=s; self.stress=t end
    function pilot_methods:setEnergy (v) self.energy_value=v end
    function pilot_methods:setInvincible (v) self.invincible=v end
+   function pilot_methods:setNoDeath (v) self.no_death=v end
+   function pilot_methods:setHostile (v) self.hostile=v==nil or v end
+   function pilot_methods:rename (v) self.pilot_name=v end
+   function pilot_methods:fillAmmo () self.ammo_fills=(self.ammo_fills or 0)+1 end
    function pilot_methods:outfitAdd () end
    function pilot_methods:outfitToggle () end
-   function pilot_methods:memory () return {} end
+   function pilot_methods:memory () return self.pilot_memory end
    function pilot_methods:broadcast (text) self.last_chat=text end
 
    function world:add_pilot ( ship_name, faction_name, pilot_name, owned )
       local p=setmetatable({ship_name=ship_name,faction_name=faction_name,pilot_name=pilot_name,
          owned=owned,position=vector(),velocity=vector(),direction=0,armour=100,shield=100,
-         stress=0,energy_value=100,pilot_id=self.next_id},pilot_methods)
+         stress=0,energy_value=100,pilot_id=self.next_id,pilot_memory={}},pilot_methods)
       self.next_id=self.next_id+1; table.insert(self.pilots,p); return p
    end
-   world.local_pilot=world:add_pilot("Llama","Player","Local Ship",true)
+   world.local_pilot=world:add_pilot("Llama","Player",player_name,true)
 
    local env=setmetatable({}, {__index=_G})
-   env.naev={ticksGame=function() return world.clock end,cache=function() return {} end,
-      keyEnable=function(key,enabled) assert(key=="speed"); world.speed_enabled=enabled end}
+   world.cache={}
+   env.naev={ticksGame=function() return world.clock end,cache=function() return world.cache end,
+      keyEnable=function(key,enabled) assert(key=="speed"); world.speed_enabled=enabled end,
+      unpause=function() world.unpauses=world.unpauses+1 end}
    env.rnd={rnd=function(a) return a or 1 end}
    env.vec2={new=vector}
    env.player={name=function() return world.player_name end,pilot=function() return world.local_pilot end,
@@ -135,6 +141,10 @@ end
 local host=new_world("John")
 assert(host.session.start{enabled=true,node_id="10",listen_port=62001,directory="",bootstrap={},recent={}})
 assert(host.session.enter("Delta Polaris"))
+local discovery_deadline=host.session.machine.deadline
+assert(host.session.enter("Delta Polaris"))
+assert(host.session.machine.deadline==discovery_deadline and host.session.machine.state=="discovering",
+   "duplicate same-system entry restarted discovery")
 assert(not host.speed_enabled,"P2P system entry did not disable the speed key")
 advance({host},2,4)
 assert(host.autonav_resets>1,"P2P updates did not continually cancel autonav")
@@ -159,7 +169,41 @@ assert(host.player_name=="John" and guest.player_name=="John")
 assert(find(host,"John #2","P2P Players"),"host did not locally alias the guest")
 local host_proxy=find(guest,"John #2","P2P Players")
 assert(host_proxy,"guest did not locally alias the host")
+local guest_proxy=find(host,"John #2","P2P Players")
+assert(guest_proxy,"host did not retain the aliased guest proxy")
 assert(not find(host,"John","P2P Players") and not find(guest,"John","P2P Players"))
+assert(host_proxy.no_death and not host_proxy.invincible,
+   "remote player proxy cannot receive local projectile impacts")
+assert(not host_proxy.hostile,"remote player started hostile before taking hostile action")
+guest.session.input("primary",true)
+advance({host,guest},0.1,8)
+assert(guest_proxy:memory().p2p_primary and not guest_proxy.hostile,
+   "firing without targeting the local player incorrectly caused hostility")
+guest.session.input("primary",false)
+advance({host,guest},0.1,8)
+
+-- P2P captures local inputs itself. Desired controls must survive until the
+-- proxy AI consumes them, the remote proxy must target the local real player,
+-- and only the disposable proxy may have its health repaired.
+host.local_pilot:setTarget(guest_proxy)
+host.local_pilot:setEnergy(63)
+host.session.input("primary",true)
+assert(host.unpauses>0,"P2P input did not keep the space simulation unpaused")
+assert(guest_proxy.hostile,"firing at a neutral remote player did not make the target hostile")
+host_proxy:setHealth(12,7,3)
+advance({host,guest},0.1,8)
+assert(host_proxy:memory().p2p_primary,"primary fire input was not replicated")
+assert(host_proxy.target_pilot==guest.local_pilot,"replicated fire target is not the local player")
+assert(host_proxy.hostile,"firing proxy was not made locally damage-capable")
+assert(host_proxy.energy_value==63,"remote player energy was not replicated")
+assert(host_proxy.ammo_fills and host_proxy.ammo_fills>0,"remote proxy ammo was not maintained")
+assert(host_proxy.armour==100 and host_proxy.shield==100 and host_proxy.stress==0,
+   "disposable proxy health was not repaired")
+assert(guest.local_pilot.armour==100 and guest.local_pilot.shield==100,
+   "replicated player state wrote local-player health")
+host.session.input("primary",false)
+advance({host,guest},0.1,8)
+assert(not host_proxy:memory().p2p_primary,"primary fire release was not replicated")
 
 local npc_replica=find(guest,"Host NPC","Empire")
 assert(npc_replica,"guest did not receive host NPC")

@@ -17,7 +17,7 @@ local mplayerclient = require "multiplayer.client"
 local mplayerserver = require "multiplayer.server"
 local p2psession    = require "multiplayer.p2p.session"
 local vn = require "vn"
--- luacheck: globals load startMultiplayerServer P2P_SESSION_UPDATE P2P_SESSION_ENTER P2P_SESSION_LEAVE (Hook functions passed by name)
+-- luacheck: globals load startMultiplayerServer P2P_SESSION_UPDATE P2P_SESSION_INPUT P2P_SESSION_ENTER P2P_SESSION_LEAVE (Hook functions passed by name)
 
 local function pick_one ( ipair )
     return ipair[ rnd.rnd( 1, #ipair ) ]
@@ -47,6 +47,7 @@ local function p2p_start ()
     if not ok then print("P2P: " .. tostring(err)); return end
     p2p_hooks = {
         hook.update("P2P_SESSION_UPDATE"),
+        hook.input("P2P_SESSION_INPUT"),
         hook.enter("P2P_SESSION_ENTER"),
         hook.land("P2P_SESSION_LEAVE"),
         hook.takeoff("P2P_SESSION_ENTER"),
@@ -56,6 +57,9 @@ local function p2p_start ()
 end
 
 function P2P_SESSION_UPDATE () p2psession.update() end
+function P2P_SESSION_INPUT ( input_name, input_pressed )
+    p2psession.input(input_name, input_pressed)
+end
 function P2P_SESSION_ENTER () p2psession.enter(system.cur():nameRaw()) end
 function P2P_SESSION_LEAVE () p2psession.leave() end
 

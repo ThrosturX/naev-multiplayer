@@ -84,6 +84,13 @@ local function lock_autonav ( locked )
    end
 end
 
+local function clear_local_controls ()
+   local cache=naev.cache()
+   cache.accel=0
+   cache.primary=0
+   cache.secondary=0
+end
+
 local function endpoint_valid ( endpoint )
    return normalize_endpoint(endpoint)==endpoint
 end
@@ -141,8 +148,14 @@ local function base ( kind )
    return {type=kind,node=session.settings.node_id,system=session.machine.system}
 end
 
+local function local_player_name ()
+   local ok,name=pcall(function() return player.pilot():name() end)
+   if ok and type(name)=="string" and name~="" then return name end
+   return player.name()
+end
+
 local function hello ( peer )
-   send(peer,{type="hello",node=session.settings.node_id,cap="player",name=player.name()},true)
+   send(peer,{type="hello",node=session.settings.node_id,cap="player",name=local_player_name()},true)
    if session.machine.system then send(peer,base("query"),true) end
 end
 
@@ -171,17 +184,27 @@ end
 local function spawn_proxy ( message, display_name )
    if message.node == session.settings.node_id or session.players[message.entity] then return end
    if not pcall(function() ship.get(message.ship) end) then return end
-   local fac=faction.dynAdd(nil,"P2P Players","P2P Players",{ai="remote_control",clear_allies=true,clear_enemies=true})
+   local fac=faction.dynAdd(nil,"P2P Players","P2P Players",{ai="p2p_remote_control",clear_allies=true,clear_enemies=true})
+   local proxy_name=display_name or message.name
+   -- The identity registry normally resolves this before spawning. Keep the
+   -- invariant here too: a remote participant may never use the local
+   -- participant's unsuffixed display name.
+   if proxy_name==local_player_name() then proxy_name=proxy_name.." #2" end
    local ok,p=pcall(function()
       local position=(message.x and message.y) and vec2.new(message.x,message.y) or player.pilot():pos()
-      return pilot.add(message.ship,fac,position,display_name or message.name,{naked=true})
+      return pilot.add(message.ship,fac,position,proxy_name,{ai="p2p_remote_control",naked=true})
    end)
    if not ok or not p then return end
    for item in (message.outfits or ""):gmatch("([^,]+)") do
       local name=codec.unescape(item)
       if name and pcall(function() outfit.get(name) end) then pcall(function() p:outfitAdd(name,1,true) end) end
    end
-   pcall(function() p:setInvincible(true) end)
+   -- Invincible pilots are excluded from weapon collision in Naev. No-death
+   -- proxies can receive local impact effects while never becoming authority
+   -- for the remote player's real health.
+   pcall(function() p:setNoDeath(true) end)
+   pcall(function() p:setHealth(100,100,0) end)
+   pcall(function() if p:name()~=proxy_name then p:rename(proxy_name) end end)
    if message.vx and message.vy then p:setVel(vec2.new(message.vx,message.vy)) end
    if message.dir then p:setDir(message.dir) end
    ai_setup.setup(p)
@@ -222,7 +245,7 @@ local function local_state ( p )
    return {x=x,y=y,vx=vx,vy=vy,dir=p:dir(),accel=(cache.accel and cache.accel~=0) and 1 or 0,
       primary=(cache.primary and cache.primary~=0) and 1 or 0,
       secondary=(cache.secondary and cache.secondary~=0) and 1 or 0,
-      target=target_entity(target), active=active_names(p)}
+      target=target_entity(target), active=active_names(p),energy=p:energy()}
 end
 
 local function soft_motion ( p, state, poscap, velcap )
@@ -238,14 +261,26 @@ local function apply_player_state ( message )
    soft_motion(entry.pilot,message,80,40)
    local p=entry.pilot
    pcall(function()
-      pilot.taskClear(p)
-      if message.accel==1 then pilot.pushtask(p,"REMOTE_CONTROL_ACCEL",1) end
-      if message.primary==1 then pilot.pushtask(p,"REMOTE_CONTROL_SHOOT",false) end
-      if message.secondary==1 then pilot.pushtask(p,"REMOTE_CONTROL_SHOOT",true) end
-      p:setTarget(entity_pilot(message.target))
+      local target=entity_pilot(message.target)
+      p:setTarget(target)
+      local memory=p:memory()
+      memory.p2p_accel=message.accel==1 and 1 or 0
+      memory.p2p_primary=message.primary==1
+      memory.p2p_secondary=message.secondary==1
+      -- Match arena semantics: a participant becomes hostile locally only
+      -- after firing at this client's real player. It stays hostile until the
+      -- proxy is removed on system departure.
+      if target==player.pilot() and (memory.p2p_primary or memory.p2p_secondary) then
+         p:setHostile(true)
+      end
+      -- Repair only the disposable proxy. Never write health to player.pilot().
+      p:setHealth(100,100,0)
+      if message.energy then p:setEnergy(message.energy) end
+      -- Arena does this on every proxy sync. Replica ammo is otherwise an
+      -- unrelated local counter and eventually suppresses replicated fire.
+      p:fillAmmo()
       local desired={}
       for item in (message.active or ""):gmatch("([^,]+)") do local name=codec.unescape(item); if name then desired[name]=true end end
-      local memory=p:memory()
       entry.active=entry.active or {}
       for name in pairs(entry.active) do
          if not desired[name] and memory._o and memory._o[name] then p:outfitToggle(memory._o[name],false) end
@@ -501,7 +536,7 @@ end
 local function publish_player ( full )
    local p=player.pilot(); if not p or not session.machine.system then return end
    if full then
-      local msg=base("player_manifest"); msg.entity=session.settings.node_id; msg.ship=p:ship():nameRaw(); msg.name=player.name(); msg.outfits=outfit_names(p)
+      local msg=base("player_manifest"); msg.entity=session.settings.node_id; msg.ship=p:ship():nameRaw(); msg.name=local_player_name(); msg.outfits=outfit_names(p)
       msg.endpoint=session.endpoint
       local state=local_state(p); msg.x=state.x; msg.y=state.y; msg.vx=state.vx; msg.vy=state.vy; msg.dir=state.dir
       broadcast(msg,true)
@@ -562,11 +597,12 @@ end
 
 function session.start ( settings )
    if session.running then return true end
+   clear_local_controls()
    session.settings=session.defaults(settings)
    local ok,host=pcall(enet.host_create,"*:"..tostring(session.settings.listen_port))
    if not ok or not host then return nil,"unable to create P2P host" end
    session.host=host; session.running=true; session.machine=core.new(session.settings.node_id,now); session.machine:start()
-   session.identities=identity.new(session.settings.node_id,player.name())
+   session.identities=identity.new(session.settings.node_id,local_player_name())
    session.member_endpoints={}
    session.endpoint=tostring(host:get_socket_address())
    print("P2P: listener started")
@@ -578,6 +614,7 @@ function session.start ( settings )
 end
 
 function session.stop ()
+   clear_local_controls()
    if not session.running then lock_autonav(false); return end
    if session.machine.system then broadcast(base("leave"),true) end
    session.leave()
@@ -588,6 +625,13 @@ end
 
 function session.enter ( system_name )
    if not session.running then return nil,"not running" end
+   -- Naev can run both takeoff and enter hooks for one transition. Do not
+   -- restart discovery, discard peers, or rebuild the population when the
+   -- player is already in this system.
+   if session.machine.system==system_name then
+      lock_autonav(true)
+      return true
+   end
    session.leave(); session.machine:enter(system_name)
    lock_autonav(true)
    connect_configured(); session.last_seed_connect=now()
@@ -610,6 +654,31 @@ end
 function session.send_chat ( text )
    if not session.running or not session.machine.system or type(text)~="string" or text=="" then return nil end
    session.sequence=session.sequence+1; local msg=base("chat"); msg.seq=session.sequence; msg.text=text:sub(1,1024); broadcast(msg,true); return true
+end
+
+function session.input ( input_name, input_pressed )
+   if not session.running then return end
+   -- Arena multiplayer unpauses on every input event. P2P must keep pumping
+   -- networking and, for a host, the authoritative NPC simulation while a
+   -- menu is open too.
+   if session.machine and session.machine.system and not player.isLanded() then
+      naev.unpause()
+   end
+   local key
+   if input_name=="accel" then key="accel"
+   elseif input_name=="primary" then key="primary"
+   elseif input_name=="secondary" then key="secondary"
+   else return end
+   if input_pressed and (key=="primary" or key=="secondary") then
+      local target=player.pilot():target()
+      for _entity_id,entry in pairs(session.players) do
+         if entry.pilot==target then
+            target:setHostile(true)
+            break
+         end
+      end
+   end
+   naev.cache()[key]=input_pressed and 1 or 0
 end
 
 function session.update ()
