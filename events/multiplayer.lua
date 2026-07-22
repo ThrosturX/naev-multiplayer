@@ -15,8 +15,9 @@
 local fmt           = require "format"
 local mplayerclient = require "multiplayer.client"
 local mplayerserver = require "multiplayer.server"
+local p2psession    = require "multiplayer.p2p.session"
 local vn = require "vn"
--- luacheck: globals load startMultiplayerServer startP2pMultiplayer (Hook functions passed by name)
+-- luacheck: globals load startMultiplayerServer P2P_SESSION_UPDATE P2P_SESSION_ENTER P2P_SESSION_LEAVE (Hook functions passed by name)
 
 local function pick_one ( ipair )
     return ipair[ rnd.rnd( 1, #ipair ) ]
@@ -24,26 +25,39 @@ end
 
 function create ()
     mem.multiplayer = {
-        servers = {}
+        servers = {},
+        p2p = p2psession.defaults(),
     }
     hook.load("load")
 end
 
 local mpbtn
 
-function startP2pMultiplayer()
-    local err = mplayerclient.start_peer()
-    if err then
-        print(err)
-        return
-    end
-    -- We don't have good settings to put here yet, so disable it all
-    player.infoButtonUnregister( mpbtn )
+local p2p_hooks = {}
 
-
-    mem.multiplayer.p2phook = mplayerclient.ehook
-    evt.save()
+local function p2p_stop ()
+    p2psession.stop()
+    for _index, h in ipairs(p2p_hooks) do hook.rm(h) end
+    p2p_hooks = {}
 end
+
+local function p2p_start ()
+    p2p_stop()
+    local ok, err = p2psession.start(mem.multiplayer.p2p)
+    if not ok then print("P2P: " .. tostring(err)); return end
+    p2p_hooks = {
+        hook.update("P2P_SESSION_UPDATE"),
+        hook.enter("P2P_SESSION_ENTER"),
+        hook.land("P2P_SESSION_LEAVE"),
+        hook.takeoff("P2P_SESSION_ENTER"),
+        hook.jumpout("P2P_SESSION_LEAVE"),
+    }
+    if not player.isLanded() then p2psession.enter(system.cur():nameRaw()) end
+end
+
+function P2P_SESSION_UPDATE () p2psession.update() end
+function P2P_SESSION_ENTER () p2psession.enter(system.cur():nameRaw()) end
+function P2P_SESSION_LEAVE () p2psession.leave() end
 
 function startMultiplayerServer( hostport )
     local fail = mplayerserver.start( hostport )
@@ -114,7 +128,7 @@ local function vnMultiplayer()
     local choices = {
         { _("Connect"), "connect_menu" },
         { _("Host Server"), "host" },
-        { _("World Sharing (P2P)"), "worldshare" },
+        { _("P2P Session Settings"), "p2p_settings" },
     }
     if mem.multiplayer.last_server then
         table.insert( choices, { fmt.f( _("Reconnect to {nick}"), mem.multiplayer.last_server ), "reconnect" } )
@@ -182,16 +196,83 @@ local function vnMultiplayer()
         end )
     end
 
-    vn.label("worldshare")
-    vn.func( function()
-        if player.isLanded() then
-            player.takeoff()
+    vn.label("p2p_settings")
+    mpvn(_("P2P play leaves ordinary Naev gameplay enabled. Guests use the host's system population, so disable P2P before entering a system where your own mission pilots matter."))
+    vn.menu({
+        { mem.multiplayer.p2p.enabled and _("Disable P2P") or _("Enable P2P"), "p2p_toggle" },
+        { fmt.f(_("Listen port: {port}"), {port=mem.multiplayer.p2p.listen_port}), "p2p_port" },
+        { fmt.f(_("Directory: {address}"), {address=mem.multiplayer.p2p.directory}), "p2p_directory" },
+        { _("Add bootstrap peer"), "p2p_add_peer" },
+        { _("Remove bootstrap peer"), "p2p_remove_peer" },
+        { _("Back"), "end" },
+    })
+
+    vn.label("p2p_toggle")
+    vn.func(function()
+        mem.multiplayer.p2p.enabled = not mem.multiplayer.p2p.enabled
+        if mem.multiplayer.p2p.enabled then p2p_start() else p2p_stop() end
+        evt.save()
+    end)
+    vn.jump("end")
+
+    vn.label("p2p_port")
+    vn.func(function()
+        local value=tk.input(_("P2P Listen Port"),1,5,tostring(mem.multiplayer.p2p.listen_port))
+        local port=tonumber(value)
+        if port and port>=0 and port<=65535 then
+            mem.multiplayer.p2p.listen_port=math.floor(port)
+            if mem.multiplayer.p2p.enabled then p2p_start() end
+            evt.save()
         end
-        print("START P2P")
-        hook.timer(1, "startP2pMultiplayer", system.cur())
-        vn.jump("enjoy")
-    end )
-    vn.done()
+    end)
+    vn.jump("end")
+
+    vn.label("p2p_directory")
+    vn.func(function()
+        local value=tk.input(_("Directory Address"),0,255,
+            _("Address and port, separated by a space (default: 79.76.110.205 60939):"))
+        if value~=nil then
+            local endpoint=p2psession.normalize_endpoint(value)
+            if endpoint then
+                mem.multiplayer.p2p.directory=endpoint
+                if mem.multiplayer.p2p.enabled then p2p_start() end
+                evt.save()
+            else
+                print("P2P: directory must be entered as address port")
+            end
+        end
+    end)
+    vn.jump("end")
+
+    vn.label("p2p_add_peer")
+    vn.func(function()
+        local value=tk.input(_("Bootstrap Peer"),3,255,
+            _("Address and port, separated by a space (example: 127.0.0.1 62001):"))
+        local endpoint=p2psession.normalize_endpoint(value)
+        if endpoint and endpoint~="" then
+            table.insert(mem.multiplayer.p2p.bootstrap,endpoint)
+            if mem.multiplayer.p2p.enabled then p2p_start() end
+            evt.save()
+        elseif value~=nil then
+            print("P2P: bootstrap peer must be entered as address port")
+        end
+    end)
+    vn.jump("end")
+
+    vn.label("p2p_remove_peer")
+    vn.func(function()
+        local value=tk.input(_("Remove Bootstrap Peer"),3,255,
+            _("Address and port, separated by a space (example: 127.0.0.1 62001):"))
+        local endpoint=p2psession.normalize_endpoint(value)
+        if endpoint and endpoint~="" then
+            for i=#mem.multiplayer.p2p.bootstrap,1,-1 do
+                if mem.multiplayer.p2p.bootstrap[i]==endpoint then table.remove(mem.multiplayer.p2p.bootstrap,i) end
+            end
+            if mem.multiplayer.p2p.enabled then p2p_start() end
+            evt.save()
+        end
+    end)
+    vn.jump("end")
 
     vn.label("host")
     mpvn(
@@ -284,14 +365,13 @@ end
 function load()
     if not mem.multiplayer then
         mem.multiplayer = {
-            servers = {}
+            servers = {},
         }
     end
+    mem.multiplayer.p2p = p2psession.defaults(mem.multiplayer.p2p)
+    evt.save()
     mpbtn = player.infoButtonRegister( _("Multiplayer"), vnMultiplayer, 3 )
   --serverbtn = player.infoButtonRegister( _("Start MP Server"), startMultiplayerServer, 3 )
   --clientbtn = player.infoButtonRegister( _("Connect Multiplayer"), connectMultiplayer, 3 )
-  local p2phook = mem.multiplayer.p2phook
-  if p2phook ~= nil then
-      hook.rm(p2phook)
-  end
+    if mem.multiplayer.p2p.enabled then p2p_start() end
 end

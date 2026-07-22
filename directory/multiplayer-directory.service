@@ -1,0 +1,19 @@
+[Unit]
+Description=Naev MP2P directory
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/naev-multiplayer
+ExecStart=/usr/bin/lua5.1 directory/main.lua *:60939
+Restart=on-failure
+RestartSec=2
+DynamicUser=true
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

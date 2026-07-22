@@ -1,151 +1,111 @@
 # Naev Multiplayer Plugin
 
-This plugin provides the necessary files to manage multiplayer in Naev. It requires the `lua_enet` configuration parameter to be set to true.
+Experimental multiplayer for Naev, with two independent modes:
 
-![A cartoon-like image of a character with colored 3D glasses](gfx/vn/characters/pers_mpauth.png?raw=true "The Original Multiplayer")
+- The existing arena client/server mode.
+- An opt-in P2P session that shares ordinary star systems without replacing
+  the player's ship, save, missions, landing, jumping, or loadout.
 
-The plugin is fairly experimental and as such no backwards compatibility is guaranteed. It is recommended to play on the latest version of Naev (if compatible) and latest version of the plugin for all parties involved.
+Naev must be built with `lua_enet`; set `lua_enet = true` in `conf.lua`.
 
-There are many features that haven't been implemented yet, and some that might just get brushed over. I like to stick to the principles that get us all the most amount of fun with the least amount of headaches, so let's make it fun and easy and we'll take it from there.
+## P2P setup
 
-### Some things to note:
+Open **Info → Multiplayer → P2P Session Settings**. Enable P2P and configure:
 
-- Expect some desync, but the server is authoritative 
-    - If you shoot on your client but there's nothing to shoot at, you don't lose energy because the server doesn't let you shoot
-    - Missiles won't be in sync at all, but they are "predictably" out of sync, so it is a masterable skill
-    - Beams are so out of sync that I removed them from `equipopts`, it's not even funny
-    - If you enter a blocking state such as a menu or the chat, you will risk being disconnected by timeout
-- When you die, the server should respawn you in a new ship, but sometimes you might need to reload a save and reconnect
-    - If you "respawn" in the same ship, you probably just ate a missile on your client that the server said was a miss, just keep playing
-- You can't configure weapons on the client, it doesn't do anything at all other than mess up what you see
-- You can use afterburners and shield boosters (perhaps other modules too) and the effects will be synchronized between clients
-- Autonav works 
-    - It should synchronize less often to save bandwidth on idling clients
-    - Speedup does not work (and even if it did, the server would probably start teleporting you around or ask you to respawn)
+- **Listen port**: `0` selects an ephemeral port. Use a fixed, forwarded UDP
+  port when peers must connect from another network.
+- **Directory**: defaults to `79.76.110.205:60939`. Its absence is silent and does
+  not stop direct discovery. This is also an ordinary initial peer address: a
+  player listening there is contacted exactly like a bootstrap peer.
+- **Bootstrap peers**: manually maintained reachable endpoints. In Naev's text
+  input, enter the address and port separated by a space, such as
+  `127.0.0.1 62001`; the plugin stores the canonical `address:port` form.
 
-### The chat
+Peers remember up to 32 recently seen endpoints. On entering a system they ask
+connected, configured, and remembered peers for the current host. If no host is
+verified in 1.5 seconds, the lowest-ID claimant becomes host. This is direct
+UDP connectivity only: there is no NAT traversal or traffic relay.
 
-There is a basic chat feature. You press your hail button and a text window pops up. Type a short message fast before you are disconnected.
+The host owns the system's NPC population. A guest removes its local ambient
+and mission NPCs and recreates the host's population; disable P2P before
+entering a system where your own mission state must control its pilots. Remote
+players use their real ship and outfits as invincible local proxies. Damage to
+your actual player remains entirely local, so god mode and other local behavior
+are neither synchronized nor checked.
 
-Once you have sent your message, you will be resynchronized to where the server says you should be and can continue playing.
-Everyone will see your message if you are connected, you can confirm you are connected if your message appears in your message log.
+Player-owned escorts, fleet craft, followers, and deployed craft remain owned
+by their player. The system host relays their owner-authoritative state and
+does not adopt them as ambient NPCs when the owner leaves.
 
-This is mainly meant for short messages such as "go" or "attack goddard", but can be used for other things as well. Please be civil.
+Autonav and the speed key are disabled while participating in a shared system
+to prevent local game-speed changes from desynchronizing peers. Normal controls
+are restored on system leave or when P2P is disabled.
 
-Question marks don't work, use something else instead. Perhaps your peers can decide on something like "ma" (a homage to Firefly, "ma" (嗎) is the Chinese equivalent of a question mark).
+The wire protocol is `MP2P/1`. Incompatible peers are ignored without changing
+ordinary play. A directory-only node answers host queries but cannot claim or
+join systems.
 
-## Configuration
+Player names travel unchanged on the wire. When a remote player has the same
+name as the local player (or another visible remote), only that remote proxy is
+given a local display suffix such as `#2`; a player's own name is never changed.
 
-In order to use the plugin, the lua\_enet [configuration parameter](https://github.com/naev/naev/wiki/FAQ#where-is-conflua-stored) must be set to true.
-Insert the following line at the very end of your `conf.lua`: `lua_enet = true`
+## Directory service
 
-### Server configuration
+`directory/main.lua` is a minimal standalone directory using the same ENet
+transport and `MP2P/1` codec as players. It stores no accounts or gameplay
+data. Active hosts refresh their claim every 10 seconds. Claims remain active
+for the directory connection's lifetime; disconnected claims are retained as
+bounded stale hints until superseded or evicted. Clients retry configured
+directory/bootstrap connections every five seconds, and hosts immediately
+re-announce after reconnecting. A stale hint never prevents the normal local
+claim fallback when its old host cannot be reached.
 
-By default, you are free to use whatever port you like, but if you allow the original multiplayer to pick a port for you then you should start hosting on an ephemeral port.
-You will probably have to forward the server port in your router setting if you do not host on an ephemeral port.
+It requires Lua 5.1, ENet, and the `lua-enet` binding. On Ubuntu or Debian:
 
-If you decide to use port 0, a port will be selected for you as if by the original multiplayer. You will need to find out what ephemeral port was selected automatically with a tool of your choice, but you should be able to host a server without port forwarding in this case.
+```sh
+sudo apt update
+sudo apt install lua5.1 liblua5.1-0-dev libenet-dev luarocks build-essential
+sudo luarocks --lua-version=5.1 install enet
+lua5.1 directory/main.lua '*:60939'
+```
 
-## Starting a server
+For an always-on installation, copy the repository to
+`/opt/naev-multiplayer`, install `directory/multiplayer-directory.service` in
+`/etc/systemd/system`, then run:
 
-1. Start a new pilot or log into an existing pilot for this purpose (a server can't play and the nickname will be reserved so it is a good idea to pick a name like "Server" or "Host").
-    - If you started a new pilot, you should do a save-load cycle to activate the multiplayer event
-2. Click on the "Multiplayer" button
-3. Click on the "Host Server" option in the conversation
-4. You have a choice of selecting a custom port or picking one at random
-    - You should try to use the same port consistently if you plan on hosting a server
-    - You might need to forward the port that you choose
-    - If you let the original multiplayer select the port for you, you can use a tool to find your port if you lose the message
-5. Close everything and take off
-6. Leave the server alone, as the simulation must run for the networking code to execute
-    - The server cannot be seen by players -- please don't abuse this as the server is not meant to play but can be used to spectate
-    - The server will announce the socket host (including the port, if you tried to get one automatically) in the game console, message log, and as an `omsg`
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now multiplayer-directory
+sudo systemctl status multiplayer-directory
+```
 
-### Finding your port
+Allow inbound UDP port `60939` in both the VM's OS firewall and its cloud
+network/security-list firewall. Players enter the public address in Naev using
+the space-separated UI form, for example `directory.example.org 60939`.
+The service supplies discovery only: peers still need direct UDP reachability,
+and gameplay traffic is never relayed through the directory.
 
-Simply run the following command in a system terminal immediately after starting a server:
+See `directory/OCI.md` for an exact Oracle Cloud Always Free deployment and
+verification walkthrough.
 
-    ss -tulpn | grep naev
+## Arena mode
 
-The output will look something like this:
+Arena **Connect** and **Host Server** retain the original client/server flow.
+The arena server is authoritative and uses its existing lobby and arena assets.
+P2P code is isolated under `scripts/multiplayer/p2p/` and is not loaded by the
+arena client or server.
 
-    udp   UNCONN 0      0            0.0.0.0:60939      0.0.0.0:*    users:(("naev",pid=25833,fd=37))
+## Validation
 
-This means that you are serving on port 60939. The next time you host a server, you can probably use that same port again. It is a good idea to make note of it, as your friends will have saved your server with this associated port after playing on your server.
+Run the standalone protocol and reconciliation tests:
 
-## Connecting to a server
+```sh
+lua tests/test_p2p.lua
+lua tests/test_p2p_directory.lua
+lua tests/test_p2p_integration.lua
+lua5.1 tests/test_p2p_directory_enet.lua # when lua-enet is installed
+```
 
-1. Load a pilot with a suitable nickname (for obvious reasons, it's suggested to avoid using real world names on public servers, but special characters and numbers should be avoided as well).
-2. Open the Info menu
-3. Click on the "Multiplayer" button
-4. Click on the "Connect" option in the conversation
-5. Select "Add Server" to add a new server or select a recent server from the list
-    - If you're adding a new server, you will have to first type a nickname (the label shown in the connect list) and then the host information (such as `localhost 1337` or `127.0.0.1 48888`)
-6. Take off after the conversation has ended
-    - Saving will now be disabled until you load again
-    - If the connection is successful, the server will respawn you in a new ship
-    - If there is an error, your ship will broadcast the error message
-        - If the error is: nickname is reserved then you should come back later or join with another pilot (you're not playing on a live server anymore)
-    - If you die on the server, the client tries to keep you alive so that you can respawn without reloading your save game
-    - If you die on the client, you might still be alive on the server (for example if you dodged a missile by server law, but you thought it hit you on your client), just keep playing
-    - If you die on the server and the client, just load a save and connect to the server again
-
-## Tips and Tricks
-
-### Adding a favorite server as a single-click button
-
-If you have a favorite server (such as one hosted regularly by one of your friends), you might want to avoid the conversation with the original multiplayer every time you want to play. An easy way to get around that is to just create a new event like the one below, modified accordingly:
-- Change the label on the connect button to something like "Connect to Favoured"
-- Replace the placeholder values with your hard-coded values
-- Change things like the name of the new event and any comments or labels you might want to personalize
-
-If successful, it might look something like this:
-
-    --[[
-    <?xml version='1.0' encoding='utf8'?>
-    <event name="Multiplayer Handler - My favorite server">
-     <location>load</location>
-     <chance>100</chance>
-     <unique />
-    </event>
-    --]]
-    --[[
-       Multiplayer Event for my favorite server
-
-       This event makes sure I can connect to my favorite server
-    --]]
-    local fmt           = require "format"
-    local mplayerclient = require "multiplayer.client"
-    -- luacheck: globals load (Hook functions passed by name)
-
-    function create ()
-        hook.load("load")
-    end
-
-    local clientbtn
-
-    local function connectMultiplayer()
-        local hostname = "192.168.1.254" -- note: not a real server
-        local hostport = "6789"
-        local localport = "0"
-
-        local target = fmt.f( "{host}:{port}", { host = hostname, port = hostport } )
-
-        fail = mplayerclient.start( hostname, hostport, localport )
-        if fail then
-            print("ERROR: " .. fail )
-        else
-            player.infoButtonUnregister( clientbtn )
-        end
-    end
-
-    function load()
-        clientbtn = player.infoButtonRegister( _("Connect to Favorite Server"), connectMultiplayer, 3)
-    end
-
-If this was successful, you can now connect to your favorite server with the click of a button, in this case "Connect to Favorite Server" from the Info menu.
-
-#### Removing the "Multiplayer" Button
-
-If you only plan on playing on your button-click server as above, you might as well remove the regular "Multiplayer" button from your info menu. In this case, you can just remove the "dat/multiplayer.lua" event, since it is nothing more than a handy interface to connect and manage servers.
-
+Syntax checks and mocked tests do not establish engine networking behavior.
+Use separate Naev processes for host/client acceptance testing; see
+`MAINTAINERS.md`.

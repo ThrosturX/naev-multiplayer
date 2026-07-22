@@ -1,7 +1,6 @@
--- luacheck: globals P2P_ENTER_SYSTEM MULTIPLAYER_CLIENT_UPDATE MULTIPLAYER_CLIENT_INPUT enterMultiplayer reconnect control_reestablish (Hook functions passed by name)
+-- luacheck: globals MULTIPLAYER_CLIENT_UPDATE MULTIPLAYER_CLIENT_INPUT enterMultiplayer reconnect control_reestablish (Hook functions passed by name)
 
 local common = require "multiplayer.common"
-local p2p_relay = require "multiplayer.relay"
 local enet = require "enet"
 local fmt = require "format"
 local ai_setup = require "ai.core.setup"
@@ -17,7 +16,6 @@ local client = {}
       client.pilots = { playerid = pilot, ... }
 
       client.start()      -- DEATHMATCH MODE
-      client.start_peer() -- UNIVERSE SHARE MODE
       client.synchronize( world_state )
       client.update()
 --]]
@@ -79,10 +77,6 @@ end
 -- spawning for the sake of consistency
 local was_connected = nil
 client.start = function( bindaddr, bindport, localport )
-    if client.relay ~= nil then
-        return "CLIENT_CONFIGURED_FOR_PEERPLAY"
-    end
-
     if not localport then localport = rnd.rnd(1234,6788) end
     if not player.isLanded() and not was_connected then
         return "PLAYER_NOT_LANDED"
@@ -131,105 +125,6 @@ client.start = function( bindaddr, bindport, localport )
 
     was_connected = true
 end
-
--- like client.start, but instead of entering the multiplayer lobby,
--- it tries to connect to other peers
-client.start_peer = function()
-    -- store potential peers in the relay
-    -- peer play clients have to be able to host
-    -- the relay object handles peer-to-peer communication
-    -- until a server is established,
-    -- at which point one of the peers acts as the server
-    client.relay = p2p_relay.start() -- start takes argument port choice
-    if not client.relay then
-        return "NO_CLIENT_RELAY"
-    end
-
-    client.host = enet.host_create("*:0") -- use ephemeral for client
-    if not client.host then
-        return "NO_CLIENT_HOST"
-    end
-
-    -- hook on "enter" to find a server and connect to it
-    client.ehook = hook.enter( "P2P_ENTER_SYSTEM" )
-end
-
--- we should already be connected to this peer via the relay
-client.join = function( peer_host )
-    naev.keyEnable( "speed", false )
-    -- we're about to join a different peer, save the game state in case it fails and we need to revert
-    client.relay.server.refresh()
-
-    -- clear our local system of everything
-    pilot.clear()
-    -- disable NPC spawning
-    pilot.toggleSpawn(false)
-
-    -- set the host server
-    client.server = peer_host
-
-    if not client.server then
-        return "NO_CLIENT_SERVER"
-    end
-
-    -- request an update from our host peer
-    tryRegister( client.playerinfo.nick )
-    client.update( 4000 )
-
-    control_reestablish()
-
-    naev.keyEnable( "speed", false )
-    client.hook = hook.update("MULTIPLAYER_CLIENT_UPDATE")
-    client.inputhook = hook.input("MULTIPLAYER_CLIENT_INPUT")
-end
-
-client.disconnected = function ()
-    -- enable NPC spawning again
-    pilot.toggleSpawn(true)
-    -- TODO: Any other cleanup needed?
-    naev.keyEnable( "speed", true )
-end
-
--- the logic we go through when entering a system
-client.entered_system = function()
-    if client.relay == nil then
-        print("ERROR: Calling p2p enter hook without a client relay!")
-        return "ERROR_NO_CLIENT_RELAY"
-    end
-
-    -- reconfigure the playerinfo for multiplayer
-    client.playerinfo = {
-        nick = player.name():gsub(' ', ''),
-        ship = player:pilot():ship():nameRaw(),
-        outfits = common.marshal_outfits(player.pilot():outfitsList())
-    }
-    -- 1. try to find the owner of this system and connect
-
-    print("WARNING: peer search not available, creating server...")
-    local syst = system.cur():nameRaw()
-    local peer = client.relay.find_peer( syst )
-    if peer ~= nil then
-        -- success, join it
-        local err = client.join( peer )
-        if err == nil then
-            return nil
-        end
-        print("DEBUG: <relay.join> " .. err)
-    end
-
-
-    -- 2. else start hosting and advertise ourselves
-    client.pilots = {}
-    client.relay.open()
-    client.server = client.relay.host
-
-    -- TODO do we need to connect to ourselves?
-    -- let's decide later if we like listenserver pattern or not
-    client.hook = hook.update("MULTIPLAYER_CLIENT_UPDATE")
-    client.inputhook = hook.input("MULTIPLAYER_CLIENT_INPUT")
-end
-
-P2P_ENTER_SYSTEM = function() return client.entered_system() end
 
 
 local omsgid
@@ -487,12 +382,6 @@ client.synchronize = function( world_state )
 end
 
 local function safe_send ( dat )
-    if client.relay and client.relay.hosting ~= nil then
-        -- TODO: Do the client/server side logic here
-        --print("DEBUG: safe_send as the server...\n")
-        --print(tostring(dat))
-        return nil
-    end
     if client.server:state() == "connected" then
         client.server:send( dat )
     else
@@ -612,10 +501,7 @@ client.update = function( timeout )
             receiveMessage( event.data )
         elseif event.type == "connect" then
             print(event.peer, " connected.")
-            if client.relay == nil then
-                -- this is not a p2p session, spawn in a random place and let the server fix it
-                player.pilot():setPos( vec2.new( rnd.rnd(-3000, 3000), rnd.rnd(-2000, 2000) ) )
-            end
+            player.pilot():setPos( vec2.new( rnd.rnd(-3000, 3000), rnd.rnd(-2000, 2000) ) )
             -- register with the server
             tryRegister( client.playerinfo.nick )
             client.alive = false
@@ -623,18 +509,8 @@ client.update = function( timeout )
             print(event.peer, " disconnected.")
             common.receivers[common.PLAY_SOUND]( client, { "snd/sounds/jingles/eerie.ogg" } )
             player.damageSPFX(1.0)
-            if client.relay ~= nil then
-                -- TODO:
-                -- 1. save the current state into the client.server host_object
-                -- 2. try to reconnect to the last server
-                -- 3. else try to find a new server
-                -- 4. else start hosting and advertise ourselves
-
-            else
-                -- try to reconnect to the deathmatch arena
-                hook.rm(client.hook)
-                hook.timer(3, "reconnect")
-            end
+            hook.rm(client.hook)
+            hook.timer(3, "reconnect")
             client.alive = nil
             return -- deal with the rest later
         else
@@ -766,9 +642,6 @@ MP_INPUT_HANDLERS.weapset9 = activate_outfits
 MP_INPUT_HANDLERS.weapset0 = activate_outfits
 
 MULTIPLAYER_CLIENT_UPDATE = function()
-    if client.relay ~= nil then
-        client.relay.update()
-    end
     return client.update()
 end
 function MULTIPLAYER_CLIENT_INPUT ( inputname, inputpress, args )
