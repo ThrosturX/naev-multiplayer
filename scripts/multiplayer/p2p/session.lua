@@ -30,6 +30,10 @@ local session = {
 -- peers discovering for 25 minutes and delays manifests for hours.
 local function now () return naev.ticksGame() end
 
+local function locally_claimed ()
+   return not naev.claimTest(system.cur())
+end
+
 local function random_id ()
    local parts={}
    for _i=1,4 do parts[#parts+1]=string.format("%08x",rnd.rnd(0,0x7fffffff)) end
@@ -955,9 +959,11 @@ local function handle_host_loss ()
 end
 
 local function host_hint ( peer )
-   local hint=session.machine.topology:hint(session.machine.system)
+   local hint
    if session.machine.state=="host" then
       hint={host=session.settings.node_id,endpoint=session.endpoint,claim=session.machine.claim,expires=now()+60}
+   elseif not session.locally_claimed then
+      hint=session.machine.topology:hint(session.machine.system)
    end
    if hint then
       send(peer,{type="hint",node=session.settings.node_id,system=session.machine.system,host=hint.host,
@@ -1023,6 +1029,7 @@ local function on_message ( peer, message )
    end
    if message.type=="query" then host_hint(peer); return end
    if message.type=="hint" then
+      if session.locally_claimed then return end
       if message.host==session.settings.node_id then return end
       if meta.node==message.host and endpoint_valid(session.peers[peer]) then message.endpoint=session.peers[peer] end
       local expires=now()+message.ttl
@@ -1047,6 +1054,7 @@ local function on_message ( peer, message )
    local relayed=(session.machine.state~="host" and meta.node==session.machine.host)
    local owner_ok=(meta.node==message.node or relayed)
    if message.type=="claim" then
+      if session.locally_claimed then return end
       if not owner_ok then return end
       if meta.node==message.node and endpoint_valid(session.peers[peer]) then message.endpoint=session.peers[peer] end
       local old_state,old_host=session.machine.state,session.machine.host
@@ -1104,7 +1112,7 @@ local function on_message ( peer, message )
             session.sequence=session.sequence+1
             local welcome=base("chat")
             welcome.seq=session.sequence
-            welcome.text="This is Captain "..player.name().." of the "..local_player_name()..". Identify yourself."
+            welcome.text="This is "..player.name()..", captain of "..local_player_name()..". Identify yourself."
             if send(peer,welcome,true) then session.host_welcomed[message.node]=true end
          end
          broadcast(message,true,peer)
@@ -1176,7 +1184,7 @@ local function greet_host ()
          session.sequence=session.sequence+1
          local msg=base("chat")
          msg.seq=session.sequence
-         msg.text="I am Captain "..player.name().." of the "..local_player_name().."!"
+         msg.text="I am "..player.name()..", captain of "..local_player_name().."!"
          if send(peer,msg,true) then session.greeted_system=session.machine.system end
          return
       end
@@ -1346,6 +1354,7 @@ function session.enter ( system_name )
       return true
    end
    session.leave(); session.machine:enter(system_name)
+   session.locally_claimed=locally_claimed()
    session.last_liveness=now()
    session.solo_since=nil
    reset_smoothing()
@@ -1379,6 +1388,7 @@ function session.leave ()
    session.indicators:clear()
    reset_smoothing()
    session.greeted_system=nil
+   session.locally_claimed=nil
    pilot.toggleSpawn(true); session.machine:leave(); lock_autonav(false)
 end
 
@@ -1438,6 +1448,15 @@ end
 
 function session.update ( dt )
    if not session.running then return end
+   if session.machine.system then
+      session.locally_claimed=locally_claimed()
+      if session.locally_claimed and session.machine.state=="guest" then
+         local system_name=session.machine.system
+         print("P2P: local system claim requires hosting")
+         session.leave()
+         session.enter(system_name)
+      end
+   end
    -- Shared simulation forbids time compression, but a host that has remained
    -- alone past its grace period gets ordinary local-play autonav back.
    if session.autonav_locked then player.autonavReset() end

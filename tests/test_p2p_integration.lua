@@ -72,7 +72,8 @@ end
 
 local function new_world ( player_name )
    local world={clock=0,pilots={},next_id=1,spawn=true,player_name=player_name,c_calls={},
-      speed_enabled=true,autonav_resets=0,unpauses=0,comms={},spobs={},jumps={}}
+      speed_enabled=true,autonav_resets=0,unpauses=0,comms={},spobs={},jumps={},
+      claim_available=true}
    local function counted ( name )
       world.c_calls[name]=(world.c_calls[name] or 0)+1
    end
@@ -206,6 +207,7 @@ local function new_world ( player_name )
    env.os={}
    world.cache={}
    env.naev={ticksGame=function() return world.clock end,cache=function() return world.cache end,
+      claimTest=function() return world.claim_available end,
       keyEnable=function(key,enabled) assert(key=="speed"); world.speed_enabled=enabled end,
       unpause=function() world.unpauses=world.unpauses+1 end}
    env.rnd={rnd=function(a) return a or 1 end}
@@ -318,17 +320,17 @@ for _entity_id,record in pairs(host.session.host_inventory) do
 end
 local host_proxy=find(guest,"John #2","P2P Players")
 assert(host_proxy,"guest did not locally alias the host")
-assert(host_proxy.last_chat=="Hi, I'm John, the host of this system."
+assert(host_proxy.last_chat=="This is John, captain of John. Identify yourself."
       and host_proxy.chat_count==1,
    "host did not privately identify itself to the joining guest")
 assert(host_proxy.slotted_outfits and host_proxy.slotted_outfits[1]=="The Bite",
    "The Bite was not installed in the remote player's matching ship slot")
 local guest_proxy=find(host,"John #2","P2P Players")
 assert(guest_proxy,"host did not retain the aliased guest proxy")
-assert(guest_proxy.last_chat=="Hi, I'm John!" and guest_proxy.chat_count==1,
+assert(guest_proxy.last_chat=="I am John, captain of John!" and guest_proxy.chat_count==1,
    "guest did not send exactly one reliable entry greeting to the host")
 assert(#guest.comms==1 and guest.comms[1].name=="John"
-      and guest.comms[1].text=="Hi, I'm John!",
+      and guest.comms[1].text=="I am John, captain of John!",
    "host did not echo the entry greeting back to the sending client")
 update({host,guest},20)
 assert(guest_proxy.chat_count==1,"guest repeated its entry greeting without re-entering")
@@ -598,7 +600,7 @@ assert(third.session.machine.state=="guest" and third.session.machine.host=="10"
 assert(find(third,"John","P2P Players") and find(third,"John #2","P2P Players"),
    "third peer did not uniquely alias duplicate remote names")
 local third_host_proxy=third.session.players["10"].pilot
-assert(third_host_proxy.last_chat=="Hi, I'm John, the host of this system."
+assert(third_host_proxy.last_chat=="This is John, captain of John. Identify yourself."
       and third_host_proxy.chat_count==1,
    "host did not privately identify itself to a peer discovered through a guest")
 npc:setPos(vector(500,0))
@@ -799,6 +801,50 @@ assert(not stale_host.session.players["39"]
    "silent participant timeout left a one-sided player ghost")
 stale_guest.session.stop()
 stale_host.session.stop()
+
+-- A local Naev system claim protects mission/event state. Such a player must
+-- ignore a reachable host, and a guest that gains a local claim must leave the
+-- shared population and restart discovery before claiming itself.
+local claim_host=new_world("Claim Host")
+assert(claim_host.session.start{enabled=true,node_id="41",listen_port=61401,
+   directory="",bootstrap={},recent={}})
+assert(claim_host.session.enter("Claimed System")); advance({claim_host},2,4)
+local claimed_player=new_world("Claimed Player")
+claimed_player.claim_available=false
+assert(claimed_player.session.start{enabled=true,node_id="42",listen_port=0,
+   directory="",bootstrap={"127.0.0.1:61401"},recent={}})
+assert(claimed_player.session.enter("Claimed System"))
+update({claim_host,claimed_player},16)
+assert(claimed_player.session.machine.state=="discovering",
+   "locally claimed player accepted a remote host claim or hint")
+advance({claim_host,claimed_player},2,16)
+assert(claimed_player.session.machine.state=="host",
+   "locally claimed player did not become host")
+advance({claim_host,claimed_player},11,16)
+assert(claimed_player.session.machine.state=="host",
+   "locally claimed host accepted a refreshed remote host claim")
+claimed_player.session.stop(); claim_host.session.stop()
+
+local transition_host=new_world("Transition Host")
+assert(transition_host.session.start{enabled=true,node_id="43",listen_port=61402,
+   directory="",bootstrap={},recent={}})
+assert(transition_host.session.enter("Transition System")); advance({transition_host},2,4)
+local transition_guest=new_world("Transition Guest")
+assert(transition_guest.session.start{enabled=true,node_id="44",listen_port=0,
+   directory="",bootstrap={"127.0.0.1:61402"},recent={}})
+assert(transition_guest.session.enter("Transition System"))
+update({transition_host,transition_guest},16)
+assert(transition_guest.session.machine.state=="guest")
+transition_guest.claim_available=false
+transition_guest.session.update()
+assert(transition_guest.session.machine.state=="discovering"
+      and next(transition_guest.session.players)==nil
+      and transition_guest.spawn,
+   "guest gaining a local claim did not leave and restart discovery")
+advance({transition_host,transition_guest},2,16)
+assert(transition_guest.session.machine.state=="host",
+   "guest gaining a local claim did not become host")
+transition_guest.session.stop(); transition_host.session.stop()
 
 -- Listening on the configured loopback directory port must not dial self.
 local selfloop=new_world("Loopback")

@@ -7,10 +7,11 @@ UI/event adapter is `events/multiplayer.lua`. Runtime networking is under
 `scripts/multiplayer/`: `client.lua` drives a connected player, `server.lua`
 runs the authoritative arena server, `syst_server.lua` runs the P2P system
 server, `relay.lua` handles discovery, and `common.lua` owns shared wire-format
-constants and decoding. `p2p_relay/p2p_relay.py` is the external discovery
-relay. Game assets and arena definitions live under `ai/`, `scripts/equipopt/`,
-`ships/`, `ssys/`, `collision/`, `gfx/`, and `snd/`. Plugin metadata is in
-`plugin.toml` and the legacy `plugin.xml`.
+constants and decoding. The current P2P rendezvous directory is
+`directory/main.lua`, backed by `scripts/multiplayer/p2p/directory.lua`. Game
+assets and arena definitions live under `ai/`, `scripts/equipopt/`, `ships/`,
+`ssys/`, `collision/`, `gfx/`, and `snd/`. Plugin metadata is in `plugin.toml`
+and the legacy `plugin.xml`.
 
 ## Development Commands
 
@@ -20,8 +21,6 @@ There is no build system or standalone test suite yet. Before hand-off, run:
   to parse every Lua source file.
 - `while IFS= read -r file; do xmllint --noout "$file"; done < <(rg --files -g '*.xml')`
   to parse XML metadata and assets.
-- `python3 -c 'import ast, pathlib; ast.parse(pathlib.Path("p2p_relay/p2p_relay.py").read_text())'`
-  to parse the Python relay without creating cache files.
 
 The plugin requires a Naev build with `lua_enet` enabled. Network behavior must
 also be checked with separate Naev server and client instances; syntax checks

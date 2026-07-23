@@ -37,6 +37,12 @@ players use their real ship and outfits as invincible local proxies. Damage to
 your actual player remains entirely local, so god mode and other local behavior
 are neither synchronized nor checked.
 
+If Naev reports that the current system is already claimed locally by a
+mission or event, the player will not join another P2P host. It ignores remote
+host claims and hints and may host the system itself, preserving its local
+population. A guest that gains a local system claim leaves the shared
+population, restarts discovery, and becomes a host.
+
 Player-owned escorts, fleet craft, followers, and deployed craft remain owned
 by their player. The system host relays their owner-authoritative state and
 does not adopt them as ambient NPCs when the owner leaves.
