@@ -1,0 +1,7 @@
+<effect name="Multiplayer: Aggression">
+ <description>Another player is hostile. Peace returns when this timer expires.</description>
+ <duration>20</duration>
+ <icon>/gfx/misc/icons/boar</icon>
+ <overwrite>multiplayer_aggression</overwrite>
+ <debuff/>
+</effect>

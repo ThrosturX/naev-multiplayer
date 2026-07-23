@@ -138,6 +138,22 @@ local function new_world ( player_name )
       self.is_disabled=true
    end
    function pilot_methods:setHostile (v) self.hostile=v==nil or v end
+   function pilot_methods:effectAdd (name,duration)
+      self.effects=self.effects or {}
+      self.effect_adds=self.effect_adds or {}
+      local expires=world.clock+duration
+      local old=self.effects[name]
+      if old and old.expires>expires then return true end
+      self.effects[name]={duration=duration,expires=expires}
+      self.effect_adds[name]=(self.effect_adds[name] or 0)+1
+      return true
+   end
+   function pilot_methods:effectRm (name)
+      self.effects=self.effects or {}
+      self.effect_rms=self.effect_rms or {}
+      self.effects[name]=nil
+      self.effect_rms[name]=(self.effect_rms[name] or 0)+1
+   end
    function pilot_methods:rename (v) self.pilot_name=v end
    function pilot_methods:taskClear () self.task=nil end
    function pilot_methods:pushtask (kind,target) self.task={kind=kind,target=target} end
@@ -264,12 +280,16 @@ assert(not host.speed_enabled,"P2P system entry did not disable the speed key")
 advance({host},2,4)
 assert(host.autonav_resets>1,"P2P updates did not continually cancel autonav")
 assert(host.session.machine.state=="host")
+assert(host.local_pilot.effects["Multiplayer: Autonav Pending"],
+   "solo-host autonav countdown was not shown")
 advance({host},9,4)
 assert(not host.speed_enabled,
    "solo host regained time compression before its ten-second grace period")
 advance({host},1.1,4)
 assert(host.speed_enabled,
    "solo host did not regain ordinary autonav time compression")
+assert(not host.local_pilot.effects["Multiplayer: Autonav Pending"],
+   "solo-host autonav countdown remained after autonav was restored")
 local npc=host:add_pilot("Koala","Empire","Host NPC",false)
 local escort=host:add_pilot("Hyena","Player","Host Escort",true,"escort")
 escort.pilot_id=777
@@ -331,11 +351,15 @@ host.local_pilot:setEnergy(63)
 host.session.input("primary",true)
 assert(host.unpauses>0,"P2P input did not keep the space simulation unpaused")
 assert(guest_proxy.hostile,"firing at a neutral remote player did not make the target hostile")
+assert(host.local_pilot.effects["Multiplayer: Aggression"],
+   "local aggression did not show its peace countdown")
 host_proxy:setHealth(12,7,3)
 advance({host,guest},0.1,8)
 assert(host_proxy:memory().p2p_primary,"primary fire input was not replicated")
 assert(host_proxy.target_pilot==guest.local_pilot,"replicated fire target is not the local player")
 assert(host_proxy.hostile,"firing proxy was not made locally damage-capable")
+assert(guest.local_pilot.effects["Multiplayer: Aggression"],
+   "replicated aggression did not show its peace countdown")
 assert(host_proxy.energy_value==63,"remote player energy was not replicated")
 assert(host_proxy.ammo_fills and host_proxy.ammo_fills>0,"remote proxy ammo was not maintained")
 assert(host_proxy.armour==100 and host_proxy.shield==100 and host_proxy.stress==0,
@@ -382,6 +406,9 @@ assert(not guest_proxy.hostile and not host_proxy.hostile,
       ..tostring(guest_proxy.hostile).."/"..tostring(host_proxy.hostile)
       .." last="..tostring(host.session.players["20"].last_aggression)
       .." now="..tostring(host.clock))
+assert(not host.local_pilot.effects["Multiplayer: Aggression"]
+      and not guest.local_pilot.effects["Multiplayer: Aggression"],
+   "aggression countdown remained after the final live timer expired")
 assert(not host.speed_enabled and not guest.speed_enabled,
    "active multiplayer session incorrectly enabled time compression")
 
@@ -640,6 +667,25 @@ assert(#guest.comms==guest_comm_count+1 and guest.comms[#guest.comms].text=="gue
    "relayed chat duplicated or omitted the guest's immediate local display")
 assert(guest.hail_sounds==guest_hails+1,
    "relayed chat duplicated or omitted the sender's hail sound")
+
+-- The local aggression effect represents the latest live deadline, not the
+-- first hostile peer to become peaceful.
+local third_proxy_on_host=host.session.players["30"].pilot
+host.local_pilot:setTarget(guest_proxy)
+host.session.input("primary",true); advance({host,guest,third},0.1,8)
+host.session.input("primary",false); advance({host,guest,third},5,8)
+host.local_pilot:setTarget(third_proxy_on_host)
+host.session.input("primary",true); advance({host,guest,third},0.1,8)
+host.session.input("primary",false)
+for _second=1,15 do advance({host,guest,third},1,8) end
+assert(not guest_proxy.hostile and third_proxy_on_host.hostile,
+   "staggered aggression timers did not expire independently")
+assert(host.local_pilot.effects["Multiplayer: Aggression"],
+   "aggression countdown cleared before the final live timer")
+advance({host,guest,third},5,8)
+assert(not third_proxy_on_host.hostile
+      and not host.local_pilot.effects["Multiplayer: Aggression"],
+   "aggression countdown did not clear with the final live timer")
 
 -- An ordinary guest departure is observed by the host and relayed to every
 -- other guest, with one notification and sound on each observer.

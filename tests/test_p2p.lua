@@ -6,6 +6,7 @@ local reconcile=require "multiplayer.p2p.reconcile"
 local owned=require "multiplayer.p2p.owned"
 local core=require "multiplayer.p2p.core"
 local identity=require "multiplayer.p2p.identity"
+local status=require "multiplayer.p2p.status"
 
 local tests={}
 local function test(name, fn) tests[#tests+1]={name,fn} end
@@ -106,6 +107,30 @@ test("session transitions and host loss", function()
    s:accept_claim{system="X",node="10",claim="c"}; eq(s.state,"guest"); eq(s.host,"10")
    s.members["30"]=true; eq(s:host_lost(),"20"); eq(s.state,"host")
    s:leave(); eq(s.state,"idle"); s:stop(); eq(s.state,"stopped")
+end)
+
+test("local transition countdowns", function()
+   local effects,removed={},{}
+   local p={
+      effectAdd=function(_self,name,duration) effects[name]=duration end,
+      effectRm=function(_self,name) effects[name]=nil; removed[name]=(removed[name] or 0)+1 end,
+   }
+   local indicators=status.new(function() return p end)
+   indicators:host_alone(10,2)
+   eq(effects["Multiplayer: Autonav Pending"],8)
+   indicators:host_alone(10,10)
+   eq(effects["Multiplayer: Autonav Pending"],nil)
+
+   indicators:mark_aggression(30,10)
+   eq(effects["Multiplayer: Aggression"],20)
+   indicators:mark_aggression(30.5,10.5)
+   eq(effects["Multiplayer: Aggression"],20)
+   indicators:reconcile_aggression(25,11)
+   eq(effects["Multiplayer: Aggression"],14)
+   assert((removed["Multiplayer: Aggression"] or 0)>0,
+      "shorter aggregate aggression deadline did not replace the effect")
+   indicators:reconcile_aggression(nil,25)
+   eq(effects["Multiplayer: Aggression"],nil)
 end)
 
 test("sequence rejection", function()

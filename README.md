@@ -42,8 +42,12 @@ by their player. The system host relays their owner-authoritative state and
 does not adopt them as ambient NPCs when the owner leaves.
 
 Autonav and the speed key are disabled while participating in a shared system
-to prevent local game-speed changes from desynchronizing peers. Normal controls
-are restored on system leave or when P2P is disabled.
+to prevent local game-speed changes from desynchronizing peers. A host that
+remains alone for ten seconds regains normal autonav and time compression.
+Normal controls are also restored on system leave or when P2P is disabled.
+A green status countdown shows when a solo host is waiting for autonav, while
+a red status countdown shows how long remains until the last local player
+aggression timer clears.
 
 The wire protocol is `MP2P/1`. Incompatible peers are ignored without changing
 ordinary play. A directory-only node answers host queries but cannot claim or

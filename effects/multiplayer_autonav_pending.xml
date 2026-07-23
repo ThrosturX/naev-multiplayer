@@ -1,0 +1,7 @@
+<effect name="Multiplayer: Autonav Pending">
+ <description>Hosting alone. Autonav returns when this timer expires.</description>
+ <duration>10</duration>
+ <icon>/gfx/misc/icons/galaxy</icon>
+ <overwrite>multiplayer_autonav_pending</overwrite>
+ <buff/>
+</effect>

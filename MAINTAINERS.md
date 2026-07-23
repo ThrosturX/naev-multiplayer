@@ -57,7 +57,11 @@ liveness maintenance. A host must remain the only system member for ten
 seconds before restoring normal autonav/time compression; any joining member
 locks it again immediately. Player aggression records only actual hostile
 actions and clears local proxy/craft hostility after twenty quiet seconds.
-Do not turn either timer into a per-frame pilot or membership scan.
+The local player receives stat-neutral status effects for the host-alone and
+latest aggression deadlines. Refresh the aggression effect at most once per
+second and derive its expiry from the latest live player deadline so it clears
+with the final aggression timer. Do not turn either timer into a per-frame
+pilot or membership scan.
 
 Do not wrap ordinary ENet or pilot operations in `pcall`. The P2P runtime uses
 protected calls only to validate untrusted Naev resource names (whose getters

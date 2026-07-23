@@ -4,11 +4,14 @@ local core = require "multiplayer.p2p.core"
 local reconcile = require "multiplayer.p2p.reconcile"
 local owned = require "multiplayer.p2p.owned"
 local identity = require "multiplayer.p2p.identity"
+local status = require "multiplayer.p2p.status"
 local enet = require "enet"
 local ai_setup = require "ai.core.setup"
 
 local MAX_EVENTS_PER_FRAME = 48
 local NPC_STATE_INTERVAL = 1/3
+local HOST_ALONE_GRACE = 10
+local AGGRESSION_GRACE = 20
 -- The outer codec percent-escapes this packed field again. Keeping the raw
 -- payload well below MAX_PACKET leaves room for worst-case expansion.
 local NPC_MANIFEST_BATCH_PAYLOAD = 4000
@@ -19,6 +22,7 @@ local session = {
    last_claim=0, last_liveness=0, host_inventory={}, owned_inventory={},
    craft_factions={}, host_welcomed={}, pending_leader_owners={}, resync_sent={},
    ownership_cache={}, initial_sync_until=0, pending_npc_manifests=nil,
+   indicators=status.new(function () return player.pilot() end),
 }
 
 -- naev.ticksGame() is already expressed in seconds. Keeping all discovery and
@@ -91,6 +95,7 @@ end
 local function refresh_time_controls ( stamp )
    if not session.machine or not session.machine.system then
       session.solo_since=nil
+      session.indicators:clear_host_alone()
       lock_autonav(false)
       return
    end
@@ -102,12 +107,15 @@ local function refresh_time_controls ( stamp )
    end
    if not solo then
       session.solo_since=nil
+      session.indicators:clear_host_alone()
       lock_autonav(true)
       return
    end
    stamp=stamp or now()
    session.solo_since=session.solo_since or stamp
-   lock_autonav(stamp-session.solo_since<10)
+   local deadline=session.solo_since+HOST_ALONE_GRACE
+   session.indicators:host_alone(deadline,stamp)
+   lock_autonav(stamp<deadline)
 end
 
 local function clear_local_controls ()
@@ -490,7 +498,9 @@ end
 local function mark_player_aggression ( node )
    local entry=session.players[node]
    if not entry or not exists(entry.pilot) then return end
-   entry.last_aggression=now()
+   local stamp=now()
+   entry.last_aggression=stamp
+   session.indicators:mark_aggression(stamp+AGGRESSION_GRACE,stamp)
    if not entry.p2p_hostile then
       entry.pilot:setHostile(true)
       entry.p2p_hostile=true
@@ -1294,6 +1304,7 @@ end
 function session.start ( settings )
    if session.running then return true end
    clear_local_controls()
+   session.indicators:clear()
    session.settings=session.defaults(settings)
    local ok,host=pcall(enet.host_create,"*:"..tostring(session.settings.listen_port))
    if not ok then return nil,"unable to create P2P host: "..tostring(host) end
@@ -1317,7 +1328,7 @@ end
 
 function session.stop ()
    clear_local_controls()
-   if not session.running then lock_autonav(false); return end
+   if not session.running then session.indicators:clear(); lock_autonav(false); return end
    if session.machine.system then broadcast(base("leave"),true) end
    session.leave()
    for peer in pairs(session.peers) do peer:disconnect_now() end
@@ -1348,7 +1359,11 @@ function session.enter ( system_name )
 end
 
 function session.leave ()
-   if not session.machine or not session.machine.system then lock_autonav(false); return end
+   if not session.machine or not session.machine.system then
+      session.indicators:clear()
+      lock_autonav(false)
+      return
+   end
    broadcast(base("leave"),true)
    for _entity_id,entry in pairs(session.players) do remove_pilot(entry.pilot) end
    for _entity_id,entry in pairs(session.npcs) do remove_pilot(entry.pilot) end
@@ -1361,6 +1376,7 @@ function session.leave ()
    session.pending_npc_manifests=nil
    session.initial_sync_until=0
    session.solo_since=nil
+   session.indicators:clear()
    reset_smoothing()
    session.greeted_system=nil
    pilot.toggleSpawn(true); session.machine:leave(); lock_autonav(false)
@@ -1471,8 +1487,9 @@ function session.update ( dt )
          if not exists(entry.pilot) then session.departures[node]=nil end
       end
       local stale_nodes={}
+      local aggression_deadline
       for node,entry in pairs(session.players) do
-         if entry.last_aggression and stamp-entry.last_aggression>=20 then
+         if entry.last_aggression and stamp-entry.last_aggression>=AGGRESSION_GRACE then
             if exists(entry.pilot) then entry.pilot:setHostile(false) end
             entry.last_aggression=nil
             entry.p2p_hostile=nil
@@ -1484,10 +1501,15 @@ function session.update ( dt )
                end
             end
          end
-         if not exists(entry.pilot) or stamp-(entry.last_seen or stamp)>12 then
+         local stale=not exists(entry.pilot) or stamp-(entry.last_seen or stamp)>12
+         if stale then
             stale_nodes[#stale_nodes+1]=node
+         elseif entry.last_aggression then
+            aggression_deadline=math.max(aggression_deadline or 0,
+               entry.last_aggression+AGGRESSION_GRACE)
          end
       end
+      session.indicators:reconcile_aggression(aggression_deadline,stamp)
       for _index,node in ipairs(stale_nodes) do
          session.machine.members[node]=nil
          owned.cleanup(session.craft,node,function(entry) remove_pilot(entry.pilot) end)
