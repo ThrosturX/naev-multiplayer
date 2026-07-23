@@ -37,6 +37,12 @@ local mpbtn
 local p2p_hooks = {}
 local p2p_hail_pressed
 
+local function p2p_chat_available ()
+    local pp = player.pilot()
+    local nav_spob = pp:nav()
+    return pp:target() == nil and nav_spob == nil
+end
+
 local function p2p_keep_chat_live ( chat_state )
     local widget_update = chat_state._update
     local chat_update
@@ -126,10 +132,10 @@ function P2P_SESSION_INPUT ( input_name, input_pressed )
     p2psession.input(input_name, input_pressed)
     if input_name ~= "hail" then return end
     if input_pressed then
-        p2p_hail_pressed = player.pilot():target() == nil
+        p2p_hail_pressed = p2p_chat_available()
         return
     end
-    local open_chat = p2p_hail_pressed and player.pilot():target() == nil
+    local open_chat = p2p_hail_pressed and p2p_chat_available()
     p2p_hail_pressed = nil
     if not open_chat then return end
     vn.reset()

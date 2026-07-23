@@ -41,10 +41,16 @@ package.loaded.vn = vn_stub
 
 naev = naev_stub
 _ = function(value) return value end
+local pilot_target,nav_spob
+local player_pilot = {
+   target=function() return pilot_target end,
+   nav=function() return nav_spob,nil end,
+}
+player = {pilot=function() return player_pilot end}
 
 assert(loadfile("events/multiplayer.lua"))()
 
-local run_chat,keep_chat_live
+local run_chat,keep_chat_live,chat_available
 for index = 1, 20 do
    local name, value = debug.getupvalue(P2P_SESSION_INPUT, index)
    if not name then break end
@@ -52,10 +58,19 @@ for index = 1, 20 do
       run_chat = value
    elseif name == "p2p_keep_chat_live" then
       keep_chat_live = value
+   elseif name == "p2p_chat_available" then
+      chat_available = value
    end
 end
 assert(run_chat, "P2P chat runner was not captured by the input callback")
 assert(keep_chat_live, "P2P live chat updater was not captured by the input callback")
+assert(chat_available, "P2P chat target guard was not captured by the input callback")
+assert(chat_available(), "empty hail target did not allow P2P chat")
+nav_spob={}
+assert(not chat_available(), "selected spob incorrectly allowed P2P chat")
+nav_spob=nil; pilot_target={}
+assert(not chat_available(), "selected pilot incorrectly allowed P2P chat")
+pilot_target=nil
 
 local steady_updates = 0
 local function steady_update () steady_updates = steady_updates + 1 end
