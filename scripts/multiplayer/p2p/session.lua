@@ -8,7 +8,7 @@ local enet = require "enet"
 local ai_setup = require "ai.core.setup"
 
 local session = {
-   running=false, peers={}, endpoints={}, players={}, npcs={}, craft={},
+   running=false, peers={}, endpoints={}, players={}, npcs={}, craft={}, departures={},
    peer_meta={}, sequence=0, last_player=0, last_npc=0, last_manifest=0,
    last_claim=0, host_inventory={}, owned_inventory={}, craft_factions={},
 }
@@ -172,16 +172,120 @@ local function play_disconnect_sound ()
    end)
 end
 
+local function departure_candidate ( p )
+   local pos_ok,pos=pcall(function() return p:pos() end)
+   if not pos_ok or not pos then return end
+   local px,py=pos:get()
+
+   local best_kind,best_target,best_distance
+   local function consider ( kind, target )
+      local target_ok,target_pos=pcall(function() return target:pos() end)
+      if not target_ok or not target_pos then return end
+      local tx,ty=target_pos:get()
+      local dx,dy=tx-px,ty-py
+      local distance=dx*dx+dy*dy
+      local radius_ok,radius=pcall(function() return target:radius() end)
+      if not radius_ok or type(radius)~="number" or radius<0 then radius=0 end
+      local pilot_radius_ok,pilot_radius=pcall(function() return p:radius() end)
+      if not pilot_radius_ok or type(pilot_radius)~="number" or pilot_radius<0 then pilot_radius=0 end
+      -- The last 15 Hz state can trail the real ship slightly. Use the target
+      -- radius plus the pilot radius and a small packet/smoothing allowance,
+      -- but never infer a departure from elsewhere in the system.
+      local departure_range=radius+pilot_radius+300
+      if distance > departure_range*departure_range then return end
+      if not best_distance or distance < best_distance then
+         best_kind,best_target,best_distance=kind,target,distance
+      end
+   end
+
+   local system_ok,current=pcall(function() return system.cur() end)
+   if not system_ok or not current then return end
+   local faction_ok,pilot_faction=pcall(function() return p:faction() end)
+   local spobs_ok,spobs=pcall(function() return current:spobs() end)
+   if spobs_ok then
+      for _index,spob in ipairs(spobs) do
+         local usable=false
+         local services_ok,services=pcall(function() return spob:services() end)
+         if services_ok and services and services.land then
+            usable=true
+            if faction_ok and pilot_faction then
+               local spob_faction_ok,spob_faction=pcall(function() return spob:faction() end)
+               if spob_faction_ok and spob_faction then
+                  local enemies_ok,enemies=pcall(function() return pilot_faction:areEnemies(spob_faction) end)
+                  if enemies_ok and enemies then usable=false end
+               end
+            end
+         end
+         if usable then consider("land",spob) end
+      end
+   end
+   local jumps_ok,jumps=pcall(function() return current:jumps(true) end)
+   if jumps_ok then
+      for _index,jump in ipairs(jumps) do consider("jump",jump) end
+   end
+   return best_kind,best_target
+end
+
+local function clear_departure_controls ( p )
+   pcall(function() p:taskClear() end)
+   pcall(function()
+      local memory=p:memory()
+      memory.p2p_accel=0
+      memory.p2p_primary=false
+      memory.p2p_secondary=false
+   end)
+end
+
+local function disable_departure ( p )
+   clear_departure_controls(p)
+   pcall(function() p:setDisable() end)
+   return "disabled"
+end
+
+local function begin_departure ( p )
+   local kind,target=departure_candidate(p)
+   if not kind then return disable_departure(p) end
+   clear_departure_controls(p)
+   local ok=pcall(function()
+      if kind=="land" then p:pushtask("land",target)
+      else p:pushtask("hyperspace",target) end
+   end)
+   if not ok then return disable_departure(p) end
+   return kind
+end
+
+local function clear_departure ( node, rejoining )
+   local old=session.departures[node]
+   if not old then return end
+   session.departures[node]=nil
+   if not exists(old.pilot) then return end
+   if rejoining and old.mode=="disabled" then
+      local exploded=pcall(function()
+         old.pilot:setNoDeath(false)
+         old.pilot:explode()
+      end)
+      if exploded then return end
+      pcall(function()
+         old.pilot:setNoDeath(false)
+         old.pilot:setHealth(0,0,0)
+      end)
+      return
+   end
+   remove_pilot(old.pilot)
+end
+
 local function remove_remote_player ( node )
    local departed=session.players[node]
    if not departed then return false end
-   local display=session.identities and session.identities:display_name(node) or node
-   local name_ok,pilot_name=pcall(function() return departed.pilot:name() end)
-   if name_ok and pilot_name and pilot_name~="" then display=pilot_name end
-   remove_pilot(departed.pilot)
+   local p=departed.pilot
    session.players[node]=nil
-   pilot.comm(display,"Disconnected.")
+   if not exists(p) then return false end
+   -- Broadcast while the proxy still has its participant name so the comm
+   -- bubble is anchored to the ship that actually disconnected.
+   pcall(function() p:broadcast("Disconnected.",true) end)
    play_disconnect_sound()
+   pcall(function() p:rename(p:name().." (disconnected "..node:sub(1,6)..")") end)
+   session.departures[node]={pilot=p,node=node,mode=begin_departure(p)}
    return true
 end
 
@@ -250,8 +354,14 @@ end
 local reconcile_craft_leaders
 
 local function spawn_proxy ( message, display_name )
-   if message.node == session.settings.node_id or session.players[message.entity] then return end
+   if message.node == session.settings.node_id then return end
+   local existing=session.players[message.entity]
+   if existing then
+      existing.last_seen=now()
+      return
+   end
    if not pcall(function() ship.get(message.ship) end) then return end
+   clear_departure(message.node,true)
    local fac=faction.dynAdd(nil,"P2P Players","P2P Players",{ai="p2p_remote_control",clear_allies=true,clear_enemies=true})
    local proxy_name=display_name or message.name
    -- The identity registry normally resolves this before spawning. Keep the
@@ -273,7 +383,7 @@ local function spawn_proxy ( message, display_name )
    if message.vx and message.vy then p:setVel(vec2.new(message.vx,message.vy)) end
    if message.dir then p:setDir(message.dir) end
    ai_setup.setup(p)
-   session.players[message.entity]={pilot=p,node=message.node,sequences={}}
+   session.players[message.entity]={pilot=p,node=message.node,sequences={},last_seen=now()}
    if reconcile_craft_leaders then reconcile_craft_leaders(message.node) end
    print("P2P: remote player proxy created")
 end
@@ -375,6 +485,7 @@ local function apply_player_state ( message )
    local entry=session.players[message.entity]
    if not entry or not exists(entry.pilot) then return end
    if not reconcile.accept(entry.sequences,"state",message.seq) then return end
+   entry.last_seen=now()
    motion_target(entry,message)
    local p=entry.pilot
    pcall(function()
@@ -435,6 +546,7 @@ local function is_replica ( p )
    for _entity_id,e in pairs(session.players) do if e.pilot==p then return true end end
    for _entity_id,e in pairs(session.npcs) do if e.pilot==p then return true end end
    for _entity_id,e in pairs(session.craft) do if e.pilot==p then return true end end
+   for _node,e in pairs(session.departures) do if e.pilot==p then return true end end
    return false
 end
 
@@ -867,7 +979,7 @@ function session.start ( settings )
    if not ok or not host then return nil,"unable to create P2P host" end
    session.host=host; session.running=true; session.machine=core.new(session.settings.node_id,now); session.machine:start()
    session.identities=identity.new(session.settings.node_id,local_player_name())
-   session.member_endpoints={}; session.craft_factions={}
+   session.member_endpoints={}; session.craft_factions={}; session.departures={}
    session.endpoint=tostring(host:get_socket_address())
    print("P2P: listener started")
    session.machine.topology:load_peers(session.settings.recent)
@@ -913,7 +1025,9 @@ function session.leave ()
    for _entity_id,entry in pairs(session.players) do remove_pilot(entry.pilot) end
    for _entity_id,entry in pairs(session.npcs) do remove_pilot(entry.pilot) end
    for _entity_id,entry in pairs(session.craft) do remove_pilot(entry.pilot) end
+   for node in pairs(session.departures) do clear_departure(node,false) end
    session.players={}; session.npcs={}; session.craft={}
+   session.departures={}
    session.craft_factions={}
    reset_smoothing()
    session.greeted_system=nil
@@ -1007,6 +1121,25 @@ function session.update ( dt )
    end
    greet_host()
    local stamp=now()
+   for node,entry in pairs(session.departures) do
+      if not exists(entry.pilot) then session.departures[node]=nil end
+   end
+   local stale_nodes={}
+   for node,entry in pairs(session.players) do
+      if stamp-(entry.last_seen or stamp)>12 then stale_nodes[#stale_nodes+1]=node end
+   end
+   for _index,node in ipairs(stale_nodes) do
+      session.machine.members[node]=nil
+      owned.cleanup(session.craft,node,function(entry) remove_pilot(entry.pilot) end)
+      session.identities:remove(node)
+      remove_remote_player(node)
+      if session.machine.state=="host" then
+         local msg=base("leave")
+         msg.node=node
+         broadcast(msg,true)
+      end
+      if node==session.machine.host then handle_host_loss() end
+   end
    smooth_replicas(dt,stamp)
    local action=session.machine:tick()
    if stamp-(session.last_seed_connect or 0)>=5 then

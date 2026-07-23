@@ -54,9 +54,18 @@ local function resource ( name )
    return {nameRaw=function() return name end}
 end
 
+local function departure_target ( x, y, landable )
+   local target={position=vector(x,y),target_radius=200}
+   function target:pos () return self.position end
+   function target:radius () return self.target_radius end
+   function target:services () return {land=landable==true} end
+   function target:faction () return resource("Independent") end
+   return target
+end
+
 local function new_world ( player_name )
    local world={clock=0,pilots={},next_id=1,spawn=true,player_name=player_name,
-      speed_enabled=true,autonav_resets=0,unpauses=0,comms={}}
+      speed_enabled=true,autonav_resets=0,unpauses=0,comms={},spobs={},jumps={}}
    local pilot_methods={}
    pilot_methods.__index=pilot_methods
    function pilot_methods:exists () return not self.removed end
@@ -81,6 +90,7 @@ local function new_world ( player_name )
    function pilot_methods:target () return self.target_pilot end
    function pilot_methods:health () return self.armour,self.shield,self.stress end
    function pilot_methods:energy () return self.energy_value end
+   function pilot_methods:radius () return 50 end
    function pilot_methods:id () return self.pilot_id end
    function pilot_methods:withPlayer ()
       return self.owned or self.faction_name=="Player" or self.leader_pilot==world.local_pilot
@@ -101,8 +111,12 @@ local function new_world ( player_name )
    function pilot_methods:setEnergy (v) self.energy_value=v end
    function pilot_methods:setInvincible (v) self.invincible=v end
    function pilot_methods:setNoDeath (v) self.no_death=v end
+   function pilot_methods:setDisable () self.disabled=true end
    function pilot_methods:setHostile (v) self.hostile=v==nil or v end
    function pilot_methods:rename (v) self.pilot_name=v end
+   function pilot_methods:taskClear () self.task=nil end
+   function pilot_methods:pushtask (kind,target) self.task={kind=kind,target=target} end
+   function pilot_methods:explode () self.exploded=true; self.removed=true end
    function pilot_methods:fillAmmo () self.ammo_fills=(self.ammo_fills or 0)+1 end
    function pilot_methods:outfitAdd (name)
       self.outfit_names[#self.outfit_names+1]=name
@@ -155,6 +169,12 @@ local function new_world ( player_name )
    env.player={name=function() return world.player_name end,pilot=function() return world.local_pilot end,
       isLanded=function() return false end,
       autonavReset=function() world.autonav_resets=world.autonav_resets+1 end}
+   env.system={cur=function()
+      return {
+         spobs=function() return world.spobs end,
+         jumps=function() return world.jumps end,
+      }
+   end}
    env.ship={get=function(name) assert(type(name)=="string" and name~=""); return resource(name) end}
    env.outfit={get=function(name) return resource(name) end}
    env.faction={get=function(name) return resource(name) end,
@@ -409,25 +429,64 @@ assert(fourth.session.machine.state=="guest" and fourth.session.machine.host=="1
 local host_disconnects=host.disconnect_sounds or 0
 local guest_disconnects=guest.disconnect_sounds or 0
 local third_disconnects=third.disconnect_sounds or 0
+local fourth_on_host=host.session.players["35"].pilot
+local fourth_on_guest=guest.session.players["35"].pilot
+local fourth_on_third=third.session.players["35"].pilot
 fourth.session.stop(); update({host,guest,third},16)
 assert(host.disconnect_sounds==host_disconnects+1
       and guest.disconnect_sounds==guest_disconnects+1
       and third.disconnect_sounds==third_disconnects+1,
    "guest departure did not notify the host and every other guest exactly once")
-assert(host.comms[#host.comms].text=="Disconnected."
-      and guest.comms[#guest.comms].text=="Disconnected."
-      and third.comms[#third.comms].text=="Disconnected.",
-   "guest departure did not display a disconnect communication")
+assert(fourth_on_host.last_chat=="Disconnected."
+      and fourth_on_guest.last_chat=="Disconnected."
+      and fourth_on_third.last_chat=="Disconnected.",
+   "guest departure communication did not come from the departed proxies")
+assert(fourth_on_host:exists() and fourth_on_host.disabled
+      and fourth_on_guest:exists() and fourth_on_guest.disabled
+      and fourth_on_third:exists() and fourth_on_third.disabled,
+   "stationary departed guest proxies were not retained and disabled")
+
+-- A returning participant replaces its stale proxy. Disabled copies visibly
+-- explode; copies already committed to landing or jumping may simply leave.
+assert(fourth.session.start{enabled=true,node_id="35",listen_port=0,directory="",
+   bootstrap={guest_bootstrap},recent={}})
+assert(fourth.session.enter("Delta Polaris"))
+update({host,guest,third,fourth},24)
+assert(fourth_on_host.exploded and not fourth_on_host:exists(),
+   "disabled departure did not explode when its participant rejoined")
+assert(host.session.players["35"].pilot~=fourth_on_host,
+   "rejoining participant did not receive a fresh remote proxy")
+fourth.session.stop(); update({host,guest,third},16)
 
 guest_disconnects,third_disconnects=guest.disconnect_sounds or 0,third.disconnect_sounds or 0
+local host_on_guest=guest.session.players["10"].pilot
+local host_on_third=third.session.players["10"].pilot
+host_on_guest:setVel(vector(100,0))
+host_on_third:setVel(vector(100,0))
+local guest_nearest_spob=departure_target(500,0,true)
+guest.spobs={departure_target(1000,0,true),guest_nearest_spob}
+local third_nearest_jump=departure_target(400,0,false)
+third.jumps={departure_target(900,0,false),third_nearest_jump}
 host.session.stop(); update({guest,third},16)
 assert(host.speed_enabled,"stopping P2P did not restore the speed key")
 assert(guest.disconnect_sounds==guest_disconnects+1
       and third.disconnect_sounds==third_disconnects+1,
    "host departure did not play one disconnect sound for every guest")
-assert(guest.comms[#guest.comms].text=="Disconnected."
-      and third.comms[#third.comms].text=="Disconnected.",
-   "host departure did not display a disconnect communication")
+assert(host_on_guest.last_chat=="Disconnected."
+      and host_on_third.last_chat=="Disconnected.",
+   "host departure communication did not come from the departed host proxies")
+assert(host_on_guest:exists() and host_on_guest.task
+      and host_on_guest.task.kind=="land"
+      and host_on_guest.task.target==guest_nearest_spob,
+   "moving departed host did not land at the nearest plausible spob")
+assert(host_on_third:exists() and host_on_third.task
+      and host_on_third.task.kind=="hyperspace"
+      and host_on_third.task.target==third_nearest_jump,
+   "moving departed host did not jump through the nearest plausible gate")
+for _entity_id,record in pairs(guest.session.host_inventory) do
+   assert(record.name~=host_on_guest.pilot_name,
+      "retained departing proxy became a host-owned ambient NPC")
+end
 assert(guest.session.machine.state=="host","guest did not take over after host loss")
 assert(third.session.machine.state=="guest" and third.session.machine.host=="20",
    "third peer did not follow replacement-host election")
@@ -436,13 +495,37 @@ assert(npc_replica.armour==42,"retained NPC state changed during takeover")
 assert(not escort_replica:exists(),"departed owner's craft replica was retained")
 
 third_disconnects=third.disconnect_sounds
+local guest_on_third=third.session.players["20"].pilot
 guest.session.stop(); update({third},8)
 assert(third.disconnect_sounds==third_disconnects+1,
    "replacement-host departure did not play one disconnect sound for its guest")
-assert(third.comms[#third.comms].text=="Disconnected.",
-   "replacement-host departure did not display a disconnect communication")
+assert(guest_on_third.last_chat=="Disconnected.",
+   "replacement-host departure communication did not come from its proxy")
 third.session.stop()
 assert(guest.speed_enabled and third.speed_enabled,"leaving P2P did not restore speed controls")
+
+-- UDP loss does not necessarily produce an immediate ENet disconnect event.
+-- Player-state liveness must eventually remove a one-sided ghost even while
+-- the underlying peer object remains connected.
+local stale_host=new_world("Liveness Host")
+assert(stale_host.session.start{enabled=true,node_id="38",listen_port=62038,
+   directory="",bootstrap={},recent={}})
+assert(stale_host.session.enter("Delta Polaris")); advance({stale_host},2,4)
+local stale_guest=new_world("Liveness Guest")
+assert(stale_guest.session.start{enabled=true,node_id="39",listen_port=0,
+   directory="",bootstrap={"127.0.0.1:62038"},recent={}})
+assert(stale_guest.session.enter("Delta Polaris"))
+update({stale_host,stale_guest},16)
+stale_host.session.update() -- drain the guest's final queued state
+local stale_proxy=stale_host.session.players["39"].pilot
+stale_host.clock=stale_host.clock+13
+stale_host.session.update()
+assert(not stale_host.session.players["39"]
+      and stale_host.session.departures["39"].pilot==stale_proxy
+      and stale_proxy.disabled,
+   "silent participant timeout left a one-sided player ghost")
+stale_guest.session.stop()
+stale_host.session.stop()
 
 -- Listening on the configured loopback directory port must not dial self.
 local selfloop=new_world("Loopback")
