@@ -144,6 +144,10 @@ local function new_world ( player_name )
    env.outfit={get=function(name) return resource(name) end}
    env.faction={get=function(name) return resource(name) end,
       dynAdd=function(_base,raw) return resource(raw) end}
+   env.audio={new=function(path)
+      assert(path=="snd/sounds/hail.opus")
+      return {play=function() world.hail_sounds=(world.hail_sounds or 0)+1 end}
+   end}
    env.pilot={
       get=function() local out={}; for _index,p in ipairs(world.pilots) do if not p.removed then out[#out+1]=p end end; return out end,
       add=function(ship_name,fac,pos,name,params)
@@ -358,14 +362,21 @@ assert(proxy_vx>0 and proxy_vx<=240,
 assert((host_proxy.velocity_sets or 0)-player_velocity_sets<=3,
    "player reconciliation exceeded its 30 Hz work budget")
 assert(guest.local_pilot.armour==100 and guest.local_pilot.shield==100,"local player health was overwritten")
+local host_hails,guest_hails,third_hails=host.hail_sounds or 0,guest.hail_sounds or 0,third.hail_sounds or 0
 assert(host.session.send_chat("headless hello")); update({host,guest,third},8)
 assert(host_proxy.last_chat=="headless hello","reliable chat was not delivered")
 assert(host.comms[#host.comms].name=="John" and host.comms[#host.comms].text=="headless hello",
    "chat sender did not immediately display its own message")
+assert(host.hail_sounds==host_hails+1 and guest.hail_sounds==guest_hails+1
+      and third.hail_sounds==third_hails+1,
+   "chat broadcast did not play exactly one hail sound per participant")
 local guest_comm_count=#guest.comms
+guest_hails=guest.hail_sounds
 assert(guest.session.send_chat("guest hello")); update({host,guest,third},8)
 assert(#guest.comms==guest_comm_count+1 and guest.comms[#guest.comms].text=="guest hello",
    "relayed chat duplicated or omitted the guest's immediate local display")
+assert(guest.hail_sounds==guest_hails+1,
+   "relayed chat duplicated or omitted the sender's hail sound")
 
 host.session.stop(); update({guest,third},16)
 assert(host.speed_enabled,"stopping P2P did not restore the speed key")

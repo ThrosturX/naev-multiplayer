@@ -37,6 +37,48 @@ local mpbtn
 local p2p_hooks = {}
 local p2p_hail_pressed
 
+local function p2p_keep_chat_live ( chat_state )
+    local widget_update = chat_state._update
+    local chat_update
+    chat_update = function(self, dt)
+        naev.unpause()
+        widget_update(self, dt)
+        -- LuaTK replaces its one-shot focus initializer with its steady-state
+        -- updater. Keep wrapping whichever updater it installs.
+        if self._update ~= chat_update then
+            widget_update = self._update
+            self._update = chat_update
+        end
+    end
+    chat_state._update = chat_update
+end
+
+local function p2p_size_chat ( window )
+    local screen_width = naev.gfx.dim()
+    local old_width = window.w
+    local new_width = math.max(old_width, math.min(560, screen_width-40))
+    local input_growth = 0
+    for _index, widget in ipairs(window._widgets) do
+        if widget.type == "input" then
+            local new_height = 10+2*widget.fontlh
+            input_growth = math.max(0, new_height-widget.h)
+            widget.h = new_height
+            widget.oneline = false
+            break
+        end
+    end
+    window:resize(new_width, window.h+input_growth)
+    for _index, widget in ipairs(window._widgets) do
+        local right_margin = old_width-widget.x-widget.w
+        if widget.type == "button" then
+            widget.x = new_width-right_margin-widget.w
+            widget.y = widget.y+input_growth
+        else
+            widget.w = new_width-widget.x-right_margin
+        end
+    end
+end
+
 local function p2p_run_chat ()
     local vn_keypressed = vn.keypressed
     vn.keypressed = function(key, isrepeat)
@@ -91,11 +133,13 @@ function P2P_SESSION_INPUT ( input_name, input_pressed )
     p2p_hail_pressed = nil
     if not open_chat then return end
     vn.reset()
-    luatk.vn(function()
-        luatk.msgInput(_("COMMUNICATION"), _("Broadcast:"), 48, function(msg)
+    local chat_state = luatk.vn(function()
+        local window = luatk.msgInput(_("COMMUNICATION"), _("Broadcast:"), 128, function(msg)
             if msg and #msg > 0 then p2psession.send_chat(msg) end
         end)
+        p2p_size_chat(window)
     end)
+    p2p_keep_chat_live(chat_state)
     p2p_run_chat()
 end
 function P2P_SESSION_ENTER () p2psession.enter(system.cur():nameRaw()) end

@@ -3,6 +3,7 @@ local luatk_stub = {
 }
 
 local map_calls = 0
+local unpauses = 0
 local typed = ""
 local naev_stub = {
    keyGet = function(binding)
@@ -11,6 +12,9 @@ local naev_stub = {
    end,
    mapOpen = function()
       map_calls = map_calls + 1
+   end,
+   unpause = function()
+      unpauses = unpauses + 1
    end,
 }
 
@@ -40,16 +44,31 @@ _ = function(value) return value end
 
 assert(loadfile("events/multiplayer.lua"))()
 
-local run_chat
+local run_chat,keep_chat_live
 for index = 1, 20 do
    local name, value = debug.getupvalue(P2P_SESSION_INPUT, index)
    if not name then break end
    if name == "p2p_run_chat" then
       run_chat = value
-      break
+   elseif name == "p2p_keep_chat_live" then
+      keep_chat_live = value
    end
 end
 assert(run_chat, "P2P chat runner was not captured by the input callback")
+assert(keep_chat_live, "P2P live chat updater was not captured by the input callback")
+
+local steady_updates = 0
+local function steady_update () steady_updates = steady_updates + 1 end
+local chat_state = {}
+chat_state._update = function(self)
+   self._update = steady_update
+   steady_update()
+end
+keep_chat_live(chat_state)
+chat_state:_update(0)
+chat_state:_update(1/60)
+assert(unpauses == 2, "chat overlay did not keep simulation unpaused from its first frame")
+assert(steady_updates == 2, "chat overlay lost LuaTK's replacement update handler")
 
 run_chat()
 assert(map_calls == 0, "starmap opened while chat input was active")

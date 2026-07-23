@@ -156,6 +156,14 @@ local function local_player_name ()
    return player.name()
 end
 
+local chat_sound
+local function play_chat_sound ()
+   pcall(function()
+      if not chat_sound then chat_sound=audio.new("snd/sounds/hail.opus") end
+      chat_sound:play()
+   end)
+end
+
 local function hello ( peer )
    send(peer,{type="hello",node=session.settings.node_id,cap="player",name=local_player_name(),
       endpoint=session.endpoint},true)
@@ -699,6 +707,7 @@ local function on_message ( peer, message )
       else
          pilot.comm(session.identities:display_name(message.node) or message.node,message.text)
       end
+      play_chat_sound()
       -- Arena echoes chat through the server to every client, including the
       -- sender. Do the same so a guest sees confirmation of its own message.
       if session.machine.state=="host" then broadcast(message,true) end
@@ -869,6 +878,7 @@ function session.send_chat ( text )
    -- sequence makes that echo a no-op instead of showing it twice.
    session.machine:accept_sequence("chat:"..session.settings.node_id,msg.seq)
    pilot.comm(local_player_name(),msg.text)
+   play_chat_sound()
    broadcast(msg,true)
    return true
 end
