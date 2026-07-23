@@ -160,8 +160,11 @@ local function new_world ( player_name )
    env.faction={get=function(name) return resource(name) end,
       dynAdd=function(_base,raw) return resource(raw) end}
    env.audio={new=function(path)
-      assert(path=="snd/sounds/hail.opus")
-      return {play=function() world.hail_sounds=(world.hail_sounds or 0)+1 end}
+      if path=="snd/sounds/hail.opus" then
+         return {play=function() world.hail_sounds=(world.hail_sounds or 0)+1 end}
+      end
+      assert(path=="snd/sounds/sokoban/invalid")
+      return {play=function() world.disconnect_sounds=(world.disconnect_sounds or 0)+1 end}
    end}
    env.pilot={
       get=function() local out={}; for _index,p in ipairs(world.pilots) do if not p.removed then out[#out+1]=p end end; return out end,
@@ -395,8 +398,36 @@ assert(#guest.comms==guest_comm_count+1 and guest.comms[#guest.comms].text=="gue
 assert(guest.hail_sounds==guest_hails+1,
    "relayed chat duplicated or omitted the sender's hail sound")
 
+-- An ordinary guest departure is observed by the host and relayed to every
+-- other guest, with one notification and sound on each observer.
+local fourth=new_world("Alex")
+assert(fourth.session.start{enabled=true,node_id="35",listen_port=0,directory="",
+   bootstrap={guest_bootstrap},recent={}})
+assert(fourth.session.enter("Delta Polaris"))
+update({host,guest,third,fourth},24)
+assert(fourth.session.machine.state=="guest" and fourth.session.machine.host=="10")
+local host_disconnects=host.disconnect_sounds or 0
+local guest_disconnects=guest.disconnect_sounds or 0
+local third_disconnects=third.disconnect_sounds or 0
+fourth.session.stop(); update({host,guest,third},16)
+assert(host.disconnect_sounds==host_disconnects+1
+      and guest.disconnect_sounds==guest_disconnects+1
+      and third.disconnect_sounds==third_disconnects+1,
+   "guest departure did not notify the host and every other guest exactly once")
+assert(host.comms[#host.comms].text=="Disconnected."
+      and guest.comms[#guest.comms].text=="Disconnected."
+      and third.comms[#third.comms].text=="Disconnected.",
+   "guest departure did not display a disconnect communication")
+
+guest_disconnects,third_disconnects=guest.disconnect_sounds or 0,third.disconnect_sounds or 0
 host.session.stop(); update({guest,third},16)
 assert(host.speed_enabled,"stopping P2P did not restore the speed key")
+assert(guest.disconnect_sounds==guest_disconnects+1
+      and third.disconnect_sounds==third_disconnects+1,
+   "host departure did not play one disconnect sound for every guest")
+assert(guest.comms[#guest.comms].text=="Disconnected."
+      and third.comms[#third.comms].text=="Disconnected.",
+   "host departure did not display a disconnect communication")
 assert(guest.session.machine.state=="host","guest did not take over after host loss")
 assert(third.session.machine.state=="guest" and third.session.machine.host=="20",
    "third peer did not follow replacement-host election")
@@ -404,7 +435,12 @@ assert(npc_replica:exists(),"host NPC replica was removed during takeover")
 assert(npc_replica.armour==42,"retained NPC state changed during takeover")
 assert(not escort_replica:exists(),"departed owner's craft replica was retained")
 
-guest.session.stop()
+third_disconnects=third.disconnect_sounds
+guest.session.stop(); update({third},8)
+assert(third.disconnect_sounds==third_disconnects+1,
+   "replacement-host departure did not play one disconnect sound for its guest")
+assert(third.comms[#third.comms].text=="Disconnected.",
+   "replacement-host departure did not display a disconnect communication")
 third.session.stop()
 assert(guest.speed_enabled and third.speed_enabled,"leaving P2P did not restore speed controls")
 

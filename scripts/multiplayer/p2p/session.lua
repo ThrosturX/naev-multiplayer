@@ -164,6 +164,27 @@ local function play_chat_sound ()
    end)
 end
 
+local disconnect_sound
+local function play_disconnect_sound ()
+   pcall(function()
+      if not disconnect_sound then disconnect_sound=audio.new("snd/sounds/sokoban/invalid") end
+      disconnect_sound:play()
+   end)
+end
+
+local function remove_remote_player ( node )
+   local departed=session.players[node]
+   if not departed then return false end
+   local display=session.identities and session.identities:display_name(node) or node
+   local name_ok,pilot_name=pcall(function() return departed.pilot:name() end)
+   if name_ok and pilot_name and pilot_name~="" then display=pilot_name end
+   remove_pilot(departed.pilot)
+   session.players[node]=nil
+   pilot.comm(display,"Disconnected.")
+   play_disconnect_sound()
+   return true
+end
+
 local function hello ( peer )
    send(peer,{type="hello",node=session.settings.node_id,cap="player",name=local_player_name(),
       endpoint=session.endpoint},true)
@@ -752,7 +773,7 @@ local function on_message ( peer, message )
    elseif message.type=="leave" then
       session.machine.members[message.node]=nil
       owned.cleanup(session.craft,message.node,function(entry) remove_pilot(entry.pilot) end)
-      local departed=session.players[message.node]; if departed then remove_pilot(departed.pilot); session.players[message.node]=nil end
+      remove_remote_player(message.node)
       if session.machine.state=="host" then broadcast(message,true,peer) end
       if message.node==session.machine.host then handle_host_loss() end
    end
@@ -973,7 +994,7 @@ function session.update ( dt )
                session.machine.members[meta.node]=nil
                owned.cleanup(session.craft,meta.node,function(entry) remove_pilot(entry.pilot) end)
                session.identities:remove(meta.node)
-               local departed=session.players[meta.node]; if departed then remove_pilot(departed.pilot); session.players[meta.node]=nil end
+               remove_remote_player(meta.node)
                if session.machine.state=="host" then
                   local msg=base("leave"); msg.node=meta.node; broadcast(msg,true,event.peer)
                end
