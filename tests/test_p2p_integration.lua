@@ -7,6 +7,10 @@ local peer_mt={}
 peer_mt.__index=peer_mt
 function peer_mt:send ( data, _channel, _flag )
    if self.closed then return end
+   local kind=data:match("^MP2P/1 ([%w_]+)")
+   if kind and self.host.sent_types then
+      self.host.sent_types[kind]=(self.host.sent_types[kind] or 0)+1
+   end
    table.insert(self.remote_host.events,{type="receive",peer=self.remote_peer,data=data})
 end
 function peer_mt:disconnect_now ()
@@ -37,7 +41,7 @@ package.preload.enet=function()
       local port=tonumber(bind:match(":(%d+)$")) or 0
       if port==0 then port=network.next_port; network.next_port=port+1 end
       assert(not network.hosts[port],"duplicate fake ENet port")
-      local host=setmetatable({events={},address="0.0.0.0:"..port},host_mt)
+      local host=setmetatable({events={},address="0.0.0.0:"..port,sent_types={}},host_mt)
       network.hosts[port]=host
       return host
    end}
@@ -90,7 +94,7 @@ local function new_world ( player_name )
    function pilot_methods:target () return self.target_pilot end
    function pilot_methods:health () return self.armour,self.shield,self.stress end
    function pilot_methods:energy () return self.energy_value end
-   function pilot_methods:disabled () return self.disabled==true end
+   function pilot_methods:disabled () return self.is_disabled==true end
    function pilot_methods:radius () return 50 end
    function pilot_methods:id () return self.pilot_id end
    function pilot_methods:withPlayer ()
@@ -112,7 +116,7 @@ local function new_world ( player_name )
    function pilot_methods:setEnergy (v) self.energy_value=v end
    function pilot_methods:setInvincible (v) self.invincible=v end
    function pilot_methods:setNoDeath (v) self.no_death=v end
-   function pilot_methods:setDisable () self.disabled=true end
+   function pilot_methods:setDisable () self.is_disabled=true end
    function pilot_methods:setHostile (v) self.hostile=v==nil or v end
    function pilot_methods:rename (v) self.pilot_name=v end
    function pilot_methods:taskClear () self.task=nil end
@@ -320,7 +324,7 @@ assert(escort_replica.no_death,
    "owner-authoritative craft replica could be destroyed by guest-local damage")
 npc:setDisable()
 advance({host,guest},0.25,8)
-assert(npc_replica.disabled,
+assert(npc_replica:disabled(),
    "authoritative NPC disable lifecycle was not replicated")
 assert(not escort_replica:withPlayer(),"remote host craft became guest-owned")
 assert(escort_replica:ainame()=="escort" and escort_replica:leader()==host_proxy,
@@ -334,7 +338,14 @@ guest_fighter:setLeader(guest.local_pilot)
 -- Pilot IDs are process-local and frequently collide across peers. The wire
 -- entity namespace must keep these two different owners' craft distinct.
 guest_fighter.pilot_id=escort.pilot_id
-advance({host,guest},0.25,12)
+guest.session.last_craft=guest.clock
+local guest_craft_states=guest.session.host.sent_types.craft_state or 0
+advance({host,guest},0.9,12)
+assert((guest.session.host.sent_types.craft_state or 0)==guest_craft_states,
+   "owned craft state was published faster than 1 Hz")
+advance({host,guest},0.1,12)
+assert((guest.session.host.sent_types.craft_state or 0)>guest_craft_states,
+   "owned craft state was not published at 1 Hz")
 local guest_fighter_replica=find(host,"Guest Fighter","P2P Craft 20")
 assert(guest_fighter_replica,"host did not receive the guest fighter")
 assert(host.session.craft["20:"..escort.pilot_id]
@@ -378,7 +389,7 @@ npc:setPos(vector(500,0))
 escort:setPos(vector(500,0))
 local npc_velocity_sets=npc_replica.velocity_sets or 0
 local escort_velocity_sets=escort_replica.velocity_sets or 0
-for _index,w in ipairs({host,guest,third}) do w.clock=w.clock+0.25 end
+for _index,w in ipairs({host,guest,third}) do w.clock=w.clock+1 end
 update({host,guest,third},7)
 local npc_x=select(1,npc_replica:pos():get())
 local escort_x=select(1,escort_replica:pos():get())
@@ -457,9 +468,9 @@ assert(fourth_on_host.last_chat=="Disconnected."
       and fourth_on_guest.last_chat=="Disconnected."
       and fourth_on_third.last_chat=="Disconnected.",
    "guest departure communication did not come from the departed proxies")
-assert(fourth_on_host:exists() and fourth_on_host.disabled
-      and fourth_on_guest:exists() and fourth_on_guest.disabled
-      and fourth_on_third:exists() and fourth_on_third.disabled,
+assert(fourth_on_host:exists() and fourth_on_host:disabled()
+      and fourth_on_guest:exists() and fourth_on_guest:disabled()
+      and fourth_on_third:exists() and fourth_on_third:disabled(),
    "stationary departed guest proxies were not retained and disabled")
 
 -- A returning participant replaces its stale proxy. Disabled copies visibly
@@ -540,7 +551,7 @@ stale_host.clock=stale_host.clock+13
 stale_host.session.update()
 assert(not stale_host.session.players["39"]
       and stale_host.session.departures["39"].pilot==stale_proxy
-      and stale_proxy.disabled,
+      and stale_proxy:disabled(),
    "silent participant timeout left a one-sided player ghost")
 stale_guest.session.stop()
 stale_host.session.stop()

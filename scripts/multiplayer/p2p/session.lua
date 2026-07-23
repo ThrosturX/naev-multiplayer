@@ -9,8 +9,9 @@ local ai_setup = require "ai.core.setup"
 
 local session = {
    running=false, peers={}, endpoints={}, players={}, npcs={}, craft={}, departures={},
-   peer_meta={}, sequence=0, last_player=0, last_npc=0, last_manifest=0,
-   last_claim=0, host_inventory={}, owned_inventory={}, craft_factions={}, host_welcomed={},
+   peer_meta={}, sequence=0, last_player=0, last_npc=0, last_craft=0, last_manifest=0,
+   last_claim=0, last_liveness=0, host_inventory={}, owned_inventory={},
+   craft_factions={}, host_welcomed={},
 }
 
 -- naev.ticksGame() is already expressed in seconds. Keeping all discovery and
@@ -543,12 +544,13 @@ local function pilot_owned ( p )
    return false
 end
 
-local function is_replica ( p )
-   for _entity_id,e in pairs(session.players) do if e.pilot==p then return true end end
-   for _entity_id,e in pairs(session.npcs) do if e.pilot==p then return true end end
-   for _entity_id,e in pairs(session.craft) do if e.pilot==p then return true end end
-   for _node,e in pairs(session.departures) do if e.pilot==p then return true end end
-   return false
+local function replica_lookup ()
+   local lookup={}
+   for _entity_id,e in pairs(session.players) do lookup[e.pilot]=true end
+   for _entity_id,e in pairs(session.npcs) do lookup[e.pilot]=true end
+   for _entity_id,e in pairs(session.craft) do lookup[e.pilot]=true end
+   for _node,e in pairs(session.departures) do lookup[e.pilot]=true end
+   return lookup
 end
 
 local function pilot_id ( p )
@@ -558,8 +560,7 @@ end
 
 local function pilot_record ( p )
    local armour,shield,stress=p:health(); local x,y=p:pos():get(); local vx,vy=p:vel():get()
-   local disabled=false
-   pcall(function() disabled=p:disabled() end)
+   local disabled=p:disabled()
    local leader_id=""
    local leader_ok,leader=pcall(function() return p:leader() end)
    if leader_ok and leader then
@@ -589,14 +590,19 @@ local function state_line ( rec )
       rec.disabled and 1 or 0},",")
 end
 
-local function inventory ()
+local function inventory ( include_ambient, include_craft )
    local ok,list=pcall(pilot.get)
    if not ok then return {},{} end
+   local replicas=replica_lookup()
    local ambient,craft={},{ }
    for _index,p in ipairs(list) do
-      if p~=player.pilot() and exists(p) and not is_replica(p) then
-         local rec=pilot_record(p)
-         if pilot_owned(p) then craft[rec.entity]=rec else ambient[rec.entity]=rec end
+      if p~=player.pilot() and exists(p) and not replicas[p] then
+         local owned_by_player=pilot_owned(p)
+         if (owned_by_player and include_craft)
+               or (not owned_by_player and include_ambient and session.machine.state=="host") then
+            local rec=pilot_record(p)
+            if owned_by_player then craft[rec.entity]=rec else ambient[rec.entity]=rec end
+         end
       end
    end
    return ambient,craft
@@ -605,8 +611,9 @@ end
 local function remove_guest_population ()
    local ok,list=pcall(pilot.get)
    if not ok then return end
+   local replicas=replica_lookup()
    for _index,p in ipairs(list) do
-      if p~=player.pilot() and not pilot_owned(p) and not is_replica(p) then remove_pilot(p) end
+      if p~=player.pilot() and not pilot_owned(p) and not replicas[p] then remove_pilot(p) end
    end
    pilot.toggleSpawn(false)
 end
@@ -714,10 +721,11 @@ local function parse_states ( packed, container, owner )
             motion_target(entry,state)
             entry.pilot:setHealth(state.armour,state.shield,state.stress)
             entry.pilot:setEnergy(state.energy)
-            if f[12]=="1" then
-               local disabled_ok,disabled=pcall(function() return entry.pilot:disabled() end)
-               if not disabled_ok or not disabled then pcall(function() entry.pilot:setDisable(true) end) end
+            local authoritative_disabled=f[12]=="1"
+            if authoritative_disabled and not entry.authoritative_disabled then
+               pcall(function() entry.pilot:setDisable(true) end)
             end
+            entry.authoritative_disabled=authoritative_disabled
             if f[11]=="-" then
                entry.pilot:setTarget(nil)
             elseif f[11] and f[11]~="" then
@@ -971,9 +979,11 @@ local function publish_state_batches ( kind, lines, owner )
    flush()
 end
 
-publish_entities = function ( full )
-   local ambient,craft=inventory()
-   if session.machine.state=="host" then
+publish_entities = function ( full, include_ambient, include_craft )
+   include_ambient=include_ambient~=false
+   include_craft=include_craft~=false
+   local ambient,craft=inventory(include_ambient,include_craft)
+   if include_ambient and session.machine.state=="host" then
       for id,rec in pairs(ambient) do
          if full or not session.host_inventory[id] then broadcast(add_message(rec,"npc_add"),true) end
       end
@@ -988,19 +998,21 @@ publish_entities = function ( full )
       local lines={}; for _entity_id,rec in pairs(ambient) do lines[#lines+1]=state_line(rec) end
       publish_state_batches("npc_state",lines)
    end
-   for id,rec in pairs(craft) do
-      if full or not session.owned_inventory[id] then broadcast(add_message(rec,"craft_manifest",session.settings.node_id),true) end
-   end
-   for id in pairs(session.owned_inventory) do
-      if not craft[id] then
-         session.sequence=session.sequence+1
-         local msg=base("craft_remove"); msg.owner=session.settings.node_id; msg.entity=id; msg.seq=session.sequence
-         broadcast(msg,true)
+   if include_craft then
+      for id,rec in pairs(craft) do
+         if full or not session.owned_inventory[id] then broadcast(add_message(rec,"craft_manifest",session.settings.node_id),true) end
       end
+      for id in pairs(session.owned_inventory) do
+         if not craft[id] then
+            session.sequence=session.sequence+1
+            local msg=base("craft_remove"); msg.owner=session.settings.node_id; msg.entity=id; msg.seq=session.sequence
+            broadcast(msg,true)
+         end
+      end
+      session.owned_inventory=craft
+      local lines={}; for _entity_id,rec in pairs(craft) do lines[#lines+1]=state_line(rec) end
+      publish_state_batches("craft_state",lines,session.settings.node_id)
    end
-   session.owned_inventory=craft
-   local lines={}; for _entity_id,rec in pairs(craft) do lines[#lines+1]=state_line(rec) end
-   publish_state_batches("craft_state",lines,session.settings.node_id)
 end
 
 function session.start ( settings )
@@ -1012,6 +1024,7 @@ function session.start ( settings )
    session.host=host; session.running=true; session.machine=core.new(session.settings.node_id,now); session.machine:start()
    session.identities=identity.new(session.settings.node_id,local_player_name())
    session.member_endpoints={}; session.craft_factions={}; session.departures={}; session.host_welcomed={}
+   session.last_liveness=now()
    session.endpoint=tostring(host:get_socket_address())
    print("P2P: listener started")
    session.machine.topology:load_peers(session.settings.recent)
@@ -1041,6 +1054,7 @@ function session.enter ( system_name )
       return true
    end
    session.leave(); session.machine:enter(system_name)
+   session.last_liveness=now()
    reset_smoothing()
    session.greeted_system=nil
    lock_autonav(true)
@@ -1153,24 +1167,27 @@ function session.update ( dt )
    end
    greet_host()
    local stamp=now()
-   for node,entry in pairs(session.departures) do
-      if not exists(entry.pilot) then session.departures[node]=nil end
-   end
-   local stale_nodes={}
-   for node,entry in pairs(session.players) do
-      if stamp-(entry.last_seen or stamp)>12 then stale_nodes[#stale_nodes+1]=node end
-   end
-   for _index,node in ipairs(stale_nodes) do
-      session.machine.members[node]=nil
-      owned.cleanup(session.craft,node,function(entry) remove_pilot(entry.pilot) end)
-      session.identities:remove(node)
-      remove_remote_player(node)
-      if session.machine.state=="host" then
-         local msg=base("leave")
-         msg.node=node
-         broadcast(msg,true)
+   if stamp-(session.last_liveness or 0)>=1 then
+      session.last_liveness=stamp
+      for node,entry in pairs(session.departures) do
+         if not exists(entry.pilot) then session.departures[node]=nil end
       end
-      if node==session.machine.host then handle_host_loss() end
+      local stale_nodes={}
+      for node,entry in pairs(session.players) do
+         if stamp-(entry.last_seen or stamp)>12 then stale_nodes[#stale_nodes+1]=node end
+      end
+      for _index,node in ipairs(stale_nodes) do
+         session.machine.members[node]=nil
+         owned.cleanup(session.craft,node,function(entry) remove_pilot(entry.pilot) end)
+         session.identities:remove(node)
+         remove_remote_player(node)
+         if session.machine.state=="host" then
+            local msg=base("leave")
+            msg.node=node
+            broadcast(msg,true)
+         end
+         if node==session.machine.host then handle_host_loss() end
+      end
    end
    smooth_replicas(dt,stamp)
    local action=session.machine:tick()
@@ -1187,7 +1204,14 @@ function session.update ( dt )
       broadcast(claim_message(),true); session.last_claim=stamp
    end
    if session.machine.system and stamp-session.last_player>=1/15 then publish_player(false); session.last_player=stamp end
-   if session.machine.system and stamp-session.last_npc>=0.2 then publish_entities(false); session.last_npc=stamp end
+   if session.machine.system and session.machine.state=="host" and stamp-session.last_npc>=0.2 then
+      publish_entities(false,true,false)
+      session.last_npc=stamp
+   end
+   if session.machine.system and stamp-session.last_craft>=1 then
+      publish_entities(false,false,true)
+      session.last_craft=stamp
+   end
    if session.machine.system and stamp-session.last_manifest>=10 then publish_player(true); publish_entities(true); session.last_manifest=stamp end
 end
 

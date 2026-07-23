@@ -145,7 +145,7 @@ function P2P_SESSION_INPUT ( input_name, input_pressed )
     if not open_chat then return end
     vn.reset()
     local chat_state = luatk.vn(function()
-        local window = luatk.msgInput(_("COMMUNICATION"), _("Broadcast:"), 128, function(msg)
+        local window = luatk.msgInput(_("COMMUNICATION"), _("Broadcast:"), 96, function(msg)
             if msg and #msg > 0 then p2psession.send_chat(msg) end
         end)
         p2p_size_chat(window)
