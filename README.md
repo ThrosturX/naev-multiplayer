@@ -12,8 +12,9 @@ Naev must be built with `lua_enet`; set `lua_enet = true` in `conf.lua`.
 
 Open **Info → Multiplayer → P2P Session Settings**. Enable P2P and configure:
 
-- **Listen port**: `0` selects an ephemeral port. Use a fixed, forwarded UDP
-  port when peers must connect from another network.
+- **Listen port**: `0` selects an ephemeral port and lets the directory attempt
+  automatic UDP hole punching. A fixed, forwarded UDP port remains the most
+  reliable fallback for restrictive or symmetric NATs.
 - **Directory**: defaults to `79.76.110.205:60939`. Its absence is silent and does
   not stop direct discovery. This is also an ordinary initial peer address: a
   player listening there is contacted exactly like a bootstrap peer.
@@ -23,8 +24,11 @@ Open **Info → Multiplayer → P2P Session Settings**. Enable P2P and configure
 
 Peers remember up to 32 recently seen endpoints. On entering a system they ask
 connected, configured, and remembered peers for the current host. If no host is
-verified in 1.5 seconds, the lowest-ID claimant becomes host. This is direct
-UDP connectivity only: there is no NAT traversal or traffic relay.
+verified in 1.5 seconds, the lowest-ID claimant becomes host. Directory peers
+introduce both sides using their observed public endpoints so both send direct
+ENet traffic and open typical consumer NAT mappings. Gameplay remains direct;
+the directory never relays it. Symmetric NATs may still require one player to
+use a fixed forwarded UDP port.
 
 The host owns the system's NPC population. A guest removes its local ambient
 and mission NPCs and recreates the host's population; disable P2P before
@@ -51,9 +55,11 @@ given a local display suffix such as `#2`; a player's own name is never changed.
 
 ## Directory service
 
-`directory/main.lua` is a minimal standalone directory using the same ENet
-transport and `MP2P/1` codec as players. It stores no accounts or gameplay
-data. Active hosts refresh their claim every 10 seconds. Claims remain active
+`directory/main.lua` is a minimal standalone rendezvous directory using the
+same ENet transport and `MP2P/1` codec as players. It stores no accounts or
+gameplay data. It introduces peers using observed and advertised endpoint
+candidates, but never handles their gameplay packets. Active hosts refresh
+their claim every 10 seconds. Claims remain active
 for the directory connection's lifetime; disconnected claims are retained as
 bounded stale hints until superseded or evicted. Clients retry configured
 directory/bootstrap connections every five seconds, and hosts immediately
@@ -82,8 +88,8 @@ sudo systemctl status multiplayer-directory
 Allow inbound UDP port `60939` in both the VM's OS firewall and its cloud
 network/security-list firewall. Players enter the public address in Naev using
 the space-separated UI form, for example `directory.example.org 60939`.
-The service supplies discovery only: peers still need direct UDP reachability,
-and gameplay traffic is never relayed through the directory.
+The service supplies discovery and UDP rendezvous. Peers still establish a
+direct ENet connection, and gameplay traffic is never relayed through it.
 
 See `directory/OCI.md` for an exact Oracle Cloud Always Free deployment and
 verification walkthrough.

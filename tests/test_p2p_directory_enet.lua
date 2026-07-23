@@ -18,9 +18,9 @@ local service=Directory.new{
    disconnect=function(peer) peer:disconnect_now() end,
 }
 
-local host_ready,guest_ready,hint
+local host_ready,guest_ready,hint,host_punch,guest_punch
 local deadline=os.clock()+2
-while not hint and os.clock()<deadline do
+while (not hint or not host_punch or not guest_punch) and os.clock()<deadline do
    local event=server:service(5)
    while event do
       if event.type=="connect" then service:connect(event.peer,tostring(event.peer))
@@ -33,9 +33,13 @@ while not hint and os.clock()<deadline do
    while event do
       if event.type=="connect" and not host_ready then
          host_ready=true
-         host_peer:send(assert(codec.encode{type="hello",node="10",cap="player",name="Host"}),0,"reliable")
+         host_peer:send(assert(codec.encode{type="hello",node="10",cap="player",name="Host",
+            endpoint=advertised}),0,"reliable")
          host_peer:send(assert(codec.encode{type="claim",node="10",system="Delta Polaris",
             claim="10:1",endpoint=advertised}),0,"reliable")
+      elseif event.type=="receive" then
+         local message=assert(codec.decode(event.data))
+         if message.type=="punch" then host_punch=message end
       end
       event=host_client:service(0)
    end
@@ -44,11 +48,13 @@ while not hint and os.clock()<deadline do
    while event do
       if event.type=="connect" and not guest_ready then
          guest_ready=true
-         guest_peer:send(assert(codec.encode{type="hello",node="20",cap="player",name="Guest"}),0,"reliable")
+         guest_peer:send(assert(codec.encode{type="hello",node="20",cap="player",name="Guest",
+            endpoint=guest_client:get_socket_address()}),0,"reliable")
          guest_peer:send(assert(codec.encode{type="query",node="20",system="Delta Polaris"}),0,"reliable")
       elseif event.type=="receive" then
          local message=assert(codec.decode(event.data))
          if message.type=="hint" then hint=message end
+         if message.type=="punch" then guest_punch=message end
       end
       event=guest_client:service(0)
    end
@@ -58,6 +64,8 @@ assert(hint,"real ENet directory did not return a hint")
 assert(hint.host=="10")
 assert(hint.endpoint=="127.0.0.1:"..advertised:match(":(%d+)$"))
 assert(hint.ttl>=1 and hint.ttl<=60)
+assert(host_punch and host_punch.peer=="20")
+assert(guest_punch and guest_punch.peer=="10")
 
 host_client:destroy(); guest_client:destroy(); server:destroy()
 print("ok - real ENet directory loopback")

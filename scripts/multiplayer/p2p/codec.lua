@@ -27,7 +27,7 @@ codec.escape = escape
 codec.unescape = unescape
 
 local valid_types = {
-   hello=true, query=true, hint=true, claim=true, leave=true,
+   hello=true, query=true, hint=true, punch=true, claim=true, leave=true,
    player_manifest=true, player_state=true, chat=true,
    npc_manifest=true, npc_add=true, npc_remove=true, npc_state=true,
    craft_manifest=true, craft_state=true, craft_remove=true, craft_order=true,
@@ -36,6 +36,7 @@ local valid_types = {
 local required = {
    hello={"node","cap"}, query={"node","system"},
    hint={"node","system","host","endpoint","claim","ttl"},
+   punch={"node","system","peer","endpoint"},
    claim={"node","system","claim","endpoint"}, leave={"node","system"},
    player_manifest={"node","system","entity","ship","name"},
    player_state={"node","system","entity","seq","x","y","vx","vy","dir"},
@@ -81,6 +82,7 @@ local function validate ( message )
    end
    if message.node and not message.node:match("^[%x]+$") then return nil, "invalid node" end
    if message.host and not message.host:match("^[%x]+$") then return nil, "invalid host" end
+   if message.peer and not message.peer:match("^[%x]+$") then return nil, "invalid peer" end
    if message.endpoint and (not message.endpoint:match("^[^%s:]+:%d+$") or #message.endpoint > 255) then
       return nil, "invalid endpoint"
    end

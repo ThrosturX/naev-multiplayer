@@ -19,6 +19,13 @@ local function endpoint_port ( endpoint )
    return math.floor(port)
 end
 
+local function canonical_endpoint ( endpoint )
+   local host=endpoint_host(endpoint)
+   local port=endpoint_port(endpoint)
+   if not host or not port then return nil end
+   return host..":"..tostring(port)
+end
+
 function directory.new ( options )
    options=options or {}
    return setmetatable({
@@ -37,7 +44,7 @@ function directory:send ( peer, message )
 end
 
 function directory:connect ( peer, observed_endpoint )
-   self.peers[peer]={endpoint=observed_endpoint,queries={}}
+   self.peers[peer]={endpoint=canonical_endpoint(observed_endpoint),queries={}}
    return self:send(peer,{type="hello",node=self.node_id,cap="directory"})
 end
 
@@ -76,9 +83,40 @@ function directory:send_hint ( peer, system_name, claim )
       ttl=60})
 end
 
+function directory:send_punch ( peer, system_name, node, endpoint )
+   if not endpoint then return end
+   return self:send(peer,{type="punch",node=self.node_id,system=system_name,
+      peer=node,endpoint=endpoint})
+end
+
+function directory:send_candidates ( peer, system_name, node, candidate, same_public_ip )
+   local sent={}
+   local function send_candidate ( endpoint )
+      if endpoint and not sent[endpoint] then
+         sent[endpoint]=true
+         self:send_punch(peer,system_name,node,endpoint)
+      end
+   end
+   send_candidate(candidate.endpoint)
+   send_candidate(candidate.alternate)
+   if same_public_ip and candidate.advertised_port then
+      send_candidate("127.0.0.1:"..tostring(candidate.advertised_port))
+   end
+end
+
+function directory:introduce ( peer, system_name, claim )
+   self:send_hint(peer,system_name,claim)
+   local guest=self.peers[peer]
+   local host=self.peers[claim.peer]
+   if not guest or not guest.node or not claim.active or not host or peer==claim.peer then return end
+   local same_public_ip=endpoint_host(guest.endpoint)==endpoint_host(claim.endpoint)
+   self:send_candidates(peer,system_name,claim.node,claim,same_public_ip)
+   self:send_candidates(claim.peer,system_name,guest.node,guest,same_public_ip)
+end
+
 function directory:publish_hint ( system_name, claim )
    for peer,meta in pairs(self.peers) do
-      if meta.node and meta.queries[system_name] then self:send_hint(peer,system_name,claim) end
+      if meta.node and meta.queries[system_name] then self:introduce(peer,system_name,claim) end
    end
 end
 
@@ -93,6 +131,12 @@ function directory:receive ( peer, packet )
          self:reject(peer); return nil,"invalid hello"
       end
       meta.node=message.node
+      meta.advertised_port=endpoint_port(message.endpoint)
+      local observed_host=endpoint_host(meta.endpoint)
+      if observed_host and meta.advertised_port then
+         meta.alternate=observed_host..":"..tostring(meta.advertised_port)
+         if meta.alternate==meta.endpoint then meta.alternate=nil end
+      end
       return true
    end
    if not meta.node or message.node~=meta.node then
@@ -101,14 +145,19 @@ function directory:receive ( peer, packet )
 
    if message.type=="claim" then
       local host=endpoint_host(meta.endpoint)
-      local port=endpoint_port(message.endpoint)
-      if not host or not port then return nil,"unusable endpoint" end
+      local observed=canonical_endpoint(meta.endpoint)
+      local advertised_port=endpoint_port(message.endpoint)
+      if not host or not observed or not advertised_port then return nil,"unusable endpoint" end
+      meta.advertised_port=advertised_port
+      local alternate=host..":"..tostring(advertised_port)
+      if alternate==observed then alternate=nil end
       local stamp=self.now()
       local old=self.hosts[message.system]
       if not old or not old.active or old.node==message.node or message.node<old.node then
          if not old then self:make_host_room() end
          local claim={node=message.node,claim=message.claim,
-            endpoint=host..":"..tostring(port),seen=stamp,active=true,peer=peer}
+            endpoint=observed,alternate=alternate,advertised_port=advertised_port,
+            seen=stamp,active=true,peer=peer}
          self.hosts[message.system]=claim
          self:publish_hint(message.system,claim)
       end
@@ -130,7 +179,8 @@ function directory:receive ( peer, packet )
       end
       local claim=self.hosts[message.system]
       if not claim then return true end
-      return self:send_hint(peer,message.system,claim)
+      self:introduce(peer,message.system,claim)
+      return true
    end
 
    -- Directory peers never join systems or relay gameplay messages.

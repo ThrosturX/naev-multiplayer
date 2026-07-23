@@ -17,7 +17,8 @@ The isolated P2P implementation is:
 - `p2p/directory.lua`: bounded, in-memory directory claim and query logic.
 
 `directory/main.lua` is the standalone blocking lua-enet adapter. It is not
-loaded by Naev. The directory never joins a system or relays gameplay data.
+loaded by Naev. The directory never joins a system or relays gameplay data;
+its reliable `punch` introductions only make both players dial one another.
 
 Only plain settings are persisted. ENet hosts/peers, ownership claims, hooks,
 pilots, and other runtime handles must never enter event memory.
@@ -46,6 +47,12 @@ one process's monotonic or wall-clock timestamp on the wire as an expiry.
 The TTL bounds each client's hint cache, not directory claim lifetime. Active
 claims follow connection liveness. Disconnected claims remain as bounded stale
 hints and are immediately superseded by any new live claimant.
+For live claims, use the directory connection's observed endpoint as the
+primary candidate and retain the advertised listen port as a fallback. Send
+both peers reliable `punch` introductions so their shared ENet sockets emit
+traffic simultaneously. Same-public-IP peers also receive loopback candidates
+for convenient two-instance local testing. A verified player `hello` remains
+mandatory before any introduced peer can affect session state.
 
 The update hook must call `service(0)` and drain only immediately available
 events. Remove update, enter, takeoff, landing, and jump hooks when disabling

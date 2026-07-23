@@ -30,6 +30,10 @@ test("protocol escaping and validation", function()
       seq=2,order="e_hold"})
    assert(not codec.encode{type="craft_order",node="a1",system="X",owner="a1",
       seq=3,order="self_destruct"})
+   assert(codec.encode{type="punch",node="d1",system="X",peer="a1",
+      endpoint="198.51.100.2:4567"})
+   assert(not codec.encode{type="punch",node="d1",system="X",peer="not-a-node",
+      endpoint="198.51.100.2:4567"})
 end)
 
 test("local-only player name aliases", function()

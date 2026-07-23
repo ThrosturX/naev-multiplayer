@@ -77,11 +77,28 @@ P2P Session Settings**, set **Directory** using Naev's space-separated input:
 203.0.113.10 60939
 ```
 
-Use the VM's real public address, not the example above. A host should use a
-fixed, publicly reachable UDP listen port. The directory discovers peers but
-does not relay gameplay or provide NAT traversal, so that host port still has
-to be forwarded through the host's router/firewall.
+Use the VM's real public address, not the example above. Leave both player
+listen ports at `0` for the normal automatic rendezvous path. The directory
+introduces both observed public endpoints so the players can UDP hole punch;
+it does not relay gameplay. Restrictive or symmetric NATs may still require
+one player to use a fixed, forwarded UDP listen port.
 
 Start the fixed-port host first, enter a system, and wait two seconds. Then
 enter the same system on the second peer without adding the host as a bootstrap
 peer. The second peer should obtain the host solely from the OCI directory.
+
+## Upgrade an existing service
+
+From the plugin repository, an existing `/opt/naev-multiplayer` deployment only
+needs three runtime files. Replace `ubuntu@203.0.113.10` with the SSH target:
+
+```sh
+rsync -azR directory/main.lua scripts/multiplayer/p2p/codec.lua \
+  scripts/multiplayer/p2p/directory.lua ubuntu@203.0.113.10:/tmp/naev-multiplayer-update/
+ssh ubuntu@203.0.113.10 \
+  'sudo cp -a /tmp/naev-multiplayer-update/. /opt/naev-multiplayer/ && sudo systemctl restart multiplayer-directory && sudo systemctl --no-pager status multiplayer-directory'
+```
+
+Players must update the plugin too because older `MP2P/1` clients ignore the
+new `punch` message. No firewall changes beyond directory UDP port `60939` are
+needed on the VM.

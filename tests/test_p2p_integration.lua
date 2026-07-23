@@ -1,5 +1,7 @@
 package.path = "scripts/?.lua;scripts/?/init.lua;" .. package.path
 
+local wire_codec=require "multiplayer.p2p.codec"
+
 local network={hosts={},next_port=63000}
 local peer_mt={}
 peer_mt.__index=peer_mt
@@ -382,4 +384,44 @@ advance({reconnect_host,reconnect_guest},6,32)
 assert(reconnect_guest.session.machine.state=="guest" and reconnect_guest.session.machine.host=="60",
    "configured endpoint did not reconnect and resolve its temporary claim")
 reconnect_host.session.stop(); reconnect_guest.session.stop()
+
+-- A verified directory can introduce two otherwise unconfigured players.
+-- Both use the same ENet host/socket for the directory and direct gameplay,
+-- which is the invariant required for the public NAT mapping to be useful.
+local directory_port=61301
+local fake_directory=setmetatable({events={},address="0.0.0.0:"..directory_port},host_mt)
+network.hosts[directory_port]=fake_directory
+local punch_host=new_world("Punch Host")
+local punch_guest=new_world("Punch Guest")
+assert(punch_host.session.start{enabled=true,node_id="80",listen_port=61302,
+   directory="",bootstrap={},recent={}})
+assert(punch_host.session.enter("Gamma Polaris"))
+assert(punch_guest.session.start{enabled=true,node_id="90",listen_port=0,
+   directory="127.0.0.1:"..directory_port,bootstrap={},recent={}})
+assert(punch_guest.session.enter("Gamma Polaris"))
+update({punch_guest},4)
+local directory_peer
+local directory_event=fake_directory:service(0)
+while directory_event do
+   if directory_event.type=="connect" then directory_peer=directory_event.peer end
+   directory_event=fake_directory:service(0)
+end
+assert(directory_peer,"guest did not connect to fake directory")
+directory_peer:send(assert(wire_codec.encode{
+   type="hello",node="d1",cap="directory"}),0,"reliable")
+update({punch_guest},4)
+directory_peer:send(assert(wire_codec.encode{
+   type="punch",node="d1",system="Gamma Polaris",peer="80",
+   endpoint="127.0.0.1:61302"}),0,"reliable")
+update({punch_host,punch_guest},16)
+local host_verified,guest_verified
+for _peer,meta in pairs(punch_host.session.peer_meta) do
+   if meta.verified and meta.node=="90" then host_verified=true end
+end
+for _peer,meta in pairs(punch_guest.session.peer_meta) do
+   if meta.verified and meta.node=="80" then guest_verified=true end
+end
+assert(host_verified and guest_verified,
+   "directory punch did not create a directly verified player connection")
+punch_host.session.stop(); punch_guest.session.stop()
 print("ok - three-peer session integration")

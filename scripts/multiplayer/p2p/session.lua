@@ -155,7 +155,8 @@ local function local_player_name ()
 end
 
 local function hello ( peer )
-   send(peer,{type="hello",node=session.settings.node_id,cap="player",name=local_player_name()},true)
+   send(peer,{type="hello",node=session.settings.node_id,cap="player",name=local_player_name(),
+      endpoint=session.endpoint},true)
    if session.machine.system then send(peer,base("query"),true) end
 end
 
@@ -558,6 +559,14 @@ local function on_message ( peer, message )
       return
    end
    if not meta.verified then return end
+   if message.type=="punch" then
+      if meta.cap=="directory" and message.system==session.machine.system
+            and message.peer~=session.settings.node_id then
+         print("P2P: directory introduced peer")
+         connect(message.endpoint,message.peer)
+      end
+      return
+   end
    if message.type=="query" then host_hint(peer); return end
    if message.type=="hint" then
       if message.host==session.settings.node_id then return end
