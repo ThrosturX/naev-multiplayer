@@ -8,13 +8,17 @@ local enet = require "enet"
 local ai_setup = require "ai.core.setup"
 
 local MAX_EVENTS_PER_FRAME = 48
+local NPC_STATE_INTERVAL = 1/3
+-- The outer codec percent-escapes this packed field again. Keeping the raw
+-- payload well below MAX_PACKET leaves room for worst-case expansion.
+local NPC_MANIFEST_BATCH_PAYLOAD = 4000
 
 local session = {
    running=false, peers={}, endpoints={}, players={}, npcs={}, craft={}, departures={},
    peer_meta={}, sequence=0, last_player=0, last_npc=0, last_craft=0,
    last_claim=0, last_liveness=0, host_inventory={}, owned_inventory={},
    craft_factions={}, host_welcomed={}, pending_leader_owners={}, resync_sent={},
-   ownership_cache={}, initial_sync_until=0,
+   ownership_cache={}, initial_sync_until=0, pending_npc_manifests=nil,
 }
 
 -- naev.ticksGame() is already expressed in seconds. Keeping all discovery and
@@ -628,6 +632,64 @@ local function add_message ( rec, kind, owner )
    return msg
 end
 
+local function manifest_field ( value )
+   if value==nil or value=="" then return "~" end
+   return "v"..codec.escape(value)
+end
+
+local function manifest_line ( rec )
+   return table.concat({
+      manifest_field(rec.entity),manifest_field(rec.ship),manifest_field(rec.name),
+      manifest_field(rec.faction),manifest_field(rec.outfits),manifest_field(rec.slots),
+      manifest_field(rec.x),manifest_field(rec.y),manifest_field(rec.vx),
+      manifest_field(rec.vy),manifest_field(rec.dir),manifest_field(rec.armour),
+      manifest_field(rec.shield),manifest_field(rec.stress),manifest_field(rec.energy),
+      manifest_field(rec.target),manifest_field(rec.leader),
+   },",")
+end
+
+local function queue_npc_manifests ( records )
+   local entries={}
+   for id,p in pairs(records) do entries[#entries+1]={id=id,pilot=p} end
+   session.pending_npc_manifests={entries=entries,at=1}
+end
+
+local function publish_next_npc_manifest_batch ()
+   local pending=session.pending_npc_manifests
+   if not pending then return end
+   local batch,size={},0
+   while pending.at<=#pending.entries do
+      local entry=pending.entries[pending.at]
+      if not exists(entry.pilot) then
+         pending.at=pending.at+1
+      else
+         local rec=entry.rec or manifest_record(entry.pilot,entry.id)
+         entry.rec=rec
+         local line=manifest_line(rec)
+         if #line>NPC_MANIFEST_BATCH_PAYLOAD then
+            if #batch>0 then break end
+            pending.at=pending.at+1
+            broadcast(add_message(rec,"npc_add"),true)
+            if pending.at>#pending.entries then session.pending_npc_manifests=nil end
+            return
+         end
+         if #batch>0 and size+#line+1>NPC_MANIFEST_BATCH_PAYLOAD then break end
+         batch[#batch+1]=line
+         size=size+#line+1
+         pending.at=pending.at+1
+      end
+   end
+   if #batch>0 then
+      session.sequence=session.sequence+1
+      local msg=base("npc_manifest")
+      msg.claim=session.machine.claim
+      msg.seq=session.sequence
+      msg.entities=table.concat(batch,";")
+      broadcast(msg,true)
+   end
+   if pending.at>#pending.entries then session.pending_npc_manifests=nil end
+end
+
 local function state_line ( rec )
    return table.concat({rec.entity,rec.x,rec.y,rec.vx,rec.vy,rec.dir,rec.armour,rec.shield,
       rec.stress,rec.energy,(rec.target and rec.target~="") and rec.target or "-",
@@ -834,6 +896,35 @@ local function parse_states ( packed, container, owner )
    end
 end
 
+local function parse_manifest_field ( field )
+   if field=="~" then return "" end
+   if field:sub(1,1)~="v" then return nil end
+   return codec.unescape(field:sub(2))
+end
+
+local function spawn_npc_manifest ( message )
+   for line in message.entities:gmatch("([^;]+)") do
+      local fields,field_count,valid={},0,true
+      for field in line:gmatch("([^,]+)") do
+         field_count=field_count+1
+         local decoded=parse_manifest_field(field)
+         if decoded==nil then valid=false else fields[field_count]=decoded end
+      end
+      if valid and field_count==17 then
+         local manifest={
+            type="npc_add",node=message.node,system=message.system,claim=message.claim,
+            seq=message.seq,entity=fields[1],ship=fields[2],name=fields[3],
+            faction=fields[4],outfits=fields[5],slots=fields[6],
+            x=fields[7],y=fields[8],vx=fields[9],vy=fields[10],dir=fields[11],
+            armour=fields[12],shield=fields[13],stress=fields[14],energy=fields[15],
+            target=fields[16]~="" and fields[16] or nil,
+            leader=fields[17]~="" and fields[17] or nil,
+         }
+         if codec.validate(manifest) then spawn_npc(manifest) end
+      end
+   end
+end
+
 local function handle_host_loss ()
    local winner=session.machine:host_lost()
    reconcile.host_lost(session.npcs)
@@ -1023,6 +1114,10 @@ local function on_message ( peer, message )
       -- Arena echoes chat through the server to every client, including the
       -- sender. Do the same so a guest sees confirmation of its own message.
       if session.machine.state=="host" then broadcast(message,true) end
+   elseif message.type=="npc_manifest" and session.machine.state~="host"
+         and message.node==session.machine.host and message.claim==session.machine.claim
+         and session.machine:accept_sequence("npc_manifest",message.seq) then
+      spawn_npc_manifest(message)
    elseif message.type=="npc_add" and session.machine.state~="host" and message.node==session.machine.host and message.claim==session.machine.claim then spawn_npc(message)
    elseif message.type=="npc_remove" and message.node==session.machine.host and message.claim==session.machine.claim then local e=session.npcs[message.entity]; if e then remove_pilot(e.pilot); session.npcs[message.entity]=nil end
    elseif message.type=="npc_state" and message.node==session.machine.host and message.claim==session.machine.claim and session.machine:accept_sequence("npc",message.seq) then parse_states(message.entities,session.npcs)
@@ -1101,9 +1196,10 @@ publish_entities = function ( full, include_ambient, include_craft )
    if include_ambient and session.machine.state=="host" then
       for id,p in pairs(ambient) do
          if full or not session.host_inventory[id] then
-            broadcast(add_message(manifest_record(p,id),"npc_add"),true)
+            if not full then broadcast(add_message(manifest_record(p,id),"npc_add"),true) end
          end
       end
+      if full then queue_npc_manifests(ambient) end
       for id in pairs(session.host_inventory) do
          if not ambient[id] then
             session.sequence=session.sequence+1
@@ -1165,11 +1261,10 @@ publish_manifests = function ( scope, owner, entity )
    end
    local ambient,craft=inventory(include_ambient,include_craft)
    if include_ambient and session.machine.state=="host" then
-      for id,p in pairs(ambient) do
-         if not entity or id==entity then
-            broadcast(add_message(manifest_record(p,id),"npc_add"),true)
-         end
-      end
+      if entity then
+         local p=ambient[entity]
+         if p then broadcast(add_message(manifest_record(p,entity),"npc_add"),true) end
+      else queue_npc_manifests(ambient) end
    end
    if include_craft then
       for id,p in pairs(craft) do
@@ -1207,6 +1302,7 @@ function session.start ( settings )
    session.identities=identity.new(session.settings.node_id,local_player_name())
    session.member_endpoints={}; session.craft_factions={}; session.departures={}; session.host_welcomed={}
    session.pending_leader_owners={}; session.resync_sent={}; session.ownership_cache={}
+   session.pending_npc_manifests=nil
    session.initial_sync_until=0
    session.solo_since=nil
    session.last_liveness=now()
@@ -1262,6 +1358,7 @@ function session.leave ()
    session.departures={}
    session.craft_factions={}; session.host_welcomed={}
    session.pending_leader_owners={}; session.resync_sent={}; session.ownership_cache={}
+   session.pending_npc_manifests=nil
    session.initial_sync_until=0
    session.solo_since=nil
    reset_smoothing()
@@ -1432,8 +1529,10 @@ function session.update ( dt )
       session.machine.topology:remember_hint(session.machine.system,session.settings.node_id,session.endpoint,session.machine.claim,stamp+60)
       broadcast(claim_message(),true); session.last_claim=stamp
    end
+   if session.machine.state=="host" then publish_next_npc_manifest_batch() end
    if session.machine.system and stamp-session.last_player>=1/15 then publish_player(false); session.last_player=stamp end
-   if session.machine.system and session.machine.state=="host" and stamp-session.last_npc>=0.2 then
+   if session.machine.system and session.machine.state=="host"
+         and stamp-session.last_npc>=NPC_STATE_INTERVAL then
       publish_entities(false,true,false)
       session.last_npc=stamp
    end

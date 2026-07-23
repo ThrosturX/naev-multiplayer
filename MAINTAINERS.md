@@ -31,12 +31,15 @@ manifests, additions, removals, chat, and claims reliable; player/NPC/craft
 state is replaceable and unreliable. Validate peer values before resolving
 ships, factions, outfits, pilots, or UI.
 
-Reliable add/remove manifests are the normal entity lifecycle. Do not restore
-periodic full-manifest broadcasts. A joining peer sends a reliable `resync`
-request. State that races ahead of manifests is coalesced into one resync per
-authority, not one request per missing entity; suppress this feedback during
-the initial synchronization window. Known targeted requests must use the
-authoritative inventory index instead of rescanning `pilot.get()`.
+Reliable add/remove manifests are the normal entity lifecycle. Initial and
+full-resync NPC manifests use bounded reliable batches, with at most one batch
+serialized per update; incremental additions and removals remain immediate
+singular messages. Do not restore periodic
+full-manifest broadcasts. A joining peer sends a reliable `resync` request.
+State that races ahead of manifests is coalesced into one resync per authority,
+not one request per missing entity; suppress this feedback during the initial
+synchronization window. Known targeted requests must use the authoritative
+inventory index instead of rescanning `pilot.get()`.
 Static manifest collection and high-frequency state collection must remain
 separate; state collection must not inspect ship, name, faction, outfits, or
 leader. The update hook drains at most 48 ENet events per rendered frame so a

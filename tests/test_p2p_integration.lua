@@ -387,6 +387,8 @@ assert(not host.speed_enabled and not guest.speed_enabled,
 
 local npc_replica=find(guest,"Host NPC","Empire")
 assert(npc_replica,"guest did not receive host NPC")
+assert((host.session.host.sent_types.npc_manifest or 0)>0,
+   "full NPC synchronization did not use a batched manifest")
 assert(npc_replica.no_death,
    "host-authoritative NPC replica could be destroyed by guest-local damage")
 local escort_replica=find(guest,"Host Escort","P2P Craft 10")
@@ -396,17 +398,17 @@ assert(escort_replica.no_death,
 local unchanged_health_sets=npc_replica.health_sets or 0
 local unchanged_energy_sets=npc_replica.energy_sets or 0
 local unchanged_target_sets=npc_replica.target_sets or 0
-advance({host,guest},0.25,8)
+advance({host,guest},0.35,8)
 assert((npc_replica.health_sets or 0)==unchanged_health_sets
       and (npc_replica.energy_sets or 0)==unchanged_energy_sets
       and (npc_replica.target_sets or 0)==unchanged_target_sets,
    "unchanged authoritative NPC state crossed the Lua/C setter boundary")
 npc:setDisable()
-advance({host,guest},0.25,8)
+advance({host,guest},0.35,8)
 assert(npc_replica:disabled(),
    "authoritative NPC disable lifecycle was not replicated")
 local disable_sets=npc_replica.disable_sets or 0
-advance({host,guest},0.25,8)
+advance({host,guest},0.35,8)
 assert((npc_replica.disable_sets or 0)==disable_sets,
    "unchanged disabled state repeatedly called setDisable")
 assert(not escort_replica:withPlayer(),"remote host craft became guest-owned")
@@ -600,14 +602,14 @@ assert((npc_replica.velocity_sets or 0)-npc_velocity_sets<=4,
 assert((escort_replica.velocity_sets or 0)-escort_velocity_sets<=2,
    "owned-craft reconciliation exceeded its 1 Hz work budget")
 npc:setHealth(42,17,3); npc:setEnergy(51)
-advance({host,guest,third},0.25,8)
+advance({host,guest,third},0.35,8)
 assert(npc_replica.armour==42 and npc_replica.shield==17 and npc_replica.stress==3 and npc_replica.energy_value==51)
 
 local removed_npc=host:add_pilot("Rhino","Empire","Removed NPC",false)
-advance({host,guest,third},0.25,8)
+advance({host,guest,third},0.35,8)
 local removed_replica=find(guest,"Removed NPC","Empire")
 assert(removed_replica,"guest did not receive incremental NPC addition")
-removed_npc:rm(); advance({host,guest,third},0.25,8)
+removed_npc:rm(); advance({host,guest,third},0.35,8)
 assert(not removed_replica:exists(),"guest ignored authoritative NPC removal")
 
 host.local_pilot:setPos(vector(500,0))

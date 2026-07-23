@@ -51,13 +51,17 @@ end
 function core:accept_claim ( message )
    if message.system ~= self.system then return false end
    if message.node == self.node_id then return false end
-   if self.state == "discovering" or self.state == "host" then
+   if self.state == "discovering" then
+      -- A reachable claimant is already hosting this system. Joining it avoids
+      -- treating an ordinary arrival as a competing claim merely because the
+      -- arriving node has a lower ID.
+      self.state="guest"; self.host=message.node; self.claim=message.claim
+   elseif self.state == "host" then
+      -- Both nodes have independently claimed, so use the deterministic node
+      -- ordering only here to converge an actual split brain.
       local winner=topology.resolve_claim(self.node_id, message.node)
       if winner == message.node then
          self.state="guest"; self.host=message.node; self.claim=message.claim
-      elseif self.state == "discovering" then
-         self.state="host"; self.host=self.node_id
-         self.claim=self.claim or (self.node_id .. ":" .. tostring(math.floor(self.now()*1000)))
       end
    end
    self.members[message.node]=true

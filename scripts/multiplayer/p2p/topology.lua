@@ -35,8 +35,8 @@ end
 
 function topology:remember_hint ( system_name, host, endpoint, claim, expires )
    if tonumber(expires) <= self.now() then return nil end
-   local old=self.hints[system_name]
-   if old and old.expires > self.now() and old.host < host then return nil end
+   -- Hints are discovery aids, not election votes. Prefer the latest reachable
+   -- information instead of allowing a lower-ID former host to pin the cache.
    self.hints[system_name]={host=host, endpoint=endpoint, claim=claim, expires=tonumber(expires)}
    self:add_peer(endpoint)
    return true
