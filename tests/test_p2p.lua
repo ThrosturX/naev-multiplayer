@@ -40,6 +40,14 @@ test("protocol escaping and validation", function()
       ship="Llama",name="Jane"})
    assert(not codec.encode{type="player_state",node="a1",system="X",entity="b2",
       seq=4,x=0,y=0,vx=0,vy=0,dir=0})
+   assert(codec.encode{type="player_state",node="a1",system="X",entity="a1",
+      seq=4,x=0,y=0,vx=0,vy=0,dir=0,armour=75,shield=20,stress=5})
+   assert(codec.encode{type="resync",node="a1",system="X",seq=5,
+      scope="craft",owner="b2",entity="b2:7"})
+   assert(not codec.encode{type="resync",node="a1",system="X",seq=6,
+      scope="everything"})
+   assert(not codec.encode{type="resync",node="a1",system="X",seq=7,
+      scope="craft",owner="not-a-node"})
 end)
 
 test("local-only player name aliases", function()

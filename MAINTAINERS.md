@@ -31,6 +31,37 @@ manifests, additions, removals, chat, and claims reliable; player/NPC/craft
 state is replaceable and unreliable. Validate peer values before resolving
 ships, factions, outfits, pilots, or UI.
 
+Reliable add/remove manifests are the normal entity lifecycle. Do not restore
+periodic full-manifest broadcasts. A joining peer sends a reliable `resync`
+request. State that races ahead of manifests is coalesced into one resync per
+authority, not one request per missing entity; suppress this feedback during
+the initial synchronization window. Known targeted requests must use the
+authoritative inventory index instead of rescanning `pilot.get()`.
+Static manifest collection and high-frequency state collection must remain
+separate; state collection must not inspect ship, name, faction, outfits, or
+leader. The update hook drains at most 48 ENet events per rendered frame so a
+packet backlog cannot monopolize simulation.
+
+Each participant is authoritative for the health of their real local player.
+Publish that health in `player_state` and apply it only to disposable remote
+proxies. Never apply any network health value to `player.pilot()`. Connected
+remote proxies must have no-death protection so unrelated local simulation
+cannot remove them; clear that protection when the owner disconnects and the
+proxy begins its inferred land, jump, or disabled departure.
+
+Time-control and hostility grace periods piggyback on the existing one-second
+liveness maintenance. A host must remain the only system member for ten
+seconds before restoring normal autonav/time compression; any joining member
+locks it again immediately. Player aggression records only actual hostile
+actions and clears local proxy/craft hostility after twenty quiet seconds.
+Do not turn either timer into a per-frame pilot or membership scan.
+
+Do not wrap ordinary ENet or pilot operations in `pcall`. The P2P runtime uses
+protected calls only to validate untrusted Naev resource names (whose getters
+throw when absent) and to convert an expected listener bind failure into a
+startup error. Everything else must validate its invariant explicitly and let
+programming errors surface.
+
 Player-capability `hello` messages include the player's unchanged Naev name.
 Names are not global network identifiers; node IDs are. If names collide, keep
 the local player's name untouched and suffix only remote proxy display names.

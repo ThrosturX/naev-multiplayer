@@ -31,6 +31,7 @@ local valid_types = {
    player_manifest=true, player_state=true, chat=true,
    npc_manifest=true, npc_add=true, npc_remove=true, npc_state=true,
    craft_manifest=true, craft_state=true, craft_remove=true, craft_order=true,
+   resync=true,
 }
 
 local required = {
@@ -39,7 +40,8 @@ local required = {
    punch={"node","system","peer","endpoint"},
    claim={"node","system","claim","endpoint"}, leave={"node","system"},
    player_manifest={"node","system","entity","ship","name"},
-   player_state={"node","system","entity","seq","x","y","vx","vy","dir"},
+   player_state={"node","system","entity","seq","x","y","vx","vy","dir",
+      "armour","shield","stress"},
    chat={"node","system","seq","text"},
    npc_manifest={"node","system","claim","seq","entities"},
    npc_add={"node","system","claim","entity","seq","ship","name","faction"},
@@ -49,6 +51,7 @@ local required = {
    craft_state={"node","system","owner","seq","entities"},
    craft_remove={"node","system","owner","entity","seq"},
    craft_order={"node","system","owner","seq","order"},
+   resync={"node","system","seq","scope"},
 }
 
 local numeric = {
@@ -87,12 +90,20 @@ local function validate ( message )
    end
    if message.host and not message.host:match("^[%x]+$") then return nil, "invalid host" end
    if message.peer and not message.peer:match("^[%x]+$") then return nil, "invalid peer" end
+   if message.owner and not message.owner:match("^[%x]+$") then return nil, "invalid owner" end
+   if message.entity and (#message.entity>255 or message.entity:find("[%z\1-\31\127]")) then
+      return nil, "invalid entity"
+   end
    if message.endpoint and (not message.endpoint:match("^[^%s:]+:%d+$") or #message.endpoint > 255) then
       return nil, "invalid endpoint"
    end
    if message.order and message.order~="e_attack" and message.order~="e_hold"
          and message.order~="e_return" and message.order~="e_clear" then
       return nil, "invalid order"
+   end
+   if message.scope and message.scope~="all" and message.scope~="npc"
+         and message.scope~="craft" then
+      return nil, "invalid scope"
    end
    for key, bounds in pairs(numeric) do
       if message[key] ~= nil then

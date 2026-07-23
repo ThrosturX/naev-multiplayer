@@ -51,6 +51,19 @@ per-frame work. Explicitly remove update, input, timer, and pilot hooks on
 disconnect, stop, landing, or role changes. Persist only plain configuration;
 never persist ENet peers/hosts, pilots, hooks, or other runtime handles.
 
+Treat Lua/C crossings as expensive in hot paths. High-frequency state records
+must contain only dynamic state; collect static identity, ship, outfit, name,
+and faction data only when building manifests. Cache previously applied state
+and do not call engine setters when the value has not changed. Bound ENet event
+processing per frame rather than draining an unbounded queue, and prefer
+reliable incremental add/remove messages plus explicit resynchronization over
+periodic full-manifest broadcasts.
+
+Do not use `pcall` to probe expected pilot or runtime state inside loops. Check
+documented invariants such as handle existence explicitly, then prune, repair,
+or resynchronize invalid state. Reserve `pcall` for genuinely recoverable
+external boundaries where the underlying API can raise unexpectedly.
+
 ## Testing and Changes
 
 Preserve the source repository's existing uncommitted P2P work; inspect the

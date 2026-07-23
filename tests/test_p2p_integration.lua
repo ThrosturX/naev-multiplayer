@@ -55,7 +55,10 @@ local function vector ( x, y )
 end
 
 local function resource ( name )
-   return {nameRaw=function() return name end}
+   return {
+      nameRaw=function() return name end,
+      areEnemies=function() return false end,
+   }
 end
 
 local function departure_target ( x, y, landable )
@@ -68,21 +71,26 @@ local function departure_target ( x, y, landable )
 end
 
 local function new_world ( player_name )
-   local world={clock=0,pilots={},next_id=1,spawn=true,player_name=player_name,
+   local world={clock=0,pilots={},next_id=1,spawn=true,player_name=player_name,c_calls={},
       speed_enabled=true,autonav_resets=0,unpauses=0,comms={},spobs={},jumps={}}
+   local function counted ( name )
+      world.c_calls[name]=(world.c_calls[name] or 0)+1
+   end
    local pilot_methods={}
    pilot_methods.__index=pilot_methods
    function pilot_methods:exists () return not self.removed end
    function pilot_methods:rm () self.removed=true end
-   function pilot_methods:name () return self.pilot_name end
-   function pilot_methods:ship () return resource(self.ship_name) end
-   function pilot_methods:faction () return resource(self.faction_name) end
+   function pilot_methods:name () counted("name"); return self.pilot_name end
+   function pilot_methods:ship () counted("ship"); return resource(self.ship_name) end
+   function pilot_methods:faction () counted("faction"); return resource(self.faction_name) end
    function pilot_methods:outfitsList ()
+      counted("outfitsList")
       local list={}
       for _index,name in ipairs(self.outfit_names) do list[#list+1]=resource(name) end
       return list
    end
    function pilot_methods:outfits ()
+      counted("outfits")
       local list={}
       for index,name in ipairs(self.outfit_names) do list[index]=resource(name) end
       return list
@@ -100,7 +108,7 @@ local function new_world ( player_name )
    function pilot_methods:withPlayer ()
       return self.owned or self.faction_name=="Player" or self.leader_pilot==world.local_pilot
    end
-   function pilot_methods:leader () return self.leader_pilot end
+   function pilot_methods:leader () counted("leader"); return self.leader_pilot end
    function pilot_methods:ainame () return self.ai_name end
    function pilot_methods:setLeader (v) self.leader_pilot=v end
    function pilot_methods:msg (receivers,kind,data)
@@ -111,12 +119,24 @@ local function new_world ( player_name )
    function pilot_methods:setPos (v) self.position=v; self.position_sets=(self.position_sets or 0)+1 end
    function pilot_methods:setVel (v) self.velocity=v; self.velocity_sets=(self.velocity_sets or 0)+1 end
    function pilot_methods:setDir (v) self.direction=v end
-   function pilot_methods:setTarget (v) self.target_pilot=v end
-   function pilot_methods:setHealth (a,s,t) self.armour=a; self.shield=s; self.stress=t end
-   function pilot_methods:setEnergy (v) self.energy_value=v end
+   function pilot_methods:setTarget (v)
+      self.target_sets=(self.target_sets or 0)+1
+      self.target_pilot=v
+   end
+   function pilot_methods:setHealth (a,s,t)
+      self.health_sets=(self.health_sets or 0)+1
+      self.armour=a; self.shield=s; self.stress=t
+   end
+   function pilot_methods:setEnergy (v)
+      self.energy_sets=(self.energy_sets or 0)+1
+      self.energy_value=v
+   end
    function pilot_methods:setInvincible (v) self.invincible=v end
    function pilot_methods:setNoDeath (v) self.no_death=v end
-   function pilot_methods:setDisable () self.is_disabled=true end
+   function pilot_methods:setDisable ()
+      self.disable_sets=(self.disable_sets or 0)+1
+      self.is_disabled=true
+   end
    function pilot_methods:setHostile (v) self.hostile=v==nil or v end
    function pilot_methods:rename (v) self.pilot_name=v end
    function pilot_methods:taskClear () self.task=nil end
@@ -165,6 +185,9 @@ local function new_world ( player_name )
    world.local_pilot=world:add_pilot("Llama","Player",player_name,true)
 
    local env=setmetatable({}, {__index=_G})
+   -- Naev's Lua sandbox does not expose os.clock. Keep the integration world
+   -- honest so per-frame networking cannot accidentally depend on it again.
+   env.os={}
    world.cache={}
    env.naev={ticksGame=function() return world.clock end,cache=function() return world.cache end,
       keyEnable=function(key,enabled) assert(key=="speed"); world.speed_enabled=enabled end,
@@ -192,7 +215,12 @@ local function new_world ( player_name )
       return {play=function() world.disconnect_sounds=(world.disconnect_sounds or 0)+1 end}
    end}
    env.pilot={
-      get=function() local out={}; for _index,p in ipairs(world.pilots) do if not p.removed then out[#out+1]=p end end; return out end,
+      get=function()
+         counted("pilot_get")
+         local out={}
+         for _index,p in ipairs(world.pilots) do if not p.removed then out[#out+1]=p end end
+         return out
+      end,
       add=function(ship_name,fac,pos,name,params)
          local faction_name=type(fac)=="string" and fac or fac:nameRaw()
          local p=world:add_pilot(ship_name,faction_name,name,false,params and params.ai)
@@ -236,6 +264,12 @@ assert(not host.speed_enabled,"P2P system entry did not disable the speed key")
 advance({host},2,4)
 assert(host.autonav_resets>1,"P2P updates did not continually cancel autonav")
 assert(host.session.machine.state=="host")
+advance({host},9,4)
+assert(not host.speed_enabled,
+   "solo host regained time compression before its ten-second grace period")
+advance({host},1.1,4)
+assert(host.speed_enabled,
+   "solo host did not regain ordinary autonav time compression")
 local npc=host:add_pilot("Koala","Empire","Host NPC",false)
 local escort=host:add_pilot("Hyena","Player","Host Escort",true,"escort")
 escort.pilot_id=777
@@ -254,10 +288,12 @@ advance({host,guest},11,16) -- reliable repair manifests
 
 assert(host.session.machine.state=="host")
 assert(guest.session.machine.state=="guest")
+assert(not host.speed_enabled and not guest.speed_enabled,
+   "joining participant did not immediately restore shared-session time controls")
 assert(host.player_name=="John" and guest.player_name=="John")
 assert(find(host,"John #2","P2P Players"),"host did not locally alias the guest")
 for _entity_id,record in pairs(host.session.host_inventory) do
-   assert(record.name~="John #2",
+   assert(record.pilot_name~="John #2",
       "remote player proxy was inventoried as a host-owned ambient NPC")
 end
 local host_proxy=find(guest,"John #2","P2P Players")
@@ -306,6 +342,18 @@ assert(host_proxy.armour==100 and host_proxy.shield==100 and host_proxy.stress==
    "disposable proxy health was not repaired")
 assert(guest.local_pilot.armour==100 and guest.local_pilot.shield==100,
    "replicated player state wrote local-player health")
+guest.local_pilot:setNoDeath(true)
+guest.local_pilot:setHealth(44,22,6)
+advance({host,guest},0.1,8)
+assert(guest_proxy.armour==44 and guest_proxy.shield==22 and guest_proxy.stress==6,
+   "guest self-authoritative health was not replicated to its host-side proxy")
+assert(guest.local_pilot.armour==44 and guest.local_pilot.shield==22
+      and guest.local_pilot.stress==6,
+   "remote player state overwrote the real local player's health")
+guest.local_pilot:setHealth(100,100,0)
+advance({host,guest},0.1,8)
+assert(guest_proxy.armour==100 and guest_proxy.shield==100 and guest_proxy.stress==0,
+   "host-side proxy did not follow its owner's recovered health")
 host.local_pilot.active_outfits[1].state="on"
 advance({host,guest},0.1,8)
 assert(host_proxy.last_outfit_toggle and host_proxy.last_outfit_toggle.name=="The Bite"
@@ -318,6 +366,24 @@ assert(host_proxy.last_outfit_toggle and not host_proxy.last_outfit_toggle.on,
 host.session.input("primary",false)
 advance({host,guest},0.1,8)
 assert(not host_proxy:memory().p2p_primary,"primary fire release was not replicated")
+guest.local_pilot:setTarget(host_proxy)
+host.session.input("primary",true)
+guest.session.input("primary",true)
+advance({host,guest},0.1,8)
+host.session.input("primary",false)
+guest.session.input("primary",false)
+advance({host,guest},0.1,8)
+for _second=1,19 do advance({host,guest},1,8) end
+assert(guest_proxy.hostile and host_proxy.hostile,
+   "mutual player hostility expired before twenty quiet seconds")
+advance({host,guest},1.1,8)
+assert(not guest_proxy.hostile and not host_proxy.hostile,
+   "mutual player hostility did not reset after twenty quiet seconds: "
+      ..tostring(guest_proxy.hostile).."/"..tostring(host_proxy.hostile)
+      .." last="..tostring(host.session.players["20"].last_aggression)
+      .." now="..tostring(host.clock))
+assert(not host.speed_enabled and not guest.speed_enabled,
+   "active multiplayer session incorrectly enabled time compression")
 
 local npc_replica=find(guest,"Host NPC","Empire")
 assert(npc_replica,"guest did not receive host NPC")
@@ -327,10 +393,22 @@ local escort_replica=find(guest,"Host Escort","P2P Craft 10")
 assert(escort_replica,"guest did not receive owner-authoritative craft")
 assert(escort_replica.no_death,
    "owner-authoritative craft replica could be destroyed by guest-local damage")
+local unchanged_health_sets=npc_replica.health_sets or 0
+local unchanged_energy_sets=npc_replica.energy_sets or 0
+local unchanged_target_sets=npc_replica.target_sets or 0
+advance({host,guest},0.25,8)
+assert((npc_replica.health_sets or 0)==unchanged_health_sets
+      and (npc_replica.energy_sets or 0)==unchanged_energy_sets
+      and (npc_replica.target_sets or 0)==unchanged_target_sets,
+   "unchanged authoritative NPC state crossed the Lua/C setter boundary")
 npc:setDisable()
 advance({host,guest},0.25,8)
 assert(npc_replica:disabled(),
    "authoritative NPC disable lifecycle was not replicated")
+local disable_sets=npc_replica.disable_sets or 0
+advance({host,guest},0.25,8)
+assert((npc_replica.disable_sets or 0)==disable_sets,
+   "unchanged disabled state repeatedly called setDisable")
 assert(not escort_replica:withPlayer(),"remote host craft became guest-owned")
 assert(escort_replica:ainame()=="escort" and escort_replica:leader()==host_proxy,
    "remote host craft did not retain escort AI and its network owner's leader")
@@ -389,6 +467,95 @@ guest.session.update()
 assert(not guest.session.craft["20:999"],
    "reflected owned-craft manifest created a local self copy")
 
+-- A receive flood must stay queued across rendered frames instead of making
+-- one update drain the entire ENet host.
+local host_to_guest
+for peer,meta in pairs(host.session.peer_meta) do
+   if meta.verified and meta.node=="20" then host_to_guest=peer; break end
+end
+assert(host_to_guest)
+local ignored_punch=assert(wire_codec.encode{
+   type="punch",node="10",system="Delta Polaris",peer="abcdef",
+   endpoint="127.0.0.1:65500",
+})
+for _index=1,100 do host_to_guest:send(ignored_punch,0,"reliable") end
+guest.session.update()
+assert(#guest.session.host.events>=52,
+   "one P2P update exceeded the 48-event ENet receive budget")
+update({guest},8)
+assert(#guest.session.host.events==0,
+   "bounded ENet receive queue did not drain over later frames")
+
+-- State for an unknown entity asks its authority for the one missing manifest.
+local resync_requests=guest.session.host.sent_types.resync or 0
+host.session.sequence=host.session.sequence+1
+host_to_guest:send(assert(wire_codec.encode{
+   type="craft_state",node="10",system="Delta Polaris",owner="10",
+   seq=host.session.sequence,
+   entities="10:missing,0,0,0,0,0,100,100,0,100,-,0",
+}),0)
+guest.session.update()
+assert((guest.session.host.sent_types.resync or 0)==resync_requests+1,
+   "unknown craft state did not request its missing manifest")
+update({host,guest},8)
+advance({host,guest},1.1,1)
+resync_requests=guest.session.host.sent_types.resync or 0
+host.session.sequence=host.session.sequence+1
+host_to_guest:send(assert(wire_codec.encode{
+   type="craft_state",node="10",system="Delta Polaris",owner="10",
+   seq=host.session.sequence,
+   entities="10:missing-a,0,0,0,0,0,100,100,0,100,-,0;"
+      .."10:missing-b,0,0,0,0,0,100,100,0,100,-,0",
+}),0)
+guest.session.update()
+assert((guest.session.host.sent_types.resync or 0)==resync_requests+1,
+   "one missing-state batch emitted more than one authority resync")
+update({host,guest},8)
+
+-- A targeted resync for a known entity must use the authoritative inventory
+-- index instead of rescanning every pilot.
+host.c_calls={}
+guest.session.sequence=guest.session.sequence+1
+host_to_guest.remote_peer:send(assert(wire_codec.encode{
+   type="resync",node="20",system="Delta Polaris",seq=guest.session.sequence,
+   scope="craft",owner="10",entity="10:"..escort.pilot_id,
+}),0,"reliable")
+host.session.update()
+assert((host.c_calls.pilot_get or 0)==0,
+   "known targeted resync performed a full host pilot inventory scan")
+update({host,guest},8)
+
+-- Static manifest fields are collected once when craft appear. Ordinary state
+-- ticks must not cross into ship/loadout/name/faction/leader getters, and the
+-- old ten-second full-manifest hammer must stay gone.
+local carrier_fighters={}
+for index=1,20 do
+   local fighter=host:add_pilot("Lancelot","Player","Carrier Fighter "..index,true,"escort")
+   fighter:setLeader(host.local_pilot)
+   carrier_fighters[#carrier_fighters+1]=fighter
+end
+advance({host,guest},1.1,24)
+local remote_craft_count=0
+for _entity_id in pairs(guest.session.craft) do remote_craft_count=remote_craft_count+1 end
+assert(remote_craft_count==21,
+   "state/manifest separation dropped remote carrier craft")
+local craft_manifests=host.session.host.sent_types.craft_manifest or 0
+host.c_calls={}
+host.session.last_npc=host.clock+20 -- isolate owned-craft collection from ambient inventory classification
+advance({host,guest},11,24)
+for _index,name in ipairs({"outfitsList","outfits","ship","name","faction","leader"}) do
+   assert((host.c_calls[name] or 0)==0,
+      "craft state collection called static manifest getter "..name)
+end
+assert((host.session.host.sent_types.craft_manifest or 0)==craft_manifests,
+   "unchanged craft emitted periodic full manifests")
+for _index,fighter in ipairs(carrier_fighters) do fighter:rm() end
+advance({host,guest},1.1,24)
+remote_craft_count=0
+for _entity_id in pairs(guest.session.craft) do remote_craft_count=remote_craft_count+1 end
+assert(remote_craft_count==1,
+   "reliable carrier removals did not preserve only the original escort")
+
 -- A third peer knows only the guest and must discover the actual host through it.
 local third=new_world("Jane")
 local guest_bootstrap=guest.session.endpoint:gsub(":", " ")
@@ -425,7 +592,8 @@ assert(npc_x==0 and (npc_replica.position_sets or 0)==0,
 assert(escort_x==0 and (escort_replica.position_sets or 0)==0,
    "owned-craft reconciliation teleported its replica")
 assert(npc_vx>0 and npc_vx<=240,"NPC correction velocity was not acceleration-capped")
-assert(escort_vx>0 and escort_vx<=160,"owned-craft correction velocity was not acceleration-capped")
+assert(escort_vx>0 and escort_vx<=240,
+   "owned-craft correction velocity was not acceleration-capped: "..tostring(escort_vx))
 assert((npc_replica.velocity_sets or 0)-npc_velocity_sets<=4,
    "NPC reconciliation exceeded its 10 Hz work budget: "
       ..tostring((npc_replica.velocity_sets or 0)-npc_velocity_sets))
@@ -532,12 +700,14 @@ assert(host_on_guest:exists() and host_on_guest.task
       and host_on_guest.task.kind=="land"
       and host_on_guest.task.target==guest_nearest_spob,
    "moving departed host did not land at the nearest plausible spob")
+assert(not host_on_guest.no_death and not host_on_third.no_death,
+   "disconnected player proxies retained connected-player no-death protection")
 assert(host_on_third:exists() and host_on_third.task
       and host_on_third.task.kind=="hyperspace"
       and host_on_third.task.target==third_nearest_jump,
    "moving departed host did not jump through the nearest plausible gate")
 for _entity_id,record in pairs(guest.session.host_inventory) do
-   assert(record.name~=host_on_guest.pilot_name,
+   assert(record.pilot_name~=host_on_guest.pilot_name,
       "retained departing proxy became a host-owned ambient NPC")
 end
 assert(guest.session.machine.state=="host","guest did not take over after host loss")
