@@ -37,6 +37,26 @@ local mpbtn
 local p2p_hooks = {}
 local p2p_hail_pressed
 
+local function p2p_run_chat ()
+    local vn_keypressed = vn.keypressed
+    vn.keypressed = function(key, isrepeat)
+        if luatk.isOpen()
+                and string.lower(naev.keyGet("starmap")) == key then
+            -- VN opens the map before forwarding this key to its LuaTK state.
+            -- Suppress only that side effect so the character is still typed.
+            local map_open = naev.mapOpen
+            naev.mapOpen = function() end
+            local ok, handled = pcall(vn_keypressed, key, isrepeat)
+            naev.mapOpen = map_open
+            if not ok then error(handled, 0) end
+            return handled
+        end
+        return vn_keypressed(key, isrepeat)
+    end
+    vn.run()
+    vn.keypressed = vn_keypressed
+end
+
 local function p2p_stop ()
     p2psession.stop()
     p2p_hail_pressed = nil
@@ -76,7 +96,7 @@ function P2P_SESSION_INPUT ( input_name, input_pressed )
             if msg and #msg > 0 then p2psession.send_chat(msg) end
         end)
     end)
-    vn.run()
+    p2p_run_chat()
 end
 function P2P_SESSION_ENTER () p2psession.enter(system.cur():nameRaw()) end
 function P2P_SESSION_LEAVE () p2p_hail_pressed=nil; p2psession.leave() end
