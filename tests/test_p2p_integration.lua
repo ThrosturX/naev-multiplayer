@@ -69,6 +69,11 @@ local function new_world ( player_name )
       for _index,name in ipairs(self.outfit_names) do list[#list+1]=resource(name) end
       return list
    end
+   function pilot_methods:outfits ()
+      local list={}
+      for index,name in ipairs(self.outfit_names) do list[index]=resource(name) end
+      return list
+   end
    function pilot_methods:actives () return self.active_outfits end
    function pilot_methods:pos () return self.position end
    function pilot_methods:vel () return self.velocity end
@@ -104,6 +109,16 @@ local function new_world ( player_name )
       if name=="The Bite" or name:match("^The Bite %- ") then
          self.active_outfits[#self.active_outfits+1]={outfit=resource(name),slot=#self.active_outfits+1,state="off"}
       end
+   end
+   function pilot_methods:outfitAddSlot (item,slot)
+      local name=type(item)=="string" and item or item:nameRaw()
+      self.outfit_names[slot]=name
+      self.slotted_outfits=self.slotted_outfits or {}
+      self.slotted_outfits[slot]=name
+      if name=="The Bite" or name:match("^The Bite %- ") then
+         self.active_outfits[#self.active_outfits+1]={outfit=resource(name),slot=slot,state="off"}
+      end
+      return true
    end
    function pilot_methods:outfitToggle (slot,on)
       for _index,active in ipairs(self.active_outfits) do
@@ -214,6 +229,8 @@ assert(host.player_name=="John" and guest.player_name=="John")
 assert(find(host,"John #2","P2P Players"),"host did not locally alias the guest")
 local host_proxy=find(guest,"John #2","P2P Players")
 assert(host_proxy,"guest did not locally alias the host")
+assert(host_proxy.slotted_outfits and host_proxy.slotted_outfits[1]=="The Bite",
+   "The Bite was not installed in the remote player's matching ship slot")
 local guest_proxy=find(host,"John #2","P2P Players")
 assert(guest_proxy,"host did not retain the aliased guest proxy")
 assert(guest_proxy.last_chat=="Hi, I'm John!" and guest_proxy.chat_count==1,

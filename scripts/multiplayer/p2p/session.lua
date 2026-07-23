@@ -192,6 +192,40 @@ local function outfit_names ( p )
    return table.concat(names,",")
 end
 
+local function outfit_slots ( p )
+   local slots={}
+   local ok,list=pcall(function() return p:outfits() end)
+   if ok then
+      for index,o in ipairs(list) do
+         if o then slots[#slots+1]=tostring(index)..":"..codec.escape(o:nameRaw()) end
+      end
+   end
+   return table.concat(slots,",")
+end
+
+local function install_outfits ( p, message )
+   local used_slots=false
+   for item in (message.slots or ""):gmatch("([^,]+)") do
+      local index,encoded=item:match("^(%d+):(.+)$")
+      index=tonumber(index)
+      local name=encoded and codec.unescape(encoded) or nil
+      if index and index>=1 and index<=512 and name then
+         local valid,o=pcall(function() return outfit.get(name) end)
+         if valid and o then
+            pcall(function() p:outfitAddSlot(o,index,true,true) end)
+            used_slots=true
+         end
+      end
+   end
+   if used_slots then return end
+   for item in (message.outfits or ""):gmatch("([^,]+)") do
+      local name=codec.unescape(item)
+      if name and pcall(function() outfit.get(name) end) then
+         pcall(function() p:outfitAdd(name,1,true) end)
+      end
+   end
+end
+
 local reconcile_craft_leaders
 
 local function spawn_proxy ( message, display_name )
@@ -208,10 +242,7 @@ local function spawn_proxy ( message, display_name )
       return pilot.add(message.ship,fac,position,proxy_name,{ai="p2p_remote_control",naked=true})
    end)
    if not ok or not p then return end
-   for item in (message.outfits or ""):gmatch("([^,]+)") do
-      local name=codec.unescape(item)
-      if name and pcall(function() outfit.get(name) end) then pcall(function() p:outfitAdd(name,1,true) end) end
-   end
+   install_outfits(p,message)
    -- Invincible pilots are excluded from weapon collision in Naev. No-death
    -- proxies can receive local impact effects while never becoming authority
    -- for the remote player's real health.
@@ -400,14 +431,14 @@ local function pilot_record ( p )
          or session.settings.node_id..":"..pilot_id(leader)
    end
    return {entity=session.settings.node_id..":"..pilot_id(p),ship=p:ship():nameRaw(),name=p:name(),faction=p:faction():nameRaw(),
-      outfits=outfit_names(p),x=x,y=y,vx=vx,vy=vy,dir=p:dir(),armour=armour,shield=shield,
+      outfits=outfit_names(p),slots=outfit_slots(p),x=x,y=y,vx=vx,vy=vy,dir=p:dir(),armour=armour,shield=shield,
       stress=stress,energy=p:energy(),target=target_entity(p:target()),leader=leader_id}
 end
 
 local function add_message ( rec, kind, owner )
    session.sequence=session.sequence+1
    local msg=base(kind); msg.entity=rec.entity; msg.seq=session.sequence; msg.ship=rec.ship
-   msg.name=rec.name; msg.faction=rec.faction; msg.outfits=rec.outfits
+   msg.name=rec.name; msg.faction=rec.faction; msg.outfits=rec.outfits; msg.slots=rec.slots
    msg.x=rec.x; msg.y=rec.y; msg.vx=rec.vx; msg.vy=rec.vy; msg.dir=rec.dir
    msg.armour=rec.armour; msg.shield=rec.shield; msg.stress=rec.stress; msg.energy=rec.energy
    msg.target=rec.target; msg.leader=rec.leader
@@ -472,9 +503,7 @@ local function spawn_npc ( message, craft_owner )
    local params=craft_owner and {ai="escort",naked=true} or {naked=true}
    local ok,p=pcall(function() return pilot.add(message.ship,fac,vec2.new(message.x or 0,message.y or 0),message.name,params) end)
    if not ok or not p then return end
-   for item in (message.outfits or ""):gmatch("([^,]+)") do
-      local name=codec.unescape(item); if name and pcall(function() outfit.get(name) end) then pcall(function() p:outfitAdd(name,1,true) end) end
-   end
+   install_outfits(p,message)
    local entry={pilot=p,owner=craft_owner,leader_id=message.leader,sequences={}}
    container[message.entity]=entry
    if message.vx and message.vy then p:setVel(vec2.new(message.vx,message.vy)) end
@@ -732,7 +761,7 @@ end
 local function publish_player ( full )
    local p=player.pilot(); if not p or not session.machine.system then return end
    if full then
-      local msg=base("player_manifest"); msg.entity=session.settings.node_id; msg.ship=p:ship():nameRaw(); msg.name=local_player_name(); msg.outfits=outfit_names(p)
+      local msg=base("player_manifest"); msg.entity=session.settings.node_id; msg.ship=p:ship():nameRaw(); msg.name=local_player_name(); msg.outfits=outfit_names(p); msg.slots=outfit_slots(p)
       msg.endpoint=session.endpoint
       local state=local_state(p); msg.x=state.x; msg.y=state.y; msg.vx=state.vx; msg.vy=state.vy; msg.dir=state.dir
       broadcast(msg,true)
