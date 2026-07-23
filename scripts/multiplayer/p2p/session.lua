@@ -479,7 +479,10 @@ local function smooth_replicas ( dt, stamp )
       for _entity_id,entry in pairs(container) do smooth_entry(entry,step,stamp,limits) end
    end
    update_group("player",1/30,session.players,player_smoothing)
-   update_group("craft",1/15,session.craft,craft_smoothing)
+   -- Owned craft run native escort AI between owner snapshots. Large carrier
+   -- wings make Lua-to-pilot reconciliation expensive, so match their 1 Hz
+   -- publication rate instead of touching every replica at 15 Hz.
+   update_group("craft",1,session.craft,craft_smoothing)
    update_group("npc",1/10,session.npcs,npc_smoothing)
 end
 
@@ -544,18 +547,18 @@ local function pilot_owned ( p )
    return false
 end
 
-local function replica_lookup ()
-   local lookup={}
-   for _entity_id,e in pairs(session.players) do lookup[e.pilot]=true end
-   for _entity_id,e in pairs(session.npcs) do lookup[e.pilot]=true end
-   for _entity_id,e in pairs(session.craft) do lookup[e.pilot]=true end
-   for _node,e in pairs(session.departures) do lookup[e.pilot]=true end
-   return lookup
-end
-
 local function pilot_id ( p )
    local ok,id=pcall(function() return p:id() end)
    return ok and tostring(id) or tostring(p)
+end
+
+local function replica_lookup ()
+   local lookup={}
+   for _entity_id,e in pairs(session.players) do lookup[pilot_id(e.pilot)]=true end
+   for _entity_id,e in pairs(session.npcs) do lookup[pilot_id(e.pilot)]=true end
+   for _entity_id,e in pairs(session.craft) do lookup[pilot_id(e.pilot)]=true end
+   for _node,e in pairs(session.departures) do lookup[pilot_id(e.pilot)]=true end
+   return lookup
 end
 
 local function pilot_record ( p )
@@ -596,7 +599,7 @@ local function inventory ( include_ambient, include_craft )
    local replicas=replica_lookup()
    local ambient,craft={},{ }
    for _index,p in ipairs(list) do
-      if p~=player.pilot() and exists(p) and not replicas[p] then
+      if p~=player.pilot() and exists(p) and not replicas[pilot_id(p)] then
          local owned_by_player=pilot_owned(p)
          if (owned_by_player and include_craft)
                or (not owned_by_player and include_ambient and session.machine.state=="host") then
@@ -613,7 +616,7 @@ local function remove_guest_population ()
    if not ok then return end
    local replicas=replica_lookup()
    for _index,p in ipairs(list) do
-      if p~=player.pilot() and not pilot_owned(p) and not replicas[p] then remove_pilot(p) end
+      if p~=player.pilot() and not pilot_owned(p) and not replicas[pilot_id(p)] then remove_pilot(p) end
    end
    pilot.toggleSpawn(false)
 end
@@ -916,10 +919,13 @@ local function on_message ( peer, message )
    elseif message.type=="npc_add" and session.machine.state~="host" and message.node==session.machine.host and message.claim==session.machine.claim then spawn_npc(message)
    elseif message.type=="npc_remove" and message.node==session.machine.host and message.claim==session.machine.claim then local e=session.npcs[message.entity]; if e then remove_pilot(e.pilot); session.npcs[message.entity]=nil end
    elseif message.type=="npc_state" and message.node==session.machine.host and message.claim==session.machine.claim and session.machine:accept_sequence("npc",message.seq) then parse_states(message.entities,session.npcs)
-   elseif message.type=="craft_manifest" then spawn_npc(message,message.owner); if session.machine.state=="host" then broadcast(message,true,peer) end
-   elseif message.type=="craft_state" and session.machine:accept_sequence("craft:"..message.owner,message.seq) then
+   elseif message.type=="craft_manifest" and message.owner~=session.settings.node_id then
+      spawn_npc(message,message.owner); if session.machine.state=="host" then broadcast(message,true,peer) end
+   elseif message.type=="craft_state" and message.owner~=session.settings.node_id
+         and session.machine:accept_sequence("craft:"..message.owner,message.seq) then
       parse_states(message.entities,session.craft,message.owner); if session.machine.state=="host" then broadcast(message,false,peer) end
-   elseif message.type=="craft_remove" then local e=session.craft[message.entity]; if e and e.owner==message.owner then remove_pilot(e.pilot); session.craft[message.entity]=nil end
+   elseif message.type=="craft_remove" and message.owner~=session.settings.node_id then
+      local e=session.craft[message.entity]; if e and e.owner==message.owner then remove_pilot(e.pilot); session.craft[message.entity]=nil end
    elseif message.type=="craft_order" and session.machine:accept_sequence("craft_order:"..message.owner,message.seq) then
       apply_craft_order(message); if session.machine.state=="host" then broadcast(message,true,peer) end
    elseif message.type=="leave" then

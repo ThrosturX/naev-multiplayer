@@ -34,6 +34,12 @@ test("protocol escaping and validation", function()
       endpoint="198.51.100.2:4567"})
    assert(not codec.encode{type="punch",node="d1",system="X",peer="not-a-node",
       endpoint="198.51.100.2:4567"})
+   assert(codec.encode{type="player_manifest",node="a1",system="X",entity="a1",
+      ship="Llama",name="Jane"})
+   assert(not codec.encode{type="player_manifest",node="a1",system="X",entity="b2",
+      ship="Llama",name="Jane"})
+   assert(not codec.encode{type="player_state",node="a1",system="X",entity="b2",
+      seq=4,x=0,y=0,vx=0,vy=0,dir=0})
 end)
 
 test("local-only player name aliases", function()

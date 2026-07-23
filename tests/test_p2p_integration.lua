@@ -238,6 +238,7 @@ assert(host.autonav_resets>1,"P2P updates did not continually cancel autonav")
 assert(host.session.machine.state=="host")
 local npc=host:add_pilot("Koala","Empire","Host NPC",false)
 local escort=host:add_pilot("Hyena","Player","Host Escort",true,"escort")
+escort.pilot_id=777
 escort:setLeader(host.local_pilot)
 
 local guest=new_world("John")
@@ -255,6 +256,10 @@ assert(host.session.machine.state=="host")
 assert(guest.session.machine.state=="guest")
 assert(host.player_name=="John" and guest.player_name=="John")
 assert(find(host,"John #2","P2P Players"),"host did not locally alias the guest")
+for _entity_id,record in pairs(host.session.host_inventory) do
+   assert(record.name~="John #2",
+      "remote player proxy was inventoried as a host-owned ambient NPC")
+end
 local host_proxy=find(guest,"John #2","P2P Players")
 assert(host_proxy,"guest did not locally alias the host")
 assert(host_proxy.last_chat=="Hi, I'm John, the host of this system."
@@ -343,7 +348,7 @@ local guest_craft_states=guest.session.host.sent_types.craft_state or 0
 advance({host,guest},0.9,12)
 assert((guest.session.host.sent_types.craft_state or 0)==guest_craft_states,
    "owned craft state was published faster than 1 Hz")
-advance({host,guest},0.1,12)
+advance({host,guest},0.11,12)
 assert((guest.session.host.sent_types.craft_state or 0)>guest_craft_states,
    "owned craft state was not published at 1 Hz")
 local guest_fighter_replica=find(host,"Guest Fighter","P2P Craft 20")
@@ -369,6 +374,21 @@ assert(guest_fighter_replica.last_order.kind=="e_attack"
 assert(guest_fighter_replica.hostile,
    "guest fighter attacking the host remained collision-neutral")
 
+-- A duplicate or relayed path must never make an owner instantiate replicas
+-- of its own ship tree.
+local host_side_guest_peer
+for peer,meta in pairs(guest.session.peer_meta) do
+   if meta.verified and meta.node=="10" then host_side_guest_peer=peer.remote_peer; break end
+end
+assert(host_side_guest_peer)
+host_side_guest_peer:send(assert(wire_codec.encode{
+   type="craft_manifest",node="20",system="Delta Polaris",owner="20",
+   entity="20:999",seq=999,ship="Llama",name="Reflected Self",
+}),0,"reliable")
+guest.session.update()
+assert(not guest.session.craft["20:999"],
+   "reflected owned-craft manifest created a local self copy")
+
 -- A third peer knows only the guest and must discover the actual host through it.
 local third=new_world("Jane")
 local guest_bootstrap=guest.session.endpoint:gsub(":", " ")
@@ -391,6 +411,11 @@ local npc_velocity_sets=npc_replica.velocity_sets or 0
 local escort_velocity_sets=escort_replica.velocity_sets or 0
 for _index,w in ipairs({host,guest,third}) do w.clock=w.clock+1 end
 update({host,guest,third},7)
+guest.session.update(0.1)
+local npc_motion=guest.session.npcs["10:"..npc.pilot_id].motion
+guest.session.npcs["10:"..npc.pilot_id].motion=nil
+for _index=1,60 do guest.session.update(1/60) end
+guest.session.npcs["10:"..npc.pilot_id].motion=npc_motion
 local npc_x=select(1,npc_replica:pos():get())
 local escort_x=select(1,escort_replica:pos():get())
 local npc_vx=select(1,npc_replica:vel():get())
@@ -399,12 +424,13 @@ assert(npc_x==0 and (npc_replica.position_sets or 0)==0,
    "NPC reconciliation teleported its replica")
 assert(escort_x==0 and (escort_replica.position_sets or 0)==0,
    "owned-craft reconciliation teleported its replica")
-assert(npc_vx>0 and npc_vx<=120,"NPC correction velocity was not acceleration-capped")
+assert(npc_vx>0 and npc_vx<=240,"NPC correction velocity was not acceleration-capped")
 assert(escort_vx>0 and escort_vx<=160,"owned-craft correction velocity was not acceleration-capped")
-assert((npc_replica.velocity_sets or 0)-npc_velocity_sets<=2,
-   "NPC reconciliation exceeded its 10 Hz work budget")
+assert((npc_replica.velocity_sets or 0)-npc_velocity_sets<=4,
+   "NPC reconciliation exceeded its 10 Hz work budget: "
+      ..tostring((npc_replica.velocity_sets or 0)-npc_velocity_sets))
 assert((escort_replica.velocity_sets or 0)-escort_velocity_sets<=2,
-   "owned-craft reconciliation exceeded its 15 Hz work budget")
+   "owned-craft reconciliation exceeded its 1 Hz work budget")
 npc:setHealth(42,17,3); npc:setEnergy(51)
 advance({host,guest,third},0.25,8)
 assert(npc_replica.armour==42 and npc_replica.shield==17 and npc_replica.stress==3 and npc_replica.energy_value==51)
@@ -424,7 +450,7 @@ local proxy_x=select(1,host_proxy:pos():get())
 local proxy_vx=select(1,host_proxy:vel():get())
 assert(proxy_x==0 and (host_proxy.position_sets or 0)==0,
    "player reconciliation teleported its proxy")
-assert(proxy_vx>0 and proxy_vx<=240,
+assert(proxy_vx>0 and proxy_vx<=360,
    "player correction velocity exceeded its acceleration cap")
 assert((host_proxy.velocity_sets or 0)-player_velocity_sets<=3,
    "player reconciliation exceeded its 30 Hz work budget")

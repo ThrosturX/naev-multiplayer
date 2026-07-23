@@ -81,6 +81,10 @@ local function validate ( message )
       return nil, "invalid claim"
    end
    if message.node and not message.node:match("^[%x]+$") then return nil, "invalid node" end
+   if (message.type=="player_manifest" or message.type=="player_state")
+         and message.entity~=message.node then
+      return nil, "player entity does not match node"
+   end
    if message.host and not message.host:match("^[%x]+$") then return nil, "invalid host" end
    if message.peer and not message.peer:match("^[%x]+$") then return nil, "invalid peer" end
    if message.endpoint and (not message.endpoint:match("^[^%s:]+:%d+$") or #message.endpoint > 255) then
