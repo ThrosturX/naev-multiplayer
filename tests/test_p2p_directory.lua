@@ -71,19 +71,23 @@ assert(service:receive(local_peer,assert(codec.encode{type="query",node="50",sys
 assert(find_sent(local_at,local_peer,"punch","127.0.0.1:62001"))
 assert(find_sent(local_at,host_peer,"punch","127.0.0.1:64000"))
 
--- Simultaneously active claims converge on the lowest node ID.
+-- The latest verified claim wins regardless of node ordering.
 local lower_peer={}
 assert(service:connect(lower_peer,"198.51.100.5:47000"))
 assert(service:receive(lower_peer,assert(codec.encode{type="hello",node="05",cap="player",name="Lower"})))
 assert(service:receive(lower_peer,assert(codec.encode{type="claim",node="05",system="Delta Polaris",
    claim="def",endpoint="0.0.0.0:62002"})))
 assert(service.hosts["Delta Polaris"].node=="05")
+assert(service:receive(host_peer,assert(codec.encode{type="claim",node="10",system="Delta Polaris",
+   claim="abc2",endpoint="0.0.0.0:62001"})))
+assert(service.hosts["Delta Polaris"].node=="10",
+   "directory retained a lower-ID claimant instead of the latest claim")
 
 -- Disconnected claims remain useful as stale hints. Any new live claimant can
 -- supersede a stale entry regardless of node ordering.
-service:disconnect_peer(lower_peer)
+service:disconnect_peer(host_peer)
 clock=100000; service:prune()
-assert(service.hosts["Delta Polaris"].node=="05" and not service.hosts["Delta Polaris"].active)
+assert(service.hosts["Delta Polaris"].node=="10" and not service.hosts["Delta Polaris"].active)
 local replacement_peer={}
 assert(service:connect(replacement_peer,"198.51.100.30:48000"))
 assert(service:receive(replacement_peer,assert(codec.encode{type="hello",node="30",cap="player",name="Replacement"})))

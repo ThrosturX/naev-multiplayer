@@ -1104,7 +1104,7 @@ local function on_message ( peer, message )
             session.sequence=session.sequence+1
             local welcome=base("chat")
             welcome.seq=session.sequence
-            welcome.text="Hi, I'm "..local_player_name()..", the host of this system."
+            welcome.text="This is Captain "..player.name().." of the "..local_player_name()..". Identify yourself."
             if send(peer,welcome,true) then session.host_welcomed[message.node]=true end
          end
          broadcast(message,true,peer)
@@ -1176,7 +1176,7 @@ local function greet_host ()
          session.sequence=session.sequence+1
          local msg=base("chat")
          msg.seq=session.sequence
-         msg.text="Hi, I'm "..player.name().."!"
+         msg.text="I am Captain "..player.name().." of the "..local_player_name().."!"
          if send(peer,msg,true) then session.greeted_system=session.machine.system end
          return
       end

@@ -64,7 +64,8 @@ same ENet transport and `MP2P/1` codec as players. It stores no accounts or
 gameplay data. It introduces peers using observed and advertised endpoint
 candidates, but never handles their gameplay packets. Active hosts refresh
 their claim every 10 seconds. Claims remain active
-for the directory connection's lifetime; disconnected claims are retained as
+for the directory connection's lifetime, and the latest verified claim for a
+system is the hint returned to clients. Disconnected claims are retained as
 bounded stale hints until superseded or evicted. Clients retry configured
 directory/bootstrap connections every five seconds, and hosts immediately
 re-announce after reconnecting. A stale hint never prevents the normal local

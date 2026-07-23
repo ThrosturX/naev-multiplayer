@@ -153,14 +153,15 @@ function directory:receive ( peer, packet )
       if alternate==observed then alternate=nil end
       local stamp=self.now()
       local old=self.hosts[message.system]
-      if not old or not old.active or old.node==message.node or message.node<old.node then
-         if not old then self:make_host_room() end
-         local claim={node=message.node,claim=message.claim,
-            endpoint=observed,alternate=alternate,advertised_port=advertised_port,
-            seen=stamp,active=true,peer=peer}
-         self.hosts[message.system]=claim
-         self:publish_hint(message.system,claim)
-      end
+      -- The directory is only a rendezvous hint service. Record the latest
+      -- verified claim instead of imposing the clients' split-brain ordering
+      -- on otherwise healthy system hosts.
+      if not old then self:make_host_room() end
+      local claim={node=message.node,claim=message.claim,
+         endpoint=observed,alternate=alternate,advertised_port=advertised_port,
+         seen=stamp,active=true,peer=peer}
+      self.hosts[message.system]=claim
+      self:publish_hint(message.system,claim)
       return true
    end
 

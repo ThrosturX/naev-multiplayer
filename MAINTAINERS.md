@@ -84,7 +84,9 @@ Directory hints carry a receiver-relative TTL capped at 60 seconds; never put
 one process's monotonic or wall-clock timestamp on the wire as an expiry.
 The TTL bounds each client's hint cache, not directory claim lifetime. Active
 claims follow connection liveness. Disconnected claims remain as bounded stale
-hints and are immediately superseded by any new live claimant.
+hints and are immediately superseded by any new live claimant. The directory
+stores the latest verified claim for each system; deterministic node ordering
+belongs only to client-side resolution of hosts that independently claimed.
 For live claims, use the directory connection's observed endpoint as the
 primary candidate and retain the advertised listen port as a fallback. Send
 both peers reliable `punch` introductions so their shared ENet sockets emit
