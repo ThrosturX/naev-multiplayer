@@ -113,7 +113,8 @@ local function connect ( endpoint, expected_node )
    if ok and peer then
       session.endpoints[endpoint]=peer
       session.peers[peer]=endpoint
-      session.peer_meta[peer]={verified=false,expected_node=expected_node}
+      session.peer_meta[peer]={verified=false,expected_node=expected_node,outbound=true}
+      return true
    end
 end
 
@@ -137,9 +138,10 @@ local function broadcast ( message, reliable, except )
    end
 end
 
-local function connected_node ( node )
-   for _peer,meta in pairs(session.peer_meta) do
-      if meta.node==node or meta.expected_node==node then return true end
+local function connected_node ( node, except, verified_only )
+   for peer,meta in pairs(session.peer_meta) do
+      if peer~=except and (not verified_only or meta.verified)
+            and (meta.node==node or meta.expected_node==node) then return true end
    end
    return false
 end
@@ -160,9 +162,9 @@ local function hello ( peer )
    if session.machine.system then send(peer,base("query"),true) end
 end
 
-local function reject_peer ( peer, reason )
+local function reject_peer ( peer, reason, quiet )
    local endpoint=session.peers[peer]
-   print("P2P: rejected peer: " .. tostring(reason))
+   if not quiet then print("P2P: rejected peer: " .. tostring(reason)) end
    pcall(function() peer:disconnect_now() end)
    session.peers[peer]=nil; session.peer_meta[peer]=nil
    if endpoint then session.endpoints[endpoint]=nil end
@@ -266,17 +268,54 @@ local function local_state ( p )
       target=target_entity(target), active=active_names(p),energy=p:energy()}
 end
 
-local function soft_motion ( p, state, poscap, velcap )
-   local x,y=p:pos():get(); local vx,vy=p:vel():get()
-   local m=reconcile.motion({x=x,y=y,vx=vx,vy=vy},{x=state.x,y=state.y,vx=state.vx,vy=state.vy,dir=state.dir},poscap,velcap)
-   p:setPos(vec2.new(m.x,m.y)); p:setVel(vec2.new(m.vx,m.vy)); p:setDir(m.dir)
+local function motion_target ( entry, state )
+   entry.motion={x=state.x,y=state.y,vx=state.vx,vy=state.vy,dir=state.dir,received=now()}
+end
+
+local player_smoothing={position_gain=2.5,correction_speed=600,velocity_rate=12,
+   acceleration=2400,direction_rate=14,max_prediction=0.25}
+local npc_smoothing={position_gain=1.5,correction_speed=250,velocity_rate=8,
+   acceleration=600,direction_rate=10,max_prediction=0.4}
+local craft_smoothing={position_gain=2,correction_speed=400,velocity_rate=10,
+   acceleration=1200,direction_rate=12,max_prediction=0.3}
+
+local function smooth_entry ( entry, dt, stamp, limits )
+   local p=entry.pilot
+   if not entry.motion or not exists(p) then return end
+   local x,y=p:pos():get(); local vx,vy=p:vel():get(); local dir=p:dir()
+   local m=reconcile.steer({x=x,y=y,vx=vx,vy=vy,dir=dir},entry.motion,
+      dt,stamp-entry.motion.received,limits)
+   if math.abs(m.vx-vx)>0.01 or math.abs(m.vy-vy)>0.01 then
+      p:setVel(vec2.new(m.vx,m.vy))
+   end
+   if math.abs(math.sin((m.dir-dir)/2))>0.00025 then p:setDir(m.dir) end
+end
+
+local smooth_elapsed={player=0,npc=0,craft=0}
+
+local function reset_smoothing ()
+   smooth_elapsed.player=0; smooth_elapsed.npc=0; smooth_elapsed.craft=0
+end
+
+local function smooth_replicas ( dt, stamp )
+   dt=math.max(0,math.min(tonumber(dt) or 1/60,0.1))
+   local function update_group ( key, interval, container, limits )
+      smooth_elapsed[key]=smooth_elapsed[key]+dt
+      if smooth_elapsed[key]+1e-9 < interval then return end
+      local step=math.min(smooth_elapsed[key],0.1)
+      smooth_elapsed[key]=smooth_elapsed[key]%interval
+      for _entity_id,entry in pairs(container) do smooth_entry(entry,step,stamp,limits) end
+   end
+   update_group("player",1/30,session.players,player_smoothing)
+   update_group("craft",1/15,session.craft,craft_smoothing)
+   update_group("npc",1/10,session.npcs,npc_smoothing)
 end
 
 local function apply_player_state ( message )
    local entry=session.players[message.entity]
    if not entry or not exists(entry.pilot) then return end
    if not reconcile.accept(entry.sequences,"state",message.seq) then return end
-   soft_motion(entry.pilot,message,80,40)
+   motion_target(entry,message)
    local p=entry.pilot
    pcall(function()
       local target=entity_pilot(message.target)
@@ -492,7 +531,7 @@ local function parse_states ( packed, container, owner )
             and state.armour>=0 and state.armour<=1e9 and state.shield>=0 and state.shield<=1e9
             and state.stress>=0 and state.stress<=1e9 and state.energy>=0 and state.energy<=1e9
          if bounded then
-            soft_motion(entry.pilot,state,60,30)
+            motion_target(entry,state)
             entry.pilot:setHealth(state.armour,state.shield,state.stress)
             entry.pilot:setEnergy(state.energy)
             if f[11] and f[11]~="" then
@@ -542,13 +581,36 @@ local function on_message ( peer, message )
          reject_peer(peer,"unexpected node identity"); return
       end
       if message.cap=="player" then
+         local duplicate_peer,duplicate_meta
+         for other,other_meta in pairs(session.peer_meta) do
+            if other~=peer and other_meta.verified and other_meta.cap=="player"
+                  and other_meta.node==message.node then
+               duplicate_peer,duplicate_meta=other,other_meta
+               break
+            end
+         end
+         if duplicate_peer then
+            local prefer_outbound=session.settings.node_id<message.node
+            if meta.outbound==prefer_outbound and duplicate_meta.outbound~=prefer_outbound then
+               reject_peer(duplicate_peer,"duplicate connection",true)
+            else
+               reject_peer(peer,"duplicate connection",true)
+               return
+            end
+         end
          local accepted,err=session.identities:add(message.node,message.name)
+         if not accepted and err=="node changed player name" and not duplicate_peer then
+            accepted,err=session.identities:update(message.node,message.name)
+            local entry=session.players[message.node]
+            if accepted and entry and exists(entry.pilot) then
+               pcall(function() entry.pilot:rename(accepted) end)
+            end
+         end
          if not accepted then reject_peer(peer,err); return end
          meta.name=message.name
       end
       meta.node=message.node; meta.cap=message.cap; meta.verified=true
-      print("P2P: verified " .. message.cap .. " peer")
-      session.machine.members[message.node]=true
+      if message.cap=="player" then session.machine.members[message.node]=true end
       local endpoint=session.peers[peer]
       if meta.cap=="player" and endpoint_valid(endpoint) then
          session.machine.topology:add_peer(endpoint)
@@ -562,7 +624,6 @@ local function on_message ( peer, message )
    if message.type=="punch" then
       if meta.cap=="directory" and message.system==session.machine.system
             and message.peer~=session.settings.node_id then
-         print("P2P: directory introduced peer")
          connect(message.endpoint,message.peer)
       end
       return
@@ -575,7 +636,9 @@ local function on_message ( peer, message )
       if session.machine.topology:remember_hint(message.system,message.host,message.endpoint,message.claim,expires) then
          session.settings.recent=session.machine.topology:serialize_peers()
          if meta.node==message.host and meta.cap=="player" then
-            local joined=session.machine:accept_claim{system=message.system,node=message.host,claim=message.claim}
+            local old_state,old_host=session.machine.state,session.machine.host
+            local accepted=session.machine:accept_claim{system=message.system,node=message.host,claim=message.claim}
+            local joined=accepted and (old_state~="guest" or old_host~=message.host)
             if joined then remove_guest_population() end
          else
             if not connected_node(message.host) then connect(message.endpoint,message.host) end
@@ -589,7 +652,9 @@ local function on_message ( peer, message )
    if message.type=="claim" then
       if not owner_ok then return end
       if meta.node==message.node and endpoint_valid(session.peers[peer]) then message.endpoint=session.peers[peer] end
-      local joined=session.machine:accept_claim(message)
+      local old_state,old_host=session.machine.state,session.machine.host
+      local accepted=session.machine:accept_claim(message)
+      local joined=accepted and (old_state~="guest" or old_host~=message.node)
       session.machine.topology:remember_hint(message.system,message.node,message.endpoint,message.claim,now()+60)
       if joined then
          print("P2P: joined system host")
@@ -773,6 +838,7 @@ function session.enter ( system_name )
       return true
    end
    session.leave(); session.machine:enter(system_name)
+   reset_smoothing()
    session.greeted_system=nil
    lock_autonav(true)
    connect_configured(); session.last_seed_connect=now()
@@ -790,6 +856,7 @@ function session.leave ()
    for _entity_id,entry in pairs(session.craft) do remove_pilot(entry.pilot) end
    session.players={}; session.npcs={}; session.craft={}
    session.craft_factions={}
+   reset_smoothing()
    session.greeted_system=nil
    pilot.toggleSpawn(true); session.machine:leave(); lock_autonav(false)
 end
@@ -843,7 +910,7 @@ function session.input ( input_name, input_pressed )
    naev.cache()[key]=input_pressed and 1 or 0
 end
 
-function session.update ()
+function session.update ( dt )
    if not session.running then return end
    -- As in arena multiplayer, cancel autonav every frame so it cannot engage
    -- time compression while this process is simulating a shared system.
@@ -851,8 +918,10 @@ function session.update ()
    local event=session.host:service(0)
    while event do
       if event.type=="connect" then
-         if not session.peers[event.peer] then session.peers[event.peer]=tostring(event.peer); session.peer_meta[event.peer]={verified=false} end
-         print("P2P: peer connected")
+         if not session.peers[event.peer] then
+            session.peers[event.peer]=tostring(event.peer)
+            session.peer_meta[event.peer]={verified=false,outbound=false}
+         end
          hello(event.peer)
       elseif event.type=="receive" then
          local message,err=codec.decode(event.data)
@@ -860,21 +929,26 @@ function session.update ()
       elseif event.type=="disconnect" then
          local meta=session.peer_meta[event.peer]
          if meta and meta.node then
-            session.machine.members[meta.node]=nil
-            owned.cleanup(session.craft,meta.node,function(entry) remove_pilot(entry.pilot) end)
-            session.identities:remove(meta.node)
-            local departed=session.players[meta.node]; if departed then remove_pilot(departed.pilot); session.players[meta.node]=nil end
-            if session.machine.state=="host" then
-               local msg=base("leave"); msg.node=meta.node; broadcast(msg,true,event.peer)
+            local last_connection=not connected_node(meta.node,event.peer,true)
+            if last_connection then
+               session.machine.members[meta.node]=nil
+               owned.cleanup(session.craft,meta.node,function(entry) remove_pilot(entry.pilot) end)
+               session.identities:remove(meta.node)
+               local departed=session.players[meta.node]; if departed then remove_pilot(departed.pilot); session.players[meta.node]=nil end
+               if session.machine.state=="host" then
+                  local msg=base("leave"); msg.node=meta.node; broadcast(msg,true,event.peer)
+               end
+               if meta.node==session.machine.host then handle_host_loss() end
             end
-            if meta.node==session.machine.host then handle_host_loss() end
          end
          local endpoint=session.peers[event.peer]; session.peers[event.peer]=nil; session.peer_meta[event.peer]=nil; if endpoint then session.endpoints[endpoint]=nil end
       end
       event=session.host:service(0)
    end
    greet_host()
-   local stamp=now(); local action=session.machine:tick()
+   local stamp=now()
+   smooth_replicas(dt,stamp)
+   local action=session.machine:tick()
    if stamp-(session.last_seed_connect or 0)>=5 then
       connect_configured(); session.last_seed_connect=stamp
    end

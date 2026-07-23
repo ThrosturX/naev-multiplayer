@@ -43,11 +43,14 @@ test("local-only player name aliases", function()
    eq(ids:add("c3","John"),"John #2")
    eq(ids:add("d4","John"),"John #3")
    assert(not ids:add("b2","Janet"))
+   eq(ids:update("b2","Janet"),"Janet")
+   eq(ids:raw_name("b2"),"Janet")
    ids:remove("b2")
    eq(ids:add("e5","Jane"),"Jane")
    ids:remove("a1")
    eq(ids:raw_name("a1"),"John")
    eq(ids:display_name("a1"),"John")
+   assert(not ids:update("a1","Other John"))
 end)
 
 test("peer cache persistence and bound", function()
@@ -92,6 +95,12 @@ end)
 test("capped reconciliation and local health", function()
    local m=reconcile.motion({x=0,y=0,vx=0,vy=0},{x=100,y=-100,vx=9,vy=-9,dir=2},10,2)
    eq(m.x,10); eq(m.y,-10); eq(m.vx,2); eq(m.vy,-2)
+   local smooth=reconcile.steer({x=0,y=0,vx=0,vy=0,dir=2*math.pi-0.1},
+      {x=10000,y=-10000,vx=1000,vy=-1000,dir=0.1},1/60,0,
+      {correction_speed=600,acceleration=600})
+   eq(smooth.vx,10); eq(smooth.vy,-10)
+   assert(smooth.dir<0.1 or smooth.dir>2*math.pi-0.1,
+      "direction smoothing took the long way around")
    local health=0
    local placed=0
    local adapter={soft_motion=function() end,set_motion=function() placed=placed+1 end,

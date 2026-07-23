@@ -88,8 +88,8 @@ local function new_world ( player_name )
          receiver.last_order={sender=self,kind=kind,data=data}
       end
    end
-   function pilot_methods:setPos (v) self.position=v end
-   function pilot_methods:setVel (v) self.velocity=v end
+   function pilot_methods:setPos (v) self.position=v; self.position_sets=(self.position_sets or 0)+1 end
+   function pilot_methods:setVel (v) self.velocity=v; self.velocity_sets=(self.velocity_sets or 0)+1 end
    function pilot_methods:setDir (v) self.direction=v end
    function pilot_methods:setTarget (v) self.target_pilot=v end
    function pilot_methods:setHealth (a,s,t) self.armour=a; self.shield=s; self.stress=t end
@@ -314,6 +314,26 @@ assert(third.session.machine.state=="guest" and third.session.machine.host=="10"
    "peer did not discover host through an intermediate guest")
 assert(find(third,"John","P2P Players") and find(third,"John #2","P2P Players"),
    "third peer did not uniquely alias duplicate remote names")
+npc:setPos(vector(500,0))
+escort:setPos(vector(500,0))
+local npc_velocity_sets=npc_replica.velocity_sets or 0
+local escort_velocity_sets=escort_replica.velocity_sets or 0
+for _index,w in ipairs({host,guest,third}) do w.clock=w.clock+0.25 end
+update({host,guest,third},7)
+local npc_x=select(1,npc_replica:pos():get())
+local escort_x=select(1,escort_replica:pos():get())
+local npc_vx=select(1,npc_replica:vel():get())
+local escort_vx=select(1,escort_replica:vel():get())
+assert(npc_x==0 and (npc_replica.position_sets or 0)==0,
+   "NPC reconciliation teleported its replica")
+assert(escort_x==0 and (escort_replica.position_sets or 0)==0,
+   "owned-craft reconciliation teleported its replica")
+assert(npc_vx>0 and npc_vx<=120,"NPC correction velocity was not acceleration-capped")
+assert(escort_vx>0 and escort_vx<=160,"owned-craft correction velocity was not acceleration-capped")
+assert((npc_replica.velocity_sets or 0)-npc_velocity_sets<=2,
+   "NPC reconciliation exceeded its 10 Hz work budget")
+assert((escort_replica.velocity_sets or 0)-escort_velocity_sets<=2,
+   "owned-craft reconciliation exceeded its 15 Hz work budget")
 npc:setHealth(42,17,3); npc:setEnergy(51)
 advance({host,guest,third},0.25,8)
 assert(npc_replica.armour==42 and npc_replica.shield==17 and npc_replica.stress==3 and npc_replica.energy_value==51)
@@ -326,9 +346,17 @@ removed_npc:rm(); advance({host,guest,third},0.25,8)
 assert(not removed_replica:exists(),"guest ignored authoritative NPC removal")
 
 host.local_pilot:setPos(vector(500,0))
-advance({host,guest,third},0.1,8)
+local player_velocity_sets=host_proxy.velocity_sets or 0
+for _index,w in ipairs({host,guest,third}) do w.clock=w.clock+0.1 end
+update({host,guest,third},6)
 local proxy_x=select(1,host_proxy:pos():get())
-assert(proxy_x>0 and proxy_x<=80,"player correction was not soft-capped")
+local proxy_vx=select(1,host_proxy:vel():get())
+assert(proxy_x==0 and (host_proxy.position_sets or 0)==0,
+   "player reconciliation teleported its proxy")
+assert(proxy_vx>0 and proxy_vx<=240,
+   "player correction velocity exceeded its acceleration cap")
+assert((host_proxy.velocity_sets or 0)-player_velocity_sets<=3,
+   "player reconciliation exceeded its 30 Hz work budget")
 assert(guest.local_pilot.armour==100 and guest.local_pilot.shield==100,"local player health was overwritten")
 assert(host.session.send_chat("headless hello")); update({host,guest,third},8)
 assert(host_proxy.last_chat=="headless hello","reliable chat was not delivered")
@@ -416,18 +444,30 @@ assert(directory_peer,"guest did not connect to fake directory")
 directory_peer:send(assert(wire_codec.encode{
    type="hello",node="d1",cap="directory"}),0,"reliable")
 update({punch_guest},4)
+assert(not punch_guest.session.machine.members.d1,
+   "directory-only node entered the gameplay election membership")
+assert(punch_guest.session.identities:add("80","Stale Relay Name"),
+   "failed to establish relayed identity test fixture")
 directory_peer:send(assert(wire_codec.encode{
    type="punch",node="d1",system="Gamma Polaris",peer="80",
    endpoint="127.0.0.1:61302"}),0,"reliable")
+-- A directory can provide observed and advertised candidates for the same
+-- node. Both may connect, but only one gameplay peer may survive verification.
+network.hosts[61303]=network.hosts[61302]
+directory_peer:send(assert(wire_codec.encode{
+   type="punch",node="d1",system="Gamma Polaris",peer="80",
+   endpoint="127.0.0.1:61303"}),0,"reliable")
 update({punch_host,punch_guest},16)
-local host_verified,guest_verified
+local host_verified,guest_verified=0,0
 for _peer,meta in pairs(punch_host.session.peer_meta) do
-   if meta.verified and meta.node=="90" then host_verified=true end
+   if meta.verified and meta.node=="90" then host_verified=host_verified+1 end
 end
 for _peer,meta in pairs(punch_guest.session.peer_meta) do
-   if meta.verified and meta.node=="80" then guest_verified=true end
+   if meta.verified and meta.node=="80" then guest_verified=guest_verified+1 end
 end
-assert(host_verified and guest_verified,
-   "directory punch did not create a directly verified player connection")
+assert(host_verified==1 and guest_verified==1,
+   "directory candidates did not converge on one verified player connection")
+assert(punch_guest.session.identities:raw_name("80")=="Punch Host",
+   "direct hello did not refresh a relay-only player identity")
 punch_host.session.stop(); punch_guest.session.stop()
 print("ok - three-peer session integration")

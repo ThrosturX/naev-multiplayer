@@ -41,6 +41,27 @@ function identity:add ( node, name )
    return display
 end
 
+-- A relayed manifest can arrive before the node's direct hello. Allow that
+-- direct connection to refresh the raw name while preserving local uniqueness.
+function identity:update ( node, name )
+   if node==self.local_node or not valid_name(name) then
+      return nil,"invalid player identity update"
+   end
+   local old=self.by_node[node]
+   if not old then return self:add(node,name) end
+   if old.raw==name then return old.display end
+   self.by_display[old.display]=nil
+   local display=name
+   local suffix=2
+   while self.by_display[display] do
+      display=name.." #"..suffix
+      suffix=suffix+1
+   end
+   old.raw=name; old.display=display
+   self.by_display[display]=node
+   return display
+end
+
 function identity:remove ( node )
    if node==self.local_node then return end
    local entry=self.by_node[node]

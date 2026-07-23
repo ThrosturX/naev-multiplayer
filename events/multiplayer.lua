@@ -79,7 +79,7 @@ local function p2p_start ()
     if not player.isLanded() then p2psession.enter(system.cur():nameRaw()) end
 end
 
-function P2P_SESSION_UPDATE () p2psession.update() end
+function P2P_SESSION_UPDATE ( dt ) p2psession.update(dt) end
 function P2P_SESSION_INPUT ( input_name, input_pressed )
     p2psession.input(input_name, input_pressed)
     if input_name ~= "hail" then return end
@@ -92,7 +92,7 @@ function P2P_SESSION_INPUT ( input_name, input_pressed )
     if not open_chat then return end
     vn.reset()
     luatk.vn(function()
-        luatk.msgInput(_("COMMUNICATION"), _("Broadcast:"), 32, function(msg)
+        luatk.msgInput(_("COMMUNICATION"), _("Broadcast:"), 48, function(msg)
             if msg and #msg > 0 then p2psession.send_chat(msg) end
         end)
     end)
