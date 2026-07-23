@@ -71,7 +71,7 @@ local function departure_target ( x, y, landable )
 end
 
 local function new_world ( player_name )
-   local world={clock=0,pilots={},next_id=1,spawn=true,player_name=player_name,c_calls={},
+   local world={clock=0,wall_clock=0,pilots={},next_id=1,spawn=true,player_name=player_name,c_calls={},
       speed_enabled=true,autonav_resets=0,unpauses=0,comms={},spobs={},jumps={},
       claim_available=true}
    local function counted ( name )
@@ -206,8 +206,9 @@ local function new_world ( player_name )
    -- honest so per-frame networking cannot accidentally depend on it again.
    env.os={}
    world.cache={}
-   env.naev={ticksGame=function() return world.clock end,cache=function() return world.cache end,
-      claimTest=function() return world.claim_available end,
+   env.naev={ticks=function() return world.wall_clock end,
+      ticksGame=function() return world.clock end,cache=function() return world.cache end,
+      claimTest=function() counted("claim_test"); return world.claim_available end,
       keyEnable=function(key,enabled) assert(key=="speed"); world.speed_enabled=enabled end,
       unpause=function() world.unpauses=world.unpauses+1 end}
    env.rnd={rnd=function(a) return a or 1 end}
@@ -261,7 +262,17 @@ local function update ( worlds, rounds )
    for _round=1,rounds or 1 do for _index,w in ipairs(worlds) do w.session.update() end end
 end
 local function advance ( worlds, seconds, rounds )
-   for _index,w in ipairs(worlds) do w.clock=w.clock+seconds end
+   for _index,w in ipairs(worlds) do
+      w.clock=w.clock+seconds
+      w.wall_clock=w.wall_clock+seconds
+   end
+   update(worlds,rounds or 8)
+end
+local function advance_game_only ( worlds, game_seconds, wall_seconds, rounds )
+   for _index,w in ipairs(worlds) do
+      w.clock=w.clock+game_seconds
+      w.wall_clock=w.wall_clock+(wall_seconds or 0)
+   end
    update(worlds,rounds or 8)
 end
 local function find ( world, name, faction_name )
@@ -279,8 +290,16 @@ assert(host.session.enter("Delta Polaris"))
 assert(host.session.machine.deadline==discovery_deadline and host.session.machine.state=="discovering",
    "duplicate same-system entry restarted discovery")
 assert(not host.speed_enabled,"P2P system entry did not disable the speed key")
+local initial_claim_checks=host.c_calls.claim_test or 0
+local initial_autonav_resets=host.autonav_resets
+update({host},120)
+assert((host.c_calls.claim_test or 0)==initial_claim_checks,
+   "P2P rechecked local system claims every rendered frame")
+assert(host.autonav_resets==initial_autonav_resets,
+   "P2P reset autonav every rendered frame")
 advance({host},2,4)
-assert(host.autonav_resets>1,"P2P updates did not continually cancel autonav")
+assert(host.autonav_resets==initial_autonav_resets+1,
+   "P2P maintenance did not defensively cancel autonav")
 assert(host.session.machine.state=="host")
 assert(host.local_pilot.effects["Multiplayer: Autonav Pending"],
    "solo-host autonav countdown was not shown")
@@ -292,6 +311,13 @@ assert(host.speed_enabled,
    "solo host did not regain ordinary autonav time compression")
 assert(not host.local_pilot.effects["Multiplayer: Autonav Pending"],
    "solo-host autonav countdown remained after autonav was restored")
+host.c_calls={}
+local solo_player_states=host.session.host.sent_types.player_state or 0
+advance({host},60,12)
+assert((host.c_calls.pilot_get or 0)==0,
+   "solo host scanned the pilot inventory under time compression")
+assert((host.session.host.sent_types.player_state or 0)==solo_player_states,
+   "solo host published player state without a remote system member")
 local npc=host:add_pilot("Koala","Empire","Host NPC",false)
 local escort=host:add_pilot("Hyena","Player","Host Escort",true,"escort")
 escort.pilot_id=777
@@ -572,7 +598,7 @@ assert(remote_craft_count==21,
    "state/manifest separation dropped remote carrier craft")
 local craft_manifests=host.session.host.sent_types.craft_manifest or 0
 host.c_calls={}
-host.session.last_npc=host.clock+20 -- isolate owned-craft collection from ambient inventory classification
+host.session.last_npc=host.wall_clock+20 -- isolate owned-craft collection from ambient inventory classification
 advance({host,guest},11,24)
 for _index,name in ipairs({"outfitsList","outfits","ship","name","faction","leader"}) do
    assert((host.c_calls[name] or 0)==0,
@@ -607,7 +633,10 @@ npc:setPos(vector(500,0))
 escort:setPos(vector(500,0))
 local npc_velocity_sets=npc_replica.velocity_sets or 0
 local escort_velocity_sets=escort_replica.velocity_sets or 0
-for _index,w in ipairs({host,guest,third}) do w.clock=w.clock+1 end
+for _index,w in ipairs({host,guest,third}) do
+   w.clock=w.clock+1
+   w.wall_clock=w.wall_clock+1
+end
 update({host,guest,third},7)
 guest.session.update(0.1)
 local npc_motion=guest.session.npcs["10:"..npc.pilot_id].motion
@@ -643,7 +672,10 @@ assert(not removed_replica:exists(),"guest ignored authoritative NPC removal")
 
 host.local_pilot:setPos(vector(500,0))
 local player_velocity_sets=host_proxy.velocity_sets or 0
-for _index,w in ipairs({host,guest,third}) do w.clock=w.clock+0.1 end
+for _index,w in ipairs({host,guest,third}) do
+   w.clock=w.clock+0.1
+   w.wall_clock=w.wall_clock+0.1
+end
 update({host,guest,third},6)
 local proxy_x=select(1,host_proxy:pos():get())
 local proxy_vx=select(1,host_proxy:vel():get())
@@ -794,6 +826,7 @@ update({stale_host,stale_guest},16)
 stale_host.session.update() -- drain the guest's final queued state
 local stale_proxy=stale_host.session.players["39"].pilot
 stale_host.clock=stale_host.clock+13
+stale_host.wall_clock=stale_host.wall_clock+13
 stale_host.session.update()
 assert(not stale_host.session.players["39"]
       and stale_host.session.departures["39"].pilot==stale_proxy
@@ -836,6 +869,10 @@ assert(transition_guest.session.enter("Transition System"))
 update({transition_host,transition_guest},16)
 assert(transition_guest.session.machine.state=="guest")
 transition_guest.claim_available=false
+transition_host.clock=transition_host.clock+1.1
+transition_host.wall_clock=transition_host.wall_clock+1.1
+transition_guest.clock=transition_guest.clock+1.1
+transition_guest.wall_clock=transition_guest.wall_clock+1.1
 transition_guest.session.update()
 assert(transition_guest.session.machine.state=="discovering"
       and next(transition_guest.session.players)==nil
@@ -880,6 +917,9 @@ assert(reconnect_guest.session.machine.state=="guest")
 local severed
 for peer in pairs(reconnect_guest.session.peers) do severed=peer; break end
 assert(severed); severed:disconnect_now(); update({reconnect_host,reconnect_guest},12)
+advance_game_only({reconnect_host,reconnect_guest},60,0.1,12)
+assert(next(reconnect_guest.session.peers)==nil,
+   "time compression accelerated configured endpoint retries")
 advance({reconnect_host,reconnect_guest},6,32)
 assert(reconnect_guest.session.machine.state=="guest" and reconnect_guest.session.machine.host=="60",
    "configured endpoint did not reconnect and resolve its temporary claim")

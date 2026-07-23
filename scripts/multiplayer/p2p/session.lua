@@ -19,16 +19,17 @@ local NPC_MANIFEST_BATCH_PAYLOAD = 4000
 local session = {
    running=false, peers={}, endpoints={}, players={}, npcs={}, craft={}, departures={},
    peer_meta={}, sequence=0, last_player=0, last_npc=0, last_craft=0,
-   last_claim=0, last_liveness=0, host_inventory={}, owned_inventory={},
+   last_claim=0, last_claim_check=0, last_liveness=0,
+   host_inventory={}, owned_inventory={},
    craft_factions={}, host_welcomed={}, pending_leader_owners={}, resync_sent={},
    ownership_cache={}, initial_sync_until=0, pending_npc_manifests=nil,
    indicators=status.new(function () return player.pilot() end),
 }
 
--- naev.ticksGame() is already expressed in seconds. Keeping all discovery and
--- publication intervals in that unit is important: dividing it by 1000 leaves
--- peers discovering for 25 minutes and delays manifests for hours.
-local function now () return naev.ticksGame() end
+-- Networking, liveness, and publication rates are wall-clock concerns. Using
+-- ticksGame here makes autonav time compression multiply connection retries
+-- and state collection in real time.
+local function now () return naev.ticks() end
 
 local function locally_claimed ()
    return not naev.claimTest(system.cur())
@@ -180,6 +181,14 @@ local function connected_node ( node, except, verified_only )
    for peer,meta in pairs(session.peer_meta) do
       if peer~=except and (not verified_only or meta.verified)
             and (meta.node==node or meta.expected_node==node) then return true end
+   end
+   return false
+end
+
+local function has_remote_member ()
+   if not session.machine then return false end
+   for node in pairs(session.machine.members) do
+      if node~=session.settings.node_id then return true end
    end
    return false
 end
@@ -456,8 +465,9 @@ local function local_state ( p )
       armour=armour,shield=shield,stress=stress}
 end
 
-local function motion_target ( entry, state )
-   entry.motion={x=state.x,y=state.y,vx=state.vx,vy=state.vy,dir=state.dir,received=now()}
+local function motion_target ( entry, state, received )
+   entry.motion={x=state.x,y=state.y,vx=state.vx,vy=state.vy,dir=state.dir,
+      received=received or now()}
 end
 
 local player_smoothing={position_gain=2.5,correction_speed=600,velocity_rate=12,
@@ -479,24 +489,21 @@ local function smooth_entry ( entry, dt, stamp, limits )
    if math.abs(math.sin((m.dir-dir)/2))>0.00025 then p:setDir(m.dir) end
 end
 
-local smooth_elapsed={player=0,npc=0,craft=0}
+local smooth_elapsed=0
 
 local function reset_smoothing ()
-   smooth_elapsed.player=0; smooth_elapsed.npc=0; smooth_elapsed.craft=0
+   smooth_elapsed=0
 end
 
 local function smooth_replicas ( dt, stamp )
    dt=math.max(0,math.min(tonumber(dt) or 1/60,0.1))
-   local function update_group ( key, interval, container, limits )
-      smooth_elapsed[key]=smooth_elapsed[key]+dt
-      if smooth_elapsed[key]+1e-9 < interval then return end
-      local step=math.min(smooth_elapsed[key],0.1)
-      smooth_elapsed[key]=smooth_elapsed[key]%interval
-      for _entity_id,entry in pairs(container) do smooth_entry(entry,step,stamp,limits) end
+   smooth_elapsed=smooth_elapsed+dt
+   if smooth_elapsed+1e-9 < 1/30 then return end
+   local step=math.min(smooth_elapsed,0.1)
+   smooth_elapsed=smooth_elapsed%(1/30)
+   for _entity_id,entry in pairs(session.players) do
+      smooth_entry(entry,step,stamp,player_smoothing)
    end
-   update_group("player",1/30,session.players,player_smoothing)
-   update_group("craft",1,session.craft,craft_smoothing)
-   update_group("npc",1/10,session.npcs,npc_smoothing)
 end
 
 local function mark_player_aggression ( node )
@@ -860,6 +867,9 @@ local publish_entities,publish_player,request_resync,publish_manifests
 
 local function parse_states ( packed, container, owner )
    local missing=false
+   local received=now()
+   local limits=owner and craft_smoothing or npc_smoothing
+   local step=owner and 1 or NPC_STATE_INTERVAL
    for line in packed:gmatch("([^;]+)") do
       local f={}; for value in line:gmatch("([^,]+)") do f[#f+1]=value end
       local id=f[1]; local entry=container[id]
@@ -870,7 +880,11 @@ local function parse_states ( packed, container, owner )
             and state.armour>=0 and state.armour<=1e9 and state.shield>=0 and state.shield<=1e9
             and state.stress>=0 and state.stress<=1e9 and state.energy>=0 and state.energy<=1e9
          if bounded then
-            motion_target(entry,state)
+            motion_target(entry,state,received)
+            -- NPC and owned-craft populations can contain hundreds of pilots.
+            -- Correct each replica when its authoritative packet arrives
+            -- instead of rescanning the whole population from hook.update.
+            smooth_entry(entry,step,received,limits)
             local applied=entry.applied or {}
             entry.applied=applied
             if applied.armour~=state.armour or applied.shield~=state.shield
@@ -951,7 +965,7 @@ local function handle_host_loss ()
       session.host_inventory={}
       session.machine.topology:remember_hint(session.machine.system,winner,session.endpoint,session.machine.claim,now()+60)
       broadcast(claim_message(),true)
-      publish_entities(true)
+      if has_remote_member() then publish_entities(true) end
       session.last_claim=now()
    elseif winner and session.member_endpoints and session.member_endpoints[winner] then
       connect(session.member_endpoints[winner],winner)
@@ -1325,6 +1339,7 @@ function session.start ( settings )
    session.initial_sync_until=0
    session.solo_since=nil
    session.last_liveness=now()
+   session.last_claim_check=0
    session.endpoint=tostring(host:get_socket_address())
    print("P2P: listener started")
    session.machine.topology:load_peers(session.settings.recent)
@@ -1355,6 +1370,7 @@ function session.enter ( system_name )
    end
    session.leave(); session.machine:enter(system_name)
    session.locally_claimed=locally_claimed()
+   session.last_claim_check=now()
    session.last_liveness=now()
    session.solo_since=nil
    reset_smoothing()
@@ -1448,7 +1464,10 @@ end
 
 function session.update ( dt )
    if not session.running then return end
-   if session.machine.system then
+   local stamp=now()
+   if session.machine.system
+         and stamp-(session.last_claim_check or 0)>=1 then
+      session.last_claim_check=stamp
       session.locally_claimed=locally_claimed()
       if session.locally_claimed and session.machine.state=="guest" then
          local system_name=session.machine.system
@@ -1457,9 +1476,6 @@ function session.update ( dt )
          session.enter(system_name)
       end
    end
-   -- Shared simulation forbids time compression, but a host that has remained
-   -- alone past its grace period gets ordinary local-play autonav back.
-   if session.autonav_locked then player.autonavReset() end
    local processed=0
    local event=session.host:service(0)
    while event do
@@ -1499,9 +1515,12 @@ function session.update ( dt )
       session.pending_leader_owners[owner]=nil
    end
    greet_host()
-   local stamp=now()
    if stamp-(session.last_liveness or 0)>=1 then
       session.last_liveness=stamp
+      -- Resetting autonav crosses into engine navigation state and does not
+      -- need rendered-frame cadence. The speed key remains disabled between
+      -- these defensive checks.
+      if session.autonav_locked then player.autonavReset() end
       for node,entry in pairs(session.departures) do
          if not exists(entry.pilot) then session.departures[node]=nil end
       end
@@ -1563,21 +1582,27 @@ function session.update ( dt )
    if action=="claim" then
       print("P2P: claimed local system host")
       session.machine.topology:remember_hint(session.machine.system,session.settings.node_id,session.endpoint,session.machine.claim,stamp+60)
-      broadcast(claim_message(),true); publish_player(true); publish_entities(true); session.last_claim=stamp
+      broadcast(claim_message(),true)
+      if has_remote_member() then publish_player(true); publish_entities(true) end
+      session.last_claim=stamp
       refresh_time_controls(stamp)
    end
    if session.machine.state=="host" and stamp-session.last_claim>=10 then
       session.machine.topology:remember_hint(session.machine.system,session.settings.node_id,session.endpoint,session.machine.claim,stamp+60)
       broadcast(claim_message(),true); session.last_claim=stamp
    end
-   if session.machine.state=="host" then publish_next_npc_manifest_batch() end
-   if session.machine.system and stamp-session.last_player>=1/15 then publish_player(false); session.last_player=stamp end
-   if session.machine.system and session.machine.state=="host"
+   local active_session=has_remote_member()
+   if active_session and session.machine.state=="host" then publish_next_npc_manifest_batch() end
+   if active_session and session.machine.system
+         and stamp-session.last_player>=1/15 then
+      publish_player(false); session.last_player=stamp
+   end
+   if active_session and session.machine.system and session.machine.state=="host"
          and stamp-session.last_npc>=NPC_STATE_INTERVAL then
       publish_entities(false,true,false)
       session.last_npc=stamp
    end
-   if session.machine.system and stamp-session.last_craft>=1 then
+   if active_session and session.machine.system and stamp-session.last_craft>=1 then
       publish_entities(false,false,true)
       session.last_craft=stamp
    end
