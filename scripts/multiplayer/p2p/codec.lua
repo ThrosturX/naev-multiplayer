@@ -30,7 +30,7 @@ local valid_types = {
    hello=true, query=true, hint=true, claim=true, leave=true,
    player_manifest=true, player_state=true, chat=true,
    npc_manifest=true, npc_add=true, npc_remove=true, npc_state=true,
-   craft_manifest=true, craft_state=true, craft_remove=true,
+   craft_manifest=true, craft_state=true, craft_remove=true, craft_order=true,
 }
 
 local required = {
@@ -47,6 +47,7 @@ local required = {
    craft_manifest={"node","system","owner","entity","seq","ship","name"},
    craft_state={"node","system","owner","seq","entities"},
    craft_remove={"node","system","owner","entity","seq"},
+   craft_order={"node","system","owner","seq","order"},
 }
 
 local numeric = {
@@ -82,6 +83,10 @@ local function validate ( message )
    if message.host and not message.host:match("^[%x]+$") then return nil, "invalid host" end
    if message.endpoint and (not message.endpoint:match("^[^%s:]+:%d+$") or #message.endpoint > 255) then
       return nil, "invalid endpoint"
+   end
+   if message.order and message.order~="e_attack" and message.order~="e_hold"
+         and message.order~="e_return" and message.order~="e_clear" then
+      return nil, "invalid order"
    end
    for key, bounds in pairs(numeric) do
       if message[key] ~= nil then

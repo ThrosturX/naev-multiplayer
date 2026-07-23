@@ -40,7 +40,9 @@ package.preload.enet=function()
       return host
    end}
 end
-package.preload["ai.core.setup"]=function() return {setup=function() end} end
+package.preload["ai.core.setup"]=function()
+   return {setup=function(p) p.ai_setup_called=true end}
+end
 
 local function vector ( x, y )
    return {x=x or 0,y=y or 0,get=function(self) return self.x,self.y end}
@@ -52,7 +54,7 @@ end
 
 local function new_world ( player_name )
    local world={clock=0,pilots={},next_id=1,spawn=true,player_name=player_name,
-      speed_enabled=true,autonav_resets=0,unpauses=0}
+      speed_enabled=true,autonav_resets=0,unpauses=0,comms={}}
    local pilot_methods={}
    pilot_methods.__index=pilot_methods
    function pilot_methods:exists () return not self.removed end
@@ -60,8 +62,12 @@ local function new_world ( player_name )
    function pilot_methods:name () return self.pilot_name end
    function pilot_methods:ship () return resource(self.ship_name) end
    function pilot_methods:faction () return resource(self.faction_name) end
-   function pilot_methods:outfitsList () return {} end
-   function pilot_methods:actives () return {} end
+   function pilot_methods:outfitsList ()
+      local list={}
+      for _index,name in ipairs(self.outfit_names) do list[#list+1]=resource(name) end
+      return list
+   end
+   function pilot_methods:actives () return self.active_outfits end
    function pilot_methods:pos () return self.position end
    function pilot_methods:vel () return self.velocity end
    function pilot_methods:dir () return self.direction end
@@ -69,8 +75,17 @@ local function new_world ( player_name )
    function pilot_methods:health () return self.armour,self.shield,self.stress end
    function pilot_methods:energy () return self.energy_value end
    function pilot_methods:id () return self.pilot_id end
-   function pilot_methods:withPlayer () return self.owned or false end
+   function pilot_methods:withPlayer ()
+      return self.owned or self.faction_name=="Player" or self.leader_pilot==world.local_pilot
+   end
    function pilot_methods:leader () return self.leader_pilot end
+   function pilot_methods:ainame () return self.ai_name end
+   function pilot_methods:setLeader (v) self.leader_pilot=v end
+   function pilot_methods:msg (receivers,kind,data)
+      for _index,receiver in ipairs(receivers) do
+         receiver.last_order={sender=self,kind=kind,data=data}
+      end
+   end
    function pilot_methods:setPos (v) self.position=v end
    function pilot_methods:setVel (v) self.velocity=v end
    function pilot_methods:setDir (v) self.direction=v end
@@ -82,15 +97,33 @@ local function new_world ( player_name )
    function pilot_methods:setHostile (v) self.hostile=v==nil or v end
    function pilot_methods:rename (v) self.pilot_name=v end
    function pilot_methods:fillAmmo () self.ammo_fills=(self.ammo_fills or 0)+1 end
-   function pilot_methods:outfitAdd () end
-   function pilot_methods:outfitToggle () end
+   function pilot_methods:outfitAdd (name)
+      self.outfit_names[#self.outfit_names+1]=name
+      if name=="The Bite" or name:match("^The Bite %- ") then
+         self.active_outfits[#self.active_outfits+1]={outfit=resource(name),slot=#self.active_outfits+1,state="off"}
+      end
+   end
+   function pilot_methods:outfitToggle (slot,on)
+      for _index,active in ipairs(self.active_outfits) do
+         if active.slot==slot then
+            active.state=on and "on" or "off"
+            self.last_outfit_toggle={name=active.outfit:nameRaw(),on=on}
+            return true
+         end
+      end
+      return false
+   end
    function pilot_methods:memory () return self.pilot_memory end
-   function pilot_methods:broadcast (text) self.last_chat=text end
+   function pilot_methods:broadcast (text)
+      self.last_chat=text
+      self.chat_count=(self.chat_count or 0)+1
+   end
 
-   function world:add_pilot ( ship_name, faction_name, pilot_name, owned )
+   function world:add_pilot ( ship_name, faction_name, pilot_name, owned, ai_name )
       local p=setmetatable({ship_name=ship_name,faction_name=faction_name,pilot_name=pilot_name,
          owned=owned,position=vector(),velocity=vector(),direction=0,armour=100,shield=100,
-         stress=0,energy_value=100,pilot_id=self.next_id,pilot_memory={}},pilot_methods)
+         stress=0,energy_value=100,pilot_id=self.next_id,pilot_memory={},ai_name=ai_name,
+         outfit_names={},active_outfits={}},pilot_methods)
       self.next_id=self.next_id+1; table.insert(self.pilots,p); return p
    end
    world.local_pilot=world:add_pilot("Llama","Player",player_name,true)
@@ -111,12 +144,16 @@ local function new_world ( player_name )
       dynAdd=function(_base,raw) return resource(raw) end}
    env.pilot={
       get=function() local out={}; for _index,p in ipairs(world.pilots) do if not p.removed then out[#out+1]=p end end; return out end,
-      add=function(ship_name,fac,pos,name)
+      add=function(ship_name,fac,pos,name,params)
          local faction_name=type(fac)=="string" and fac or fac:nameRaw()
-         local p=world:add_pilot(ship_name,faction_name,name,false); p.position=pos; return p
+         local p=world:add_pilot(ship_name,faction_name,name,false,params and params.ai)
+         p.position=pos; return p
       end,
       toggleSpawn=function(v) world.spawn=v end,
-      taskClear=function() end,pushtask=function() end,comm=function() end,
+      taskClear=function() end,pushtask=function() end,
+      comm=function(name,text)
+         world.comms[#world.comms+1]={name=name,text=text}
+      end,
    }
    env.print=function(...) io.stdout:write("["..player_name.."] "); print(...) end
    world.env=env
@@ -139,6 +176,7 @@ local function find ( world, name, faction_name )
 end
 
 local host=new_world("John")
+host.local_pilot:outfitAdd("The Bite")
 assert(host.session.start{enabled=true,node_id="10",listen_port=62001,directory="",bootstrap={},recent={}})
 assert(host.session.enter("Delta Polaris"))
 local discovery_deadline=host.session.machine.deadline
@@ -150,7 +188,8 @@ advance({host},2,4)
 assert(host.autonav_resets>1,"P2P updates did not continually cancel autonav")
 assert(host.session.machine.state=="host")
 local npc=host:add_pilot("Koala","Empire","Host NPC",false)
-local escort=host:add_pilot("Hyena","Player","Host Escort",true)
+local escort=host:add_pilot("Hyena","Player","Host Escort",true,"escort")
+escort:setLeader(host.local_pilot)
 
 local guest=new_world("John")
 -- A player endpoint in the directory field must behave like a bootstrap peer.
@@ -171,6 +210,13 @@ local host_proxy=find(guest,"John #2","P2P Players")
 assert(host_proxy,"guest did not locally alias the host")
 local guest_proxy=find(host,"John #2","P2P Players")
 assert(guest_proxy,"host did not retain the aliased guest proxy")
+assert(guest_proxy.last_chat=="Hi, I'm John!" and guest_proxy.chat_count==1,
+   "guest did not send exactly one reliable entry greeting to the host")
+assert(#guest.comms==1 and guest.comms[1].name=="John"
+      and guest.comms[1].text=="Hi, I'm John!",
+   "host did not echo the entry greeting back to the sending client")
+update({host,guest},20)
+assert(guest_proxy.chat_count==1,"guest repeated its entry greeting without re-entering")
 assert(not find(host,"John","P2P Players") and not find(guest,"John","P2P Players"))
 assert(host_proxy.no_death and not host_proxy.invincible,
    "remote player proxy cannot receive local projectile impacts")
@@ -201,14 +247,58 @@ assert(host_proxy.armour==100 and host_proxy.shield==100 and host_proxy.stress==
    "disposable proxy health was not repaired")
 assert(guest.local_pilot.armour==100 and guest.local_pilot.shield==100,
    "replicated player state wrote local-player health")
+host.local_pilot.active_outfits[1].state="on"
+advance({host,guest},0.1,8)
+assert(host_proxy.last_outfit_toggle and host_proxy.last_outfit_toggle.name=="The Bite"
+      and host_proxy.last_outfit_toggle.on,
+   "The Bite was not activated by its actual replicated outfit slot")
+host.local_pilot.active_outfits[1].state="off"
+advance({host,guest},0.1,8)
+assert(host_proxy.last_outfit_toggle and not host_proxy.last_outfit_toggle.on,
+   "active outfit release was not replicated")
 host.session.input("primary",false)
 advance({host,guest},0.1,8)
 assert(not host_proxy:memory().p2p_primary,"primary fire release was not replicated")
 
 local npc_replica=find(guest,"Host NPC","Empire")
 assert(npc_replica,"guest did not receive host NPC")
-local escort_replica=find(guest,"Host Escort","Player")
+local escort_replica=find(guest,"Host Escort","P2P Craft 10")
 assert(escort_replica,"guest did not receive owner-authoritative craft")
+assert(not escort_replica:withPlayer(),"remote host craft became guest-owned")
+assert(escort_replica:ainame()=="escort" and escort_replica:leader()==host_proxy,
+   "remote host craft did not retain escort AI and its network owner's leader")
+
+-- A guest-launched fighter remains guest-authoritative. On the host it must
+-- not enter the local Player faction, and its native escort AI must receive
+-- commands from the guest proxy (the only leader that AI will accept).
+local guest_fighter=guest:add_pilot("Lancelot","Player","Guest Fighter",true,"escort")
+guest_fighter:setLeader(guest.local_pilot)
+-- Pilot IDs are process-local and frequently collide across peers. The wire
+-- entity namespace must keep these two different owners' craft distinct.
+guest_fighter.pilot_id=escort.pilot_id
+advance({host,guest},0.25,12)
+local guest_fighter_replica=find(host,"Guest Fighter","P2P Craft 20")
+assert(guest_fighter_replica,"host did not receive the guest fighter")
+assert(host.session.craft["20:"..escort.pilot_id]
+      and guest.session.craft["10:"..escort.pilot_id],
+   "same-numbered pilot IDs from different owners collided")
+assert(not guest_fighter_replica:withPlayer(),"guest fighter was classified as host-owned")
+assert(guest_fighter_replica:ainame()=="escort" and guest_fighter_replica:leader()==guest_proxy,
+   "guest fighter replica has the wrong AI or leader")
+assert(guest_fighter_replica.ai_setup_called,
+   "guest fighter outfits were not registered with native escort AI")
+guest.session.input("e_hold",true); update({host,guest},8)
+assert(guest_fighter_replica.last_order
+      and guest_fighter_replica.last_order.sender==guest_proxy
+      and guest_fighter_replica.last_order.kind=="e_hold",
+   "guest escort hold order was not applied by the host-side guest proxy")
+guest.local_pilot:setTarget(host_proxy)
+guest.session.input("e_attack",true); update({host,guest},8)
+assert(guest_fighter_replica.last_order.kind=="e_attack"
+      and guest_fighter_replica.last_order.data==host.local_pilot,
+   "guest escort attack order did not resolve the host's real pilot")
+assert(guest_fighter_replica.hostile,
+   "guest fighter attacking the host remained collision-neutral")
 
 -- A third peer knows only the guest and must discover the actual host through it.
 local third=new_world("Jane")

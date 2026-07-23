@@ -10,7 +10,7 @@ local ai_setup = require "ai.core.setup"
 local session = {
    running=false, peers={}, endpoints={}, players={}, npcs={}, craft={},
    peer_meta={}, sequence=0, last_player=0, last_npc=0, last_manifest=0,
-   last_claim=0, host_inventory={}, owned_inventory={},
+   last_claim=0, host_inventory={}, owned_inventory={}, craft_factions={},
 }
 
 -- naev.ticksGame() is already expressed in seconds. Keeping all discovery and
@@ -181,6 +181,8 @@ local function outfit_names ( p )
    return table.concat(names,",")
 end
 
+local reconcile_craft_leaders
+
 local function spawn_proxy ( message, display_name )
    if message.node == session.settings.node_id or session.players[message.entity] then return end
    if not pcall(function() ship.get(message.ship) end) then return end
@@ -209,6 +211,7 @@ local function spawn_proxy ( message, display_name )
    if message.dir then p:setDir(message.dir) end
    ai_setup.setup(p)
    session.players[message.entity]={pilot=p,node=message.node,sequences={}}
+   if reconcile_craft_leaders then reconcile_craft_leaders(message.node) end
    print("P2P: remote player proxy created")
 end
 
@@ -235,7 +238,21 @@ end
 local function entity_pilot ( id )
    if id==session.settings.node_id then return player.pilot() end
    local entry=session.players[id] or session.npcs[id] or session.craft[id]
-   return entry and entry.pilot or nil
+   if entry then return entry.pilot end
+   -- The host's authoritative ambient pilots and each owner's real craft are
+   -- not kept in replica tables. Resolve their stable pilot IDs when a remote
+   -- order or target refers back to a real local entity.
+   local entity_node,local_id=id:match("^([%x]+):(.+)$")
+   if entity_node and entity_node~=session.settings.node_id then return nil end
+   local_id=local_id or id
+   local ok,list=pcall(pilot.get)
+   if ok then
+      for _index,p in ipairs(list) do
+         local id_ok,pid=pcall(function() return p:id() end)
+         if id_ok and tostring(pid)==local_id then return p end
+      end
+   end
+   return nil
 end
 
 local function local_state ( p )
@@ -282,11 +299,19 @@ local function apply_player_state ( message )
       local desired={}
       for item in (message.active or ""):gmatch("([^,]+)") do local name=codec.unescape(item); if name then desired[name]=true end end
       entry.active=entry.active or {}
+      local slots={}
+      local active_ok,actives=pcall(function() return p:actives() end)
+      if active_ok then
+         for _index,active in ipairs(actives) do
+            local name_ok,name=pcall(function() return active.outfit:nameRaw() end)
+            if name_ok and name then slots[name]=active.slot end
+         end
+      end
       for name in pairs(entry.active) do
-         if not desired[name] and memory._o and memory._o[name] then p:outfitToggle(memory._o[name],false) end
+         if not desired[name] and slots[name] then p:outfitToggle(slots[name],false) end
       end
       for name in pairs(desired) do
-         if not entry.active[name] and memory._o and memory._o[name] then p:outfitToggle(memory._o[name],true) end
+         if not entry.active[name] and slots[name] then p:outfitToggle(slots[name],true) end
       end
       entry.active=desired
    end)
@@ -320,9 +345,15 @@ end
 
 local function pilot_record ( p )
    local armour,shield,stress=p:health(); local x,y=p:pos():get(); local vx,vy=p:vel():get()
-   return {entity=pilot_id(p),ship=p:ship():nameRaw(),name=p:name(),faction=p:faction():nameRaw(),
+   local leader_id=""
+   local leader_ok,leader=pcall(function() return p:leader() end)
+   if leader_ok and leader then
+      leader_id=leader==player.pilot() and session.settings.node_id
+         or session.settings.node_id..":"..pilot_id(leader)
+   end
+   return {entity=session.settings.node_id..":"..pilot_id(p),ship=p:ship():nameRaw(),name=p:name(),faction=p:faction():nameRaw(),
       outfits=outfit_names(p),x=x,y=y,vx=vx,vy=vy,dir=p:dir(),armour=armour,shield=shield,
-      stress=stress,energy=p:energy(),target=target_entity(p:target())}
+      stress=stress,energy=p:energy(),target=target_entity(p:target()),leader=leader_id}
 end
 
 local function add_message ( rec, kind, owner )
@@ -331,7 +362,7 @@ local function add_message ( rec, kind, owner )
    msg.name=rec.name; msg.faction=rec.faction; msg.outfits=rec.outfits
    msg.x=rec.x; msg.y=rec.y; msg.vx=rec.vx; msg.vy=rec.vy; msg.dir=rec.dir
    msg.armour=rec.armour; msg.shield=rec.shield; msg.stress=rec.stress; msg.energy=rec.energy
-   msg.target=rec.target
+   msg.target=rec.target; msg.leader=rec.leader
    if session.machine.claim then msg.claim=session.machine.claim end
    if owner then msg.owner=owner end
    return msg
@@ -363,21 +394,88 @@ local function remove_guest_population ()
    pilot.toggleSpawn(false)
 end
 
+local function craft_faction ( owner )
+   local fac=session.craft_factions[owner]
+   if fac then return fac end
+   local display=session.identities and session.identities:display_name(owner) or owner
+   local raw="P2P Craft "..owner
+   local found,existing=pcall(function() return faction.get(raw) end)
+   if found and existing then fac=existing
+   else
+      fac=faction.dynAdd(nil,raw,(display or owner).." Craft",
+         {ai="escort",clear_allies=true,clear_enemies=true})
+   end
+   session.craft_factions[owner]=fac
+   return fac
+end
+
 local function spawn_npc ( message, craft_owner )
    local container=craft_owner and session.craft or session.npcs
-   if container[message.entity] or not pcall(function() ship.get(message.ship) end) or not pcall(function() faction.get(message.faction) end) then return end
-   local ok,p=pcall(function() return pilot.add(message.ship,message.faction,vec2.new(message.x or 0,message.y or 0),message.name,{naked=true}) end)
+   if container[message.entity] then
+      if craft_owner then
+         container[message.entity].leader_id=message.leader
+         reconcile_craft_leaders(craft_owner)
+      end
+      return
+   end
+   if not pcall(function() ship.get(message.ship) end)
+         or (not craft_owner and not pcall(function() faction.get(message.faction) end)) then return end
+   local fac=craft_owner and craft_faction(craft_owner) or message.faction
+   local params=craft_owner and {ai="escort",naked=true} or {naked=true}
+   local ok,p=pcall(function() return pilot.add(message.ship,fac,vec2.new(message.x or 0,message.y or 0),message.name,params) end)
    if not ok or not p then return end
    for item in (message.outfits or ""):gmatch("([^,]+)") do
       local name=codec.unescape(item); if name and pcall(function() outfit.get(name) end) then pcall(function() p:outfitAdd(name,1,true) end) end
    end
-   local entry={pilot=p,owner=craft_owner,sequences={}}
+   local entry={pilot=p,owner=craft_owner,leader_id=message.leader,sequences={}}
    container[message.entity]=entry
    if message.vx and message.vy then p:setVel(vec2.new(message.vx,message.vy)) end
    if message.dir then p:setDir(message.dir) end
    if message.armour then p:setHealth(message.armour,message.shield,message.stress) end
    if message.energy then p:setEnergy(message.energy) end
    if message.target and message.target~="" then p:setTarget(entity_pilot(message.target)) end
+   if craft_owner then
+      ai_setup.setup(p)
+      reconcile_craft_leaders(craft_owner)
+   end
+end
+
+reconcile_craft_leaders = function ( owner )
+   for _entity_id,entry in pairs(session.craft) do
+      if entry.owner==owner and exists(entry.pilot) then
+         local leader
+         if entry.leader_id==owner then
+            local player_entry=session.players[owner]
+            leader=player_entry and player_entry.pilot or nil
+         elseif entry.leader_id and entry.leader_id~="" then
+            local craft_entry=session.craft[entry.leader_id]
+            leader=craft_entry and craft_entry.pilot or nil
+         end
+         if leader and exists(leader) then
+            local ok=pcall(function() entry.pilot:setLeader(leader) end)
+            if ok then entry.bound_leader=leader end
+         end
+      end
+   end
+end
+
+local function apply_craft_order ( message )
+   local owner_entry=session.players[message.owner]
+   local leader=owner_entry and owner_entry.pilot or nil
+   if not leader or not exists(leader) then return end
+   local recipients={}
+   for _entity_id,entry in pairs(session.craft) do
+      if entry.owner==message.owner and exists(entry.pilot) then
+         recipients[#recipients+1]=entry.pilot
+      end
+   end
+   if #recipients==0 then return end
+   local target=message.order=="e_attack" and entity_pilot(message.target) or nil
+   if message.order=="e_attack" and not target then return end
+   if target==player.pilot() then
+      for _index,recipient in ipairs(recipients) do recipient:setHostile(true) end
+   end
+   pcall(function() leader:msg(recipients,message.order,target) end)
 end
 
 local publish_entities
@@ -396,7 +494,11 @@ local function parse_states ( packed, container, owner )
             soft_motion(entry.pilot,state,60,30)
             entry.pilot:setHealth(state.armour,state.shield,state.stress)
             entry.pilot:setEnergy(state.energy)
-            if f[11] and f[11]~="" then entry.pilot:setTarget(entity_pilot(f[11])) end
+            if f[11] and f[11]~="" then
+               local target=entity_pilot(f[11])
+               entry.pilot:setTarget(target)
+               if owner and target==player.pilot() then entry.pilot:setHostile(true) end
+            end
          end
       end
    end
@@ -490,6 +592,7 @@ local function on_message ( peer, message )
    if message.system ~= session.machine.system then return end
    if (message.type=="player_manifest" or message.type=="player_state" or message.type=="chat"
          or message.type=="craft_manifest" or message.type=="craft_state" or message.type=="craft_remove"
+         or message.type=="craft_order"
          or message.type=="leave") and not owner_ok then return end
    if message.owner and message.owner~=message.node then return end
    if message.type=="player_manifest" then
@@ -515,8 +618,16 @@ local function on_message ( peer, message )
       apply_player_state(message); if session.machine.state=="host" then broadcast(message,false,peer) end
    elseif message.type=="chat" and session.machine:accept_sequence("chat:"..message.node,message.seq) then
       local entry=session.players[message.node]
-      if entry and exists(entry.pilot) then entry.pilot:broadcast(message.text,true) else pilot.comm(message.node,message.text) end
-      if session.machine.state=="host" then broadcast(message,true,peer) end
+      if message.node==session.settings.node_id then
+         pilot.comm(local_player_name(),message.text)
+      elseif entry and exists(entry.pilot) then
+         entry.pilot:broadcast(message.text,true)
+      else
+         pilot.comm(session.identities:display_name(message.node) or message.node,message.text)
+      end
+      -- Arena echoes chat through the server to every client, including the
+      -- sender. Do the same so a guest sees confirmation of its own message.
+      if session.machine.state=="host" then broadcast(message,true) end
    elseif message.type=="npc_add" and session.machine.state~="host" and message.node==session.machine.host and message.claim==session.machine.claim then spawn_npc(message)
    elseif message.type=="npc_remove" and message.node==session.machine.host and message.claim==session.machine.claim then local e=session.npcs[message.entity]; if e then remove_pilot(e.pilot); session.npcs[message.entity]=nil end
    elseif message.type=="npc_state" and message.node==session.machine.host and message.claim==session.machine.claim and session.machine:accept_sequence("npc",message.seq) then parse_states(message.entities,session.npcs)
@@ -524,6 +635,8 @@ local function on_message ( peer, message )
    elseif message.type=="craft_state" and session.machine:accept_sequence("craft:"..message.owner,message.seq) then
       parse_states(message.entities,session.craft,message.owner); if session.machine.state=="host" then broadcast(message,false,peer) end
    elseif message.type=="craft_remove" then local e=session.craft[message.entity]; if e and e.owner==message.owner then remove_pilot(e.pilot); session.craft[message.entity]=nil end
+   elseif message.type=="craft_order" and session.machine:accept_sequence("craft_order:"..message.owner,message.seq) then
+      apply_craft_order(message); if session.machine.state=="host" then broadcast(message,true,peer) end
    elseif message.type=="leave" then
       session.machine.members[message.node]=nil
       owned.cleanup(session.craft,message.node,function(entry) remove_pilot(entry.pilot) end)
@@ -545,6 +658,24 @@ local function publish_player ( full )
    local state=local_state(p); local msg=base("player_state"); msg.entity=session.settings.node_id; msg.seq=session.sequence
    for k,v in pairs(state) do msg[k]=v end
    broadcast(msg,false)
+end
+
+local function greet_host ()
+   if not session.machine or session.machine.state~="guest" or not session.machine.system
+         or session.greeted_system==session.machine.system then return end
+   for peer,meta in pairs(session.peer_meta) do
+      if meta.verified and meta.cap=="player" and meta.node==session.machine.host then
+         -- Reliable packets on the same channel preserve ordering. Give the
+         -- host our proxy manifest before it receives and displays the chat.
+         publish_player(true)
+         session.sequence=session.sequence+1
+         local msg=base("chat")
+         msg.seq=session.sequence
+         msg.text="Hi, I'm "..local_player_name().."!"
+         if send(peer,msg,true) then session.greeted_system=session.machine.system end
+         return
+      end
+   end
 end
 
 local function publish_state_batches ( kind, lines, owner )
@@ -603,7 +734,7 @@ function session.start ( settings )
    if not ok or not host then return nil,"unable to create P2P host" end
    session.host=host; session.running=true; session.machine=core.new(session.settings.node_id,now); session.machine:start()
    session.identities=identity.new(session.settings.node_id,local_player_name())
-   session.member_endpoints={}
+   session.member_endpoints={}; session.craft_factions={}
    session.endpoint=tostring(host:get_socket_address())
    print("P2P: listener started")
    session.machine.topology:load_peers(session.settings.recent)
@@ -633,6 +764,7 @@ function session.enter ( system_name )
       return true
    end
    session.leave(); session.machine:enter(system_name)
+   session.greeted_system=nil
    lock_autonav(true)
    connect_configured(); session.last_seed_connect=now()
    print("P2P: discovering system host")
@@ -648,6 +780,8 @@ function session.leave ()
    for _entity_id,entry in pairs(session.npcs) do remove_pilot(entry.pilot) end
    for _entity_id,entry in pairs(session.craft) do remove_pilot(entry.pilot) end
    session.players={}; session.npcs={}; session.craft={}
+   session.craft_factions={}
+   session.greeted_system=nil
    pilot.toggleSpawn(true); session.machine:leave(); lock_autonav(false)
 end
 
@@ -663,6 +797,18 @@ function session.input ( input_name, input_pressed )
    -- menu is open too.
    if session.machine and session.machine.system and not player.isLanded() then
       naev.unpause()
+   end
+   if input_pressed and (input_name=="e_attack" or input_name=="e_hold"
+         or input_name=="e_return" or input_name=="e_clear") then
+      session.sequence=session.sequence+1
+      local msg=base("craft_order")
+      msg.owner=session.settings.node_id; msg.seq=session.sequence; msg.order=input_name
+      if input_name=="e_attack" then
+         msg.target=target_entity(player.pilot():target())
+         if msg.target=="" then return end
+      end
+      broadcast(msg,true)
+      return
    end
    local key
    if input_name=="accel" then key="accel"
@@ -711,6 +857,7 @@ function session.update ()
       end
       event=session.host:service(0)
    end
+   greet_host()
    local stamp=now(); local action=session.machine:tick()
    if stamp-(session.last_seed_connect or 0)>=5 then
       connect_configured(); session.last_seed_connect=stamp
