@@ -90,6 +90,7 @@ local function new_world ( player_name )
    function pilot_methods:target () return self.target_pilot end
    function pilot_methods:health () return self.armour,self.shield,self.stress end
    function pilot_methods:energy () return self.energy_value end
+   function pilot_methods:disabled () return self.disabled==true end
    function pilot_methods:radius () return 50 end
    function pilot_methods:id () return self.pilot_id end
    function pilot_methods:withPlayer ()
@@ -252,6 +253,9 @@ assert(host.player_name=="John" and guest.player_name=="John")
 assert(find(host,"John #2","P2P Players"),"host did not locally alias the guest")
 local host_proxy=find(guest,"John #2","P2P Players")
 assert(host_proxy,"guest did not locally alias the host")
+assert(host_proxy.last_chat=="Hi, I'm John, the host of this system."
+      and host_proxy.chat_count==1,
+   "host did not privately identify itself to the joining guest")
 assert(host_proxy.slotted_outfits and host_proxy.slotted_outfits[1]=="The Bite",
    "The Bite was not installed in the remote player's matching ship slot")
 local guest_proxy=find(host,"John #2","P2P Players")
@@ -308,8 +312,16 @@ assert(not host_proxy:memory().p2p_primary,"primary fire release was not replica
 
 local npc_replica=find(guest,"Host NPC","Empire")
 assert(npc_replica,"guest did not receive host NPC")
+assert(npc_replica.no_death,
+   "host-authoritative NPC replica could be destroyed by guest-local damage")
 local escort_replica=find(guest,"Host Escort","P2P Craft 10")
 assert(escort_replica,"guest did not receive owner-authoritative craft")
+assert(escort_replica.no_death,
+   "owner-authoritative craft replica could be destroyed by guest-local damage")
+npc:setDisable()
+advance({host,guest},0.25,8)
+assert(npc_replica.disabled,
+   "authoritative NPC disable lifecycle was not replicated")
 assert(not escort_replica:withPlayer(),"remote host craft became guest-owned")
 assert(escort_replica:ainame()=="escort" and escort_replica:leader()==host_proxy,
    "remote host craft did not retain escort AI and its network owner's leader")
@@ -358,6 +370,10 @@ assert(third.session.machine.state=="guest" and third.session.machine.host=="10"
    "peer did not discover host through an intermediate guest")
 assert(find(third,"John","P2P Players") and find(third,"John #2","P2P Players"),
    "third peer did not uniquely alias duplicate remote names")
+local third_host_proxy=third.session.players["10"].pilot
+assert(third_host_proxy.last_chat=="Hi, I'm John, the host of this system."
+      and third_host_proxy.chat_count==1,
+   "host did not privately identify itself to a peer discovered through a guest")
 npc:setPos(vector(500,0))
 escort:setPos(vector(500,0))
 local npc_velocity_sets=npc_replica.velocity_sets or 0
@@ -492,6 +508,8 @@ assert(third.session.machine.state=="guest" and third.session.machine.host=="20"
    "third peer did not follow replacement-host election")
 assert(npc_replica:exists(),"host NPC replica was removed during takeover")
 assert(npc_replica.armour==42,"retained NPC state changed during takeover")
+assert(not npc_replica.no_death,
+   "promoted host NPC retained replica-only no-death protection")
 assert(not escort_replica:exists(),"departed owner's craft replica was retained")
 
 third_disconnects=third.disconnect_sounds

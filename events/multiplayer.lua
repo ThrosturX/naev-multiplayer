@@ -40,7 +40,12 @@ local p2p_hail_pressed
 local function p2p_chat_available ()
     local pp = player.pilot()
     local nav_spob = pp:nav()
-    return pp:target() == nil and nav_spob == nil
+    local target = pp:target()
+    if target then
+        local ok, disabled = pcall(function() return target:disabled() end)
+        if not ok or not disabled then return false end
+    end
+    return nav_spob == nil
 end
 
 local function p2p_keep_chat_live ( chat_state )

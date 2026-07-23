@@ -70,7 +70,12 @@ nav_spob={}
 assert(not chat_available(), "selected spob incorrectly allowed P2P chat")
 nav_spob=nil; pilot_target={}
 assert(not chat_available(), "selected pilot incorrectly allowed P2P chat")
+pilot_target={disabled=function() return true end}
+assert(chat_available(), "disabled pilot target did not allow P2P chat")
+nav_spob={}
+assert(not chat_available(), "selected spob did not retain priority over a disabled pilot target")
 pilot_target=nil
+nav_spob=nil
 
 local steady_updates = 0
 local function steady_update () steady_updates = steady_updates + 1 end
