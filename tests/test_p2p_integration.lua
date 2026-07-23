@@ -332,6 +332,12 @@ assert(proxy_x>0 and proxy_x<=80,"player correction was not soft-capped")
 assert(guest.local_pilot.armour==100 and guest.local_pilot.shield==100,"local player health was overwritten")
 assert(host.session.send_chat("headless hello")); update({host,guest,third},8)
 assert(host_proxy.last_chat=="headless hello","reliable chat was not delivered")
+assert(host.comms[#host.comms].name=="John" and host.comms[#host.comms].text=="headless hello",
+   "chat sender did not immediately display its own message")
+local guest_comm_count=#guest.comms
+assert(guest.session.send_chat("guest hello")); update({host,guest,third},8)
+assert(#guest.comms==guest_comm_count+1 and guest.comms[#guest.comms].text=="guest hello",
+   "relayed chat duplicated or omitted the guest's immediate local display")
 
 host.session.stop(); update({guest,third},16)
 assert(host.speed_enabled,"stopping P2P did not restore the speed key")

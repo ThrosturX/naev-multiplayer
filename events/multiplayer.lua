@@ -16,6 +16,7 @@ local fmt           = require "format"
 local mplayerclient = require "multiplayer.client"
 local mplayerserver = require "multiplayer.server"
 local p2psession    = require "multiplayer.p2p.session"
+local luatk         = require "luatk"
 local vn = require "vn"
 -- luacheck: globals load startMultiplayerServer P2P_SESSION_UPDATE P2P_SESSION_INPUT P2P_SESSION_ENTER P2P_SESSION_LEAVE (Hook functions passed by name)
 
@@ -34,9 +35,11 @@ end
 local mpbtn
 
 local p2p_hooks = {}
+local p2p_hail_pressed
 
 local function p2p_stop ()
     p2psession.stop()
+    p2p_hail_pressed = nil
     for _index, h in ipairs(p2p_hooks) do hook.rm(h) end
     p2p_hooks = {}
 end
@@ -59,9 +62,24 @@ end
 function P2P_SESSION_UPDATE () p2psession.update() end
 function P2P_SESSION_INPUT ( input_name, input_pressed )
     p2psession.input(input_name, input_pressed)
+    if input_name ~= "hail" then return end
+    if input_pressed then
+        p2p_hail_pressed = player.pilot():target() == nil
+        return
+    end
+    local open_chat = p2p_hail_pressed and player.pilot():target() == nil
+    p2p_hail_pressed = nil
+    if not open_chat then return end
+    vn.reset()
+    luatk.vn(function()
+        luatk.msgInput(_("COMMUNICATION"), _("Broadcast:"), 32, function(msg)
+            if msg and #msg > 0 then p2psession.send_chat(msg) end
+        end)
+    end)
+    vn.run()
 end
 function P2P_SESSION_ENTER () p2psession.enter(system.cur():nameRaw()) end
-function P2P_SESSION_LEAVE () p2psession.leave() end
+function P2P_SESSION_LEAVE () p2p_hail_pressed=nil; p2psession.leave() end
 
 function startMultiplayerServer( hostport )
     local fail = mplayerserver.start( hostport )

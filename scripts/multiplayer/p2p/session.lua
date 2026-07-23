@@ -680,7 +680,7 @@ local function greet_host ()
          session.sequence=session.sequence+1
          local msg=base("chat")
          msg.seq=session.sequence
-         msg.text="Hi, I'm "..local_player_name().."!"
+         msg.text="Hi, I'm "..player.name().."!"
          if send(peer,msg,true) then session.greeted_system=session.machine.system end
          return
       end
@@ -796,7 +796,14 @@ end
 
 function session.send_chat ( text )
    if not session.running or not session.machine.system or type(text)~="string" or text=="" then return nil end
-   session.sequence=session.sequence+1; local msg=base("chat"); msg.seq=session.sequence; msg.text=text:sub(1,1024); broadcast(msg,true); return true
+   session.sequence=session.sequence+1
+   local msg=base("chat"); msg.seq=session.sequence; msg.text=text:sub(1,1024)
+   -- Display immediately. If a host relays the message back, the accepted
+   -- sequence makes that echo a no-op instead of showing it twice.
+   session.machine:accept_sequence("chat:"..session.settings.node_id,msg.seq)
+   pilot.comm(local_player_name(),msg.text)
+   broadcast(msg,true)
+   return true
 end
 
 function session.input ( input_name, input_pressed )
