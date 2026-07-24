@@ -1,0 +1,18 @@
+<outfit name="Distress Beacon">
+ <general>
+  <rarity>6</rarity>
+  <unique/>
+  <typename>Distress Beacon</typename>
+  <slot>utility</slot>
+  <size>small</size>
+  <mass>1</mass>
+  <price>300000</price>
+  <description>Deploys an automated relay into active multiplayer systems within a ship-class-dependent range.</description>
+  <desc_extra>Range is 4-12 jumps by ship class, or 16 jumps while disabled. Automatically activates when the equipped ship becomes disabled.</desc_extra>
+  <gfx_store>fake_transponder</gfx_store>
+  <limit>distress_beacon</limit>
+ </general>
+ <specific type="modification">
+  <lua>outfits/unique/distress_beacon.lua</lua>
+ </specific>
+</outfit>

@@ -1,0 +1,8 @@
+<unidiff name="multiplayer_distress_beacon_stores">
+ <spob name="Halir">
+  <tech_add>Distress Beacon</tech_add>
+ </spob>
+ <spob name="Mining Vrata Guildhouse">
+  <tech_add>Distress Beacon</tech_add>
+ </spob>
+</unidiff>

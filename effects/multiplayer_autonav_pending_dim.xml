@@ -1,0 +1,8 @@
+<effect name="Multiplayer: Autonav Pending Dim">
+ <description>Hosting alone. Autonav returns when this timer expires.</description>
+ <duration>6</duration>
+ <icon>/gfx/misc/icons/multiplayer_autonav_pending_dim.png</icon>
+ <overwrite>multiplayer_autonav_pending</overwrite>
+ <priority>5</priority>
+ <buff/>
+</effect>

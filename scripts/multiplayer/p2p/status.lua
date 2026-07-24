@@ -3,6 +3,11 @@ local status = {}
 status.__index = status
 
 local HOST_ALONE_EFFECT = "Multiplayer: Autonav Pending"
+local HOST_ALONE_DIM_EFFECT = "Multiplayer: Autonav Pending Dim"
+local HOST_ALONE_BLINK_AT = 3
+local HOST_ALONE_BLINK_HALF_PERIOD = 0.5
+local HOST_ALONE_FAST_BLINK_AT = 1
+local HOST_ALONE_FAST_BLINK_HALF_PERIOD = 0.16
 local AGGRESSION_EFFECT = "Multiplayer: Aggression"
 
 function status.new ( pilot_get )
@@ -14,10 +19,42 @@ local function remove_effect ( self, name )
    if p then p:effectRm(name,true) end
 end
 
+local function show_host_alone ( self, name, remaining )
+   if self.host_alone_effect==name then return end
+   local p=self.pilot_get()
+   if p then p:effectAdd(name,remaining) end
+   self.host_alone_effect=name
+end
+
 function status:clear_host_alone ()
-   if not self.host_alone_deadline then return end
+   if not self.host_alone_deadline and not self.host_alone_effect then return end
+   -- Remove both variants so interrupted swaps cannot leave a stale icon.
    remove_effect(self,HOST_ALONE_EFFECT)
+   remove_effect(self,HOST_ALONE_DIM_EFFECT)
    self.host_alone_deadline=nil
+   self.host_alone_effect=nil
+end
+
+function status:update ( stamp )
+   local deadline=self.host_alone_deadline
+   if not deadline then return end
+
+   local remaining=deadline-stamp
+   if remaining<=0 then
+      self:clear_host_alone()
+      return
+   end
+
+   local name=HOST_ALONE_EFFECT
+   if remaining<=HOST_ALONE_BLINK_AT then
+      local half_period=HOST_ALONE_BLINK_HALF_PERIOD
+      if remaining<=HOST_ALONE_FAST_BLINK_AT then
+         half_period=HOST_ALONE_FAST_BLINK_HALF_PERIOD
+      end
+      local phase=math.floor(remaining/half_period)%2
+      if phase==1 then name=HOST_ALONE_DIM_EFFECT end
+   end
+   show_host_alone(self,name,remaining)
 end
 
 function status:host_alone ( deadline, stamp )
@@ -26,9 +63,11 @@ function status:host_alone ( deadline, stamp )
       return
    end
    if self.host_alone_deadline==deadline then return end
-   local p=self.pilot_get()
-   if p then p:effectAdd(HOST_ALONE_EFFECT,deadline-stamp) end
    self.host_alone_deadline=deadline
+   -- Force the new deadline into the currently displayed effect even when its
+   -- bright/dim phase happens to match the previous deadline.
+   self.host_alone_effect=nil
+   self:update(stamp)
 end
 
 function status:clear_aggression ()
@@ -66,8 +105,10 @@ end
 
 function status:clear ()
    remove_effect(self,HOST_ALONE_EFFECT)
+   remove_effect(self,HOST_ALONE_DIM_EFFECT)
    remove_effect(self,AGGRESSION_EFFECT)
    self.host_alone_deadline=nil
+   self.host_alone_effect=nil
    self.aggression_deadline=nil
 end
 

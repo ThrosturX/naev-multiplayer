@@ -12,7 +12,7 @@ local MAX_EVENTS_PER_FRAME = 48
 local NPC_STATE_INTERVAL = 1/3
 local ACTIVITY_QUERY_INTERVAL = 30
 local ACTIVITY_RETENTION = 15*60
-local HOST_ALONE_GRACE = 10
+local HOST_ALONE_GRACE = 6 -- make "solo p2p" less punishing at gates by keeping this value low
 local AGGRESSION_GRACE = 20
 -- The outer codec percent-escapes this packed field again. Keeping the raw
 -- payload well below MAX_PACKET leaves room for worst-case expansion.
@@ -318,7 +318,7 @@ local function remove_remote_player ( node )
    if not exists(p) then return false end
    -- Broadcast while the proxy still has its participant name so the comm
    -- bubble is anchored to the ship that actually disconnected.
-   p:broadcast("Disconnected.",true)
+   p:broadcast("Signal lost.",true)
    play_disconnect_sound()
    p:rename(p:name().." (disconnected "..node:sub(1,6)..")")
    p:setNoDeath(false)
@@ -361,11 +361,54 @@ local function outfit_slots ( p )
    return table.concat(slots,",")
 end
 
+local function ship_fallback_names ( s )
+   local names,seen={},{}
+   local inherited=s:inherits()
+   while inherited and #names<16 do
+      local name=inherited:nameRaw()
+      if type(name)~="string" or name=="" or seen[name] then break end
+      seen[name]=true
+      names[#names+1]=codec.escape(name)
+      inherited=inherited:inherits()
+   end
+
+   local base=s:baseType()
+   if #names<16 and type(base)=="string" and base~="" and not seen[base]
+         and ship.exists(base) then
+      names[#names+1]=codec.escape(base)
+   end
+   return table.concat(names,",")
+end
+
 -- Naev resource getters throw for unknown names. Manifests are untrusted, so
 -- this is validation of external data, matching arena's ship-name validation.
 local function resource_get ( getter, name )
    local valid,value=pcall(getter,name)
    if valid then return value end
+end
+
+local function resolve_proxy_ship ( message )
+   if resource_get(ship.get,message.ship) then
+      return message.ship,true
+   end
+
+   local fallbacks=message.ship_fallbacks
+   if type(fallbacks)=="string" and #fallbacks<=2048 then
+      local count=0
+      for encoded in fallbacks:gmatch("([^,]+)") do
+         count=count+1
+         if count>16 then break end
+         local name=codec.unescape(encoded)
+         if name and #name<=240 and not name:find("[%z\1-\31\127]")
+               and resource_get(ship.get,name) then
+            return name,true
+         end
+      end
+   end
+
+   if resource_get(ship.get,"Plowshare") then
+      return "Plowshare",false
+   end
 end
 
 local function install_outfits ( p, message )
@@ -390,6 +433,18 @@ local function install_outfits ( p, message )
    end
 end
 
+local function install_compatible_outfits ( p, message )
+   for item in (message.outfits or ""):gmatch("([^,]+)") do
+      local name=codec.unescape(item)
+      local o=name and outfit.exists(name) or nil
+      if o then
+         -- Preserve slot type, size, and property checks. CPU is irrelevant
+         -- for a disposable proxy and is deliberately bypassed.
+         p:outfitAdd(o,1,true,false)
+      end
+   end
+end
+
 local reconcile_craft_leaders
 
 local function spawn_proxy ( message, display_name )
@@ -399,7 +454,8 @@ local function spawn_proxy ( message, display_name )
       existing.last_seen=now()
       return
    end
-   if not resource_get(ship.get,message.ship) then return end
+   local proxy_ship,install_manifest_outfits=resolve_proxy_ship(message)
+   if not proxy_ship then return end
    clear_departure(message.node,true)
    local fac=faction.dynAdd(nil,"P2P Players","P2P Players",{ai="p2p_remote_control",clear_allies=true,clear_enemies=true})
    local proxy_name=display_name or message.name
@@ -410,10 +466,14 @@ local function spawn_proxy ( message, display_name )
    local position=(message.x and message.y) and vec2.new(message.x,message.y)
       or player.pilot():pos()
    local arrival_kind,arrival_origin=nearby_transition(position,50,fac)
-   local p=pilot.add(message.ship,fac,arrival_origin or position,proxy_name,
+   local p=pilot.add(proxy_ship,fac,arrival_origin or position,proxy_name,
       {ai="p2p_remote_control",naked=true})
    if not p then return end
-   install_outfits(p,message)
+   if install_manifest_outfits then
+      install_outfits(p,message)
+   else
+      install_compatible_outfits(p,message)
+   end
    -- Invincible pilots are excluded from weapon collision in Naev. No-death
    -- proxies can receive local impact effects while never becoming authority
    -- for the remote player's real health.
@@ -1244,7 +1304,15 @@ publish_player = function ( full )
    local p=player.pilot(); if not p or not session.machine.system then return end
    local state=local_state(p)
    if full then
-      local msg=base("player_manifest"); msg.entity=session.settings.node_id; msg.ship=p:ship():nameRaw(); msg.name=local_player_name(); msg.outfits=outfit_names(p); msg.slots=outfit_slots(p)
+      local current_ship=p:ship()
+      local msg=base("player_manifest")
+      msg.entity=session.settings.node_id
+      msg.ship=current_ship:nameRaw()
+      msg.name=local_player_name()
+      msg.outfits=outfit_names(p)
+      msg.slots=outfit_slots(p)
+      local fallbacks=ship_fallback_names(current_ship)
+      if fallbacks~="" then msg.ship_fallbacks=fallbacks end
       msg.endpoint=session.endpoint
       msg.x=state.x; msg.y=state.y; msg.vx=state.vx; msg.vy=state.vy; msg.dir=state.dir
       msg.armour=state.armour; msg.shield=state.shield; msg.stress=state.stress
@@ -1575,6 +1643,7 @@ end
 function session.update ( dt )
    if not session.running then return end
    local stamp=now()
+   session.indicators:update(stamp)
    if session.machine.system
          and stamp-(session.last_claim_check or 0)>=1 then
       session.last_claim_check=stamp

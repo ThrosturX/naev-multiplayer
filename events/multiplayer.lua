@@ -38,6 +38,17 @@ local p2p_hooks = {}
 local p2p_hail_pressed
 local p2p_hail_vn_run
 
+local function p2p_publish_config ()
+    local settings = mem.multiplayer and mem.multiplayer.p2p or {}
+    naev.cache().multiplayer_p2p_config = {
+        enabled = settings.enabled == true,
+        directory = type(settings.directory) == "string"
+            and settings.directory or "",
+        node_id = type(settings.node_id) == "string"
+            and settings.node_id or "",
+    }
+end
+
 local function p2p_restore_hail_vn ()
     if not p2p_hail_vn_run then return end
     vn.run = p2p_hail_vn_run
@@ -146,6 +157,7 @@ local function p2p_stop ()
     p2p_hail_pressed = nil
     for _index, h in ipairs(p2p_hooks) do hook.rm(h) end
     p2p_hooks = {}
+    p2p_publish_config()
 end
 
 local function p2p_start ()
@@ -162,6 +174,7 @@ local function p2p_start ()
         hook.jumpout("P2P_SESSION_LEAVE"),
     }
     if not player.isLanded() then p2psession.enter(system.cur():nameRaw()) end
+    p2p_publish_config()
 end
 
 function P2P_SESSION_UPDATE ( dt ) p2psession.update(dt) end
@@ -527,6 +540,7 @@ function load()
         }
     end
     mem.multiplayer.p2p = p2psession.defaults(mem.multiplayer.p2p)
+    p2p_publish_config()
     evt.save()
     mpbtn = player.infoButtonRegister( _("Multiplayer"), vnMultiplayer, 3 )
   --serverbtn = player.infoButtonRegister( _("Start MP Server"), startMultiplayerServer, 3 )
