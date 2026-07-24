@@ -392,7 +392,10 @@ common.unmarshal_outfits = function( data )
     local outfits = {}
     for ii, dline in ipairs( data ) do
         if ii > 2 then
-            table.insert(outfits, outfit.get(dline))
+            local outf = outfit.exists(dline)
+            if outf then
+                table.insert(outfits, outf)
+            end
         end
     end
 

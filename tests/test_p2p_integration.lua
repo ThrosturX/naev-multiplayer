@@ -73,7 +73,7 @@ end
 local function new_world ( player_name )
    local world={clock=0,wall_clock=0,pilots={},next_id=1,spawn=true,player_name=player_name,c_calls={},
       speed_enabled=true,autonav_speed_calls=0,unpauses=0,comms={},spobs={},jumps={},
-      claim_available=true,autonaving=false}
+      claim_available=true,autonaving=false,missing_outfits={}}
    local function counted ( name )
       world.c_calls[name]=(world.c_calls[name] or 0)+1
    end
@@ -161,6 +161,7 @@ local function new_world ( player_name )
    function pilot_methods:explode () self.exploded=true; self.removed=true end
    function pilot_methods:fillAmmo () self.ammo_fills=(self.ammo_fills or 0)+1 end
    function pilot_methods:outfitAdd (name)
+      if type(name)~="string" then name=name:nameRaw() end
       self.outfit_names[#self.outfit_names+1]=name
       if name=="The Bite" or name:match("^The Bite %- ") then
          self.active_outfits[#self.active_outfits+1]={outfit=resource(name),slot=#self.active_outfits+1,state="off"}
@@ -227,7 +228,19 @@ local function new_world ( player_name )
       }
    end}
    env.ship={get=function(name) assert(type(name)=="string" and name~=""); return resource(name) end}
-   env.outfit={get=function(name) return resource(name) end}
+   env.outfit={
+      get=function(name)
+         if world.missing_outfits[name] then
+            world.unknown_outfit_gets=(world.unknown_outfit_gets or 0)+1
+            error("unknown outfit reached outfit.get")
+         end
+         return resource(name)
+      end,
+      exists=function(name)
+         if world.missing_outfits[name] then return nil end
+         return resource(name)
+      end,
+   }
    env.faction={get=function(name) return resource(name) end,
       dynAdd=function(_base,raw) return resource(raw) end}
    env.audio={new=function(path)
@@ -290,6 +303,7 @@ end
 
 local host=new_world("John")
 host.local_pilot:outfitAdd("The Bite")
+host.local_pilot:outfitAdd("XL Hangar Bay")
 assert(host.session.start{enabled=true,node_id="10",listen_port=62001,directory="",bootstrap={},recent={}})
 assert(host.session.enter("Delta Polaris"))
 local discovery_deadline=host.session.machine.deadline
@@ -335,6 +349,7 @@ escort.pilot_id=777
 escort:setLeader(host.local_pilot)
 
 local guest=new_world("John")
+guest.missing_outfits["XL Hangar Bay"]=true
 -- A player endpoint in the directory field must behave like a bootstrap peer.
 -- Settings accept the space separator required by Naev's text input and
 -- canonicalize it before passing the endpoint to ENet.
@@ -362,6 +377,10 @@ assert(host_proxy.last_chat=="This is John, captain of John. Identify yourself."
    "host did not privately identify itself to the joining guest")
 assert(host_proxy.slotted_outfits and host_proxy.slotted_outfits[1]=="The Bite",
    "The Bite was not installed in the remote player's matching ship slot")
+assert(not host_proxy.slotted_outfits[2],
+   "an outfit missing from the receiving client was installed")
+assert(not guest.unknown_outfit_gets,
+   "an outfit missing from the receiving client reached the warning getter")
 local guest_proxy=find(host,"John #2","P2P Players")
 assert(guest_proxy,"host did not retain the aliased guest proxy")
 assert(guest_proxy.last_chat=="I am John, captain of John!" and guest_proxy.chat_count==1,

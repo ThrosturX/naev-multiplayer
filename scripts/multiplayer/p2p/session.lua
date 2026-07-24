@@ -375,7 +375,7 @@ local function install_outfits ( p, message )
       index=tonumber(index)
       local name=encoded and codec.unescape(encoded) or nil
       if index and index>=1 and index<=512 and name then
-         local o=resource_get(outfit.get,name)
+         local o=outfit.exists(name)
          if o then
             p:outfitAddSlot(o,index,true,true)
             used_slots=true
@@ -385,8 +385,8 @@ local function install_outfits ( p, message )
    if used_slots then return end
    for item in (message.outfits or ""):gmatch("([^,]+)") do
       local name=codec.unescape(item)
-      local o=name and resource_get(outfit.get,name) or nil
-      if o then p:outfitAdd(name,1,true) end
+      local o=name and outfit.exists(name) or nil
+      if o then p:outfitAdd(o,1,true) end
    end
 end
 
