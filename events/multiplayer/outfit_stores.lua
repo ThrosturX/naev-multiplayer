@@ -1,6 +1,6 @@
 --[[
 <?xml version='1.0' encoding='utf8'?>
-<event name="Multiplayer Distress Beacon Stores">
+<event name="Multiplayer Outfit Stores">
  <location>load</location>
  <chance>100</chance>
  <priority>-10</priority>
@@ -8,7 +8,7 @@
 --]]
 
 function create ()
-   local name = "multiplayer_distress_beacon_stores"
+   local name = "multiplayer_outfit_stores"
    if not diff.isApplied(name) then
       diff.apply(name)
    end

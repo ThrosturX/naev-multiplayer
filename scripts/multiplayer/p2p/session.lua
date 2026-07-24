@@ -1178,6 +1178,10 @@ local function on_message ( peer, message )
          end
          session.activity=activity
          session.activity_received=received
+         naev.cache().multiplayer_activity={
+            received=received,
+            entries=activity,
+         }
       end
       return
    end

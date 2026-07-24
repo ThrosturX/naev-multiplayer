@@ -1,0 +1,18 @@
+<outfit name="Activity Scanner">
+ <general>
+  <rarity>6</rarity>
+  <unique/>
+  <typename>Activity Scanner</typename>
+  <slot>utility</slot>
+  <size>small</size>
+  <mass>1</mass>
+  <price>300000</price>
+  <description>A passive subspace receiver that detects distant activity across charted jump routes without revealing its source.</description>
+  <desc_extra>Reports only jump distance. Previously detected activity becomes detectable again after five minutes.</desc_extra>
+  <gfx_store>jammer0</gfx_store>
+  <limit>activity_scanner</limit>
+ </general>
+ <specific type="modification">
+  <lua>outfits/unique/activity_scanner.lua</lua>
+ </specific>
+</outfit>
