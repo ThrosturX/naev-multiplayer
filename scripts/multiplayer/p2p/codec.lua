@@ -28,6 +28,7 @@ codec.unescape = unescape
 
 local valid_types = {
    hello=true, query=true, hint=true, punch=true, claim=true, leave=true,
+   activity_query=true, activity=true,
    player_manifest=true, player_state=true, chat=true,
    npc_manifest=true, npc_add=true, npc_remove=true, npc_state=true,
    craft_manifest=true, craft_state=true, craft_remove=true, craft_order=true,
@@ -36,6 +37,7 @@ local valid_types = {
 
 local required = {
    hello={"node","cap"}, query={"node","system"},
+   activity_query={"node"}, activity={"node","entries"},
    hint={"node","system","host","endpoint","claim","ttl"},
    punch={"node","system","peer","endpoint"},
    claim={"node","system","claim","endpoint"}, leave={"node","system"},
@@ -71,6 +73,10 @@ local function validate ( message )
    if message.cap and message.cap ~= "player" and message.cap ~= "directory" then
       return nil, "invalid capability"
    end
+   if message.features and (#message.features>240
+         or message.features:find("[^%w_,%-]")) then
+      return nil, "invalid features"
+   end
    if message.type == "hello" and message.cap == "player" then
       if type(message.name) ~= "string" or message.name == "" then return nil, "missing name" end
    end
@@ -79,6 +85,10 @@ local function validate ( message )
    end
    if message.system and (#message.system > 240 or message.system:find("[%z\1-\31\127]")) then
       return nil, "invalid system"
+   end
+   if message.entries and (#message.entries > 12000
+         or message.entries:find("[%z\1-\31\127]")) then
+      return nil, "invalid entries"
    end
    if message.claim and (#message.claim > 128 or message.claim:find("[%z\1-\31\127]")) then
       return nil, "invalid claim"

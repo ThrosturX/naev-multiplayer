@@ -22,7 +22,12 @@ test("protocol escaping and validation", function()
    assert(not codec.decode("MP2P/1 chat\nnode=a1\nsystem=x\nseq=1\ntext=bad%A\n"))
    assert(codec.encode{type="hello",node="a1",cap="player",name="Jane"})
    assert(not codec.encode{type="hello",node="a1",cap="player"})
-   assert(codec.encode{type="hello",node="a1",cap="directory"})
+   assert(codec.encode{type="hello",node="a1",cap="directory",features="activity"})
+   assert(not codec.encode{type="hello",node="a1",cap="directory",
+      features="activity list"})
+   assert(codec.encode{type="activity_query",node="a1"})
+   assert(codec.encode{type="activity",node="d1",
+      entries=codec.escape("Delta Polaris")..",1,0"})
    assert(codec.encode{type="hint",node="d1",system="X",host="a1",
       endpoint="host:9",claim="c",ttl=60})
    assert(not codec.encode{type="hint",node="d1",system="X",host="a1",

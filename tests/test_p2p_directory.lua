@@ -24,7 +24,8 @@ end
 local host_peer={}
 local guest_peer={}
 assert(service:connect(host_peer,"198.51.100.10:45000"))
-assert(sent[#sent].message.type=="hello" and sent[#sent].message.cap=="directory")
+assert(sent[#sent].message.type=="hello" and sent[#sent].message.cap=="directory"
+   and sent[#sent].message.features=="activity")
 assert(service:receive(host_peer,assert(codec.encode{type="hello",node="10",cap="player",name="Host",
    endpoint="0.0.0.0:62001"})))
 assert(service:receive(host_peer,assert(codec.encode{type="claim",node="10",system="Delta Polaris",
@@ -94,6 +95,40 @@ assert(service:receive(replacement_peer,assert(codec.encode{type="hello",node="3
 assert(service:receive(replacement_peer,assert(codec.encode{type="claim",node="30",system="Delta Polaris",
    claim="jkl",endpoint="0.0.0.0:62003"})))
 assert(service.hosts["Delta Polaris"].node=="30" and service.hosts["Delta Polaris"].active)
+
+-- Activity is answered by the directory alone. A clean leave removes the
+-- discovery hint while retaining a short-lived, anonymous activity record.
+local activity_peer={}
+assert(service:connect(activity_peer,"198.51.100.60:51000"))
+assert(service:receive(activity_peer,assert(codec.encode{
+   type="hello",node="60",cap="player",name="Activity Host"})))
+assert(service:receive(activity_peer,assert(codec.encode{
+   type="claim",node="60",system="Activity Reach",claim="mno",
+   endpoint="0.0.0.0:62004"})))
+local function activity_entry ( system_name )
+   local at=#sent+1
+   assert(service:receive(activity_peer,assert(codec.encode{
+      type="activity_query",node="60"})))
+   local response=find_sent(at,activity_peer,"activity")
+   assert(response)
+   for line in response.entries:gmatch("([^;]+)") do
+      local encoded,active,age=line:match("^([^,]+),([01]),(%d+)$")
+      if encoded and codec.unescape(encoded)==system_name then
+         return active=="1",tonumber(age)
+      end
+   end
+end
+local active,age=activity_entry("Activity Reach")
+assert(active and age==0)
+clock=clock+60
+assert(service:receive(activity_peer,assert(codec.encode{
+   type="leave",node="60",system="Activity Reach"})))
+assert(not service.hosts["Activity Reach"])
+active,age=activity_entry("Activity Reach")
+assert(active==false and age==0)
+clock=clock+901
+active=activity_entry("Activity Reach")
+assert(active==nil)
 
 -- Gameplay packets are ignored, and packets before hello are rejected.
 local bad_peer={}

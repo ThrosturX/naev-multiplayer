@@ -6,6 +6,9 @@ local directory = {}
 directory.__index = directory
 local MAX_HOSTS = 4096
 local MAX_QUERIES_PER_PEER = 128
+local MAX_ACTIVITY_SYSTEMS = 20
+local ACTIVITY_RETENTION = 15*60
+local ACTIVITY_PAYLOAD = 3000
 
 local function endpoint_host ( endpoint )
    if type(endpoint)~="string" then return nil end
@@ -33,7 +36,7 @@ function directory.new ( options )
       now=options.now or os.time,
       send_packet=assert(options.send,"directory send callback required"),
       disconnect=options.disconnect or function() end,
-      peers={}, hosts={},
+      peers={}, hosts={}, activity={},
    },directory)
 end
 
@@ -45,12 +48,18 @@ end
 
 function directory:connect ( peer, observed_endpoint )
    self.peers[peer]={endpoint=canonical_endpoint(observed_endpoint),queries={}}
-   return self:send(peer,{type="hello",node=self.node_id,cap="directory"})
+   return self:send(peer,{type="hello",node=self.node_id,cap="directory",
+      features="activity"})
 end
 
 function directory:disconnect_peer ( peer )
-   for _system_name,claim in pairs(self.hosts) do
-      if claim.peer==peer then claim.peer=nil; claim.active=false end
+   local stamp=self.now()
+   for system_name,claim in pairs(self.hosts) do
+      if claim.peer==peer then
+         claim.peer=nil
+         claim.active=false
+         self:record_activity(system_name,false,stamp)
+      end
    end
    self.peers[peer]=nil
 end
@@ -75,6 +84,20 @@ function directory:make_host_room ()
       end
    end
    if count>=MAX_HOSTS and oldest_name then self.hosts[oldest_name]=nil end
+end
+
+function directory:record_activity ( system_name, active, stamp )
+   if not self.activity[system_name] then
+      local count,oldest_name,oldest_seen=0
+      for name,entry in pairs(self.activity) do
+         count=count+1
+         if not oldest_seen or entry.seen<oldest_seen then
+            oldest_name,oldest_seen=name,entry.seen
+         end
+      end
+      if count>=MAX_HOSTS and oldest_name then self.activity[oldest_name]=nil end
+   end
+   self.activity[system_name]={active=active,seen=stamp}
 end
 
 function directory:send_hint ( peer, system_name, claim )
@@ -120,6 +143,34 @@ function directory:publish_hint ( system_name, claim )
    end
 end
 
+function directory:send_activity ( peer )
+   local stamp=self.now()
+   local recent={}
+   for system_name,entry in pairs(self.activity) do
+      local age=math.max(0,stamp-entry.seen)
+      if entry.active or age<=ACTIVITY_RETENTION then
+         recent[#recent+1]={system=system_name,active=entry.active==true,
+            seen=entry.seen,age=math.floor(age)}
+      end
+   end
+   table.sort(recent,function(a,b)
+      if a.active~=b.active then return a.active end
+      if a.seen~=b.seen then return a.seen>b.seen end
+      return a.system<b.system
+   end)
+   local lines,size={},0
+   for _index,entry in ipairs(recent) do
+      local line=table.concat({
+         codec.escape(entry.system),entry.active and "1" or "0",entry.age,
+      },",")
+      if #lines>=MAX_ACTIVITY_SYSTEMS or size+#line+1>ACTIVITY_PAYLOAD then break end
+      lines[#lines+1]=line
+      size=size+#line+1
+   end
+   return self:send(peer,{type="activity",node=self.node_id,
+      entries=#lines>0 and table.concat(lines,";") or "-"})
+end
+
 function directory:receive ( peer, packet )
    local meta=self.peers[peer]
    if not meta then return nil,"unknown peer" end
@@ -161,14 +212,22 @@ function directory:receive ( peer, packet )
          endpoint=observed,alternate=alternate,advertised_port=advertised_port,
          seen=stamp,active=true,peer=peer}
       self.hosts[message.system]=claim
+      self:record_activity(message.system,true,stamp)
       self:publish_hint(message.system,claim)
       return true
    end
 
    if message.type=="leave" then
       local old=self.hosts[message.system]
-      if old and old.node==message.node and old.peer==peer then self.hosts[message.system]=nil end
+      if old and old.node==message.node and old.peer==peer then
+         self.hosts[message.system]=nil
+         self:record_activity(message.system,false,self.now())
+      end
       return true
+   end
+
+   if message.type=="activity_query" then
+      return self:send_activity(peer)
    end
 
    if message.type=="query" then

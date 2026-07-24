@@ -57,7 +57,9 @@ aggression timer clears.
 
 The wire protocol is `MP2P/1`. Incompatible peers are ignored without changing
 ordinary play. A directory-only node answers host queries but cannot claim or
-join systems.
+join systems. When P2P is enabled, **Info → Multiplayer → Show recently active
+systems** displays the directory's latest activity snapshot instead of the
+arena server reconnect shortcut.
 
 Player names travel unchanged on the wire. When a remote player has the same
 name as the local player (or another visible remote), only that remote proxy is
@@ -76,6 +78,10 @@ bounded stale hints until superseded or evicted. Clients retry configured
 directory/bootstrap connections every five seconds, and hosts immediately
 re-announce after reconnecting. A stale hint never prevents the normal local
 claim fallback when its old host cannot be reached.
+
+The directory also reports up to 20 system names with active hosts or activity
+within the last 15 minutes. These anonymous records contain no player identity
+or endpoint, and only the directory answers activity requests.
 
 It requires Lua 5.1, ENet, and the `lua-enet` binding. On Ubuntu or Debian:
 

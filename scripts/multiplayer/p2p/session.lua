@@ -10,6 +10,8 @@ local ai_setup = require "ai.core.setup"
 
 local MAX_EVENTS_PER_FRAME = 48
 local NPC_STATE_INTERVAL = 1/3
+local ACTIVITY_QUERY_INTERVAL = 30
+local ACTIVITY_RETENTION = 15*60
 local HOST_ALONE_GRACE = 10
 local AGGRESSION_GRACE = 20
 -- The outer codec percent-escapes this packed field again. Keeping the raw
@@ -23,6 +25,7 @@ local session = {
    host_inventory={}, owned_inventory={},
    craft_factions={}, host_welcomed={}, pending_leader_owners={}, resync_sent={},
    ownership_cache={}, initial_sync_until=0, pending_npc_manifests=nil,
+   activity={}, activity_received=0, last_activity_query=0,
    indicators=status.new(function () return player.pilot() end),
 }
 
@@ -184,6 +187,11 @@ local function connected_node ( node, except, verified_only )
             and (meta.node==node or meta.expected_node==node) then return true end
    end
    return false
+end
+
+local function has_feature ( meta, feature )
+   return meta and type(meta.features)=="string"
+      and (","..meta.features..","):find(","..feature..",",1,true)~=nil
 end
 
 local function has_remote_member ()
@@ -1024,14 +1032,21 @@ local function on_message ( peer, message )
          if not accepted then reject_peer(peer,err); return end
          meta.name=message.name
       end
-      meta.node=message.node; meta.cap=message.cap; meta.verified=true
+      meta.node=message.node; meta.cap=message.cap
+      meta.features=message.features or ""; meta.verified=true
       local endpoint=session.peers[peer]
       if meta.cap=="player" and endpoint_valid(endpoint) then
          session.machine.topology:add_peer(endpoint)
          session.settings.recent=session.machine.topology:serialize_peers()
       end
       if message.cap=="player" and session.machine.system then send(peer,base("query"),true) end
-      if message.cap=="directory" and session.machine.state=="host" then send(peer,claim_message(),true) end
+      if message.cap=="directory" then
+         if session.machine.state=="host" then send(peer,claim_message(),true) end
+         if has_feature(meta,"activity") then
+            send(peer,{type="activity_query",node=session.settings.node_id},true)
+            session.last_activity_query=now()
+         end
+      end
       return
    end
    if not meta.verified then return end
@@ -1065,7 +1080,29 @@ local function on_message ( peer, message )
       end
       return
    end
-   if meta.cap=="directory" then return end
+   if meta.cap=="directory" then
+      if message.type=="activity" then
+         local received=now()
+         local activity={}
+         if message.entries~="-" then
+            for line in message.entries:gmatch("([^;]+)") do
+               if #activity>=20 then break end
+               local encoded,active,age=line:match("^([^,]+),([01]),(%d+)$")
+               local system_name=encoded and codec.unescape(encoded) or nil
+               age=tonumber(age)
+               if system_name and system_name~="" and #system_name<=240
+                     and not system_name:find("[%z\1-\31\127]")
+                     and age and age>=0 and age<=86400 then
+                  activity[#activity+1]={system=system_name,active=active=="1",
+                     seen=received-age}
+               end
+            end
+         end
+         session.activity=activity
+         session.activity_received=received
+      end
+      return
+   end
    local relayed=(session.machine.state~="host" and meta.node==session.machine.host)
    local owner_ok=(meta.node==message.node or relayed)
    if message.type=="claim" then
@@ -1337,6 +1374,9 @@ function session.start ( settings )
    session.member_endpoints={}; session.craft_factions={}; session.departures={}; session.host_welcomed={}
    session.pending_leader_owners={}; session.resync_sent={}; session.ownership_cache={}
    session.pending_npc_manifests=nil
+   session.activity={}
+   session.activity_received=0
+   session.last_activity_query=0
    session.initial_sync_until=0
    session.solo_since=nil
    session.last_liveness=now()
@@ -1420,6 +1460,34 @@ function session.send_chat ( text )
    play_chat_sound()
    broadcast(msg,true)
    return true
+end
+
+function session.request_activity ()
+   if not session.running then return false end
+   local sent=false
+   for peer,meta in pairs(session.peer_meta) do
+      if meta.verified and meta.cap=="directory" and has_feature(meta,"activity") then
+         sent=send(peer,{type="activity_query",node=session.settings.node_id},true)
+            or sent
+      end
+   end
+   session.last_activity_query=now()
+   return sent
+end
+
+function session.recent_activity ()
+   local stamp=now()
+   local activity={}
+   local snapshot_fresh=stamp-(session.activity_received or 0)
+      <=2*ACTIVITY_QUERY_INTERVAL
+   for _index,entry in ipairs(session.activity or {}) do
+      local age=math.max(0,math.floor(stamp-entry.seen))
+      if age<=ACTIVITY_RETENTION then
+         activity[#activity+1]={system=entry.system,
+            active=entry.active and snapshot_fresh,age=age}
+      end
+   end
+   return activity
 end
 
 function session.input ( input_name, input_pressed )
@@ -1580,6 +1648,9 @@ function session.update ( dt )
    end
    smooth_replicas(dt,stamp)
    local action=session.machine:tick()
+   if stamp-(session.last_activity_query or 0)>=ACTIVITY_QUERY_INTERVAL then
+      session.request_activity()
+   end
    if stamp-(session.last_seed_connect or 0)>=5 then
       connect_configured(); session.last_seed_connect=stamp
    end

@@ -955,10 +955,31 @@ while directory_event do
 end
 assert(directory_peer,"guest did not connect to fake directory")
 directory_peer:send(assert(wire_codec.encode{
-   type="hello",node="d1",cap="directory"}),0,"reliable")
+   type="hello",node="d1",cap="directory",features="activity"}),0,"reliable")
 update({punch_guest},4)
 assert(not punch_guest.session.machine.members.d1,
    "directory-only node entered the gameplay election membership")
+local activity_query
+directory_event=fake_directory:service(0)
+while directory_event do
+   if directory_event.type=="receive" then
+      local message=assert(wire_codec.decode(directory_event.data))
+      if message.type=="activity_query" then activity_query=message end
+   end
+   directory_event=fake_directory:service(0)
+end
+assert(activity_query and activity_query.node=="90",
+   "activity-capable directory was not queried")
+directory_peer:send(assert(wire_codec.encode{
+   type="activity",node="d1",entries=
+      wire_codec.escape("Gamma Polaris")..",1,0;"
+      ..wire_codec.escape("Old Haven")..",0,120"}),0,"reliable")
+update({punch_guest},4)
+local recent=punch_guest.session.recent_activity()
+assert(#recent==2 and recent[1].system=="Gamma Polaris" and recent[1].active
+      and recent[2].system=="Old Haven" and not recent[2].active
+      and recent[2].age>=120,
+   "directory activity response was not cached")
 assert(punch_guest.session.identities:add("80","Stale Relay Name"),
    "failed to establish relayed identity test fixture")
 directory_peer:send(assert(wire_codec.encode{
@@ -982,5 +1003,12 @@ assert(host_verified==1 and guest_verified==1,
    "directory candidates did not converge on one verified player connection")
 assert(punch_guest.session.identities:raw_name("80")=="Punch Host",
    "direct hello did not refresh a relay-only player identity")
+punch_guest.wall_clock=punch_guest.wall_clock+61
+recent=punch_guest.session.recent_activity()
+assert(#recent==2 and not recent[1].active and recent[1].age>=61,
+   "stale directory snapshot remained marked active")
+punch_guest.wall_clock=punch_guest.wall_clock+840
+assert(#punch_guest.session.recent_activity()==0,
+   "expired directory activity remained cached")
 punch_host.session.stop(); punch_guest.session.stop()
 print("ok - three-peer session integration")

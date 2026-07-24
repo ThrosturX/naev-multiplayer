@@ -226,17 +226,40 @@ local GREETINGS = {
     _("Once you connect to a server, you will automatically be reconnected if you are disconnected for any reason. This doesn't necessarily mean that you get to keep playing where you left off, though."),
 }
 local function vnMultiplayer()
+    if mem.multiplayer.p2p.enabled then p2psession.request_activity() end
+    local recent_activity = p2psession.recent_activity()
+    local activity_lines = {}
+    for _index, entry in ipairs(recent_activity) do
+        local status
+        if entry.active then
+            status = _("active now")
+        elseif entry.age < 60 then
+            status = _("active less than a minute ago")
+        else
+            status = fmt.f(_("{minutes} minutes ago"),
+                {minutes=math.max(1,math.floor(entry.age/60))})
+        end
+        activity_lines[#activity_lines+1] =
+            fmt.f(_("{system} — {status}"), {system=entry.system,status=status})
+    end
+    local activity_message = #activity_lines>0
+        and table.concat(activity_lines,"\n")
+        or _("No recently active systems were reported. The directory may still be responding; close and reopen this menu to refresh.")
     local choices = {
         { _("Connect"), "connect_menu" },
         { _("Host Server"), "host" },
         { _("P2P Session Settings"), "p2p_settings" },
     }
-    if mem.multiplayer.last_server then
+    if mem.multiplayer.last_server and not mem.multiplayer.p2p.enabled then
         table.insert( choices, { fmt.f( _("Reconnect to {nick}"), mem.multiplayer.last_server ), "reconnect" } )
     end
     if mem.multiplayer.last_served_port then
         table.insert( choices, { fmt.f( _("Host a server on {port}"), { port = mem.multiplayer.last_served_port } ), "rehost" } )
     end
+    if mem.multiplayer.p2p.enabled then
+        table.insert( choices, { _("Show recently active systems"), "p2p_activity" } )
+    end
+    table.insert( choices, { _("Close"), "end" } )
     vn.clear()
     vn.scene()
     local mpvn = vn.newCharacter ( _("The Original Multiplayer"), { image = MPIMG } )
@@ -287,6 +310,10 @@ local function vnMultiplayer()
             vn.jump( "connect_target" )
         end )
     end
+
+    vn.label("p2p_activity")
+    mpvn(activity_message)
+    vn.jump("end")
 
     local port
     if mem.multiplayer.last_served_port then
