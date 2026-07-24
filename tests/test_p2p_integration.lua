@@ -384,14 +384,23 @@ host.session.input("accel",false)
 advance({host,guest},0.1,8)
 assert(host_proxy:memory().p2p_accel==0,
    "manual acceleration release was not replicated")
+
 host.autonaving=true
 advance({host,guest},0.1,8)
+assert(host_proxy:memory().p2p_accel==0,
+   "coasting under autonav incorrectly replicated acceleration")
+host.local_pilot.velocity=vector(100,0)
+advance({host,guest},0.1,8)
 assert(host_proxy:memory().p2p_accel==1,
-   "autonav acceleration was not replicated")
-host.autonaving=false
+   "increasing speed under autonav did not replicate probable acceleration")
 advance({host,guest},0.1,8)
 assert(host_proxy:memory().p2p_accel==0,
-   "ending autonav did not release replicated acceleration")
+   "steady speed under autonav did not release replicated acceleration")
+host.local_pilot.velocity=vector(50,0)
+advance({host,guest},0.1,8)
+assert(host_proxy:memory().p2p_accel==0,
+   "braking under autonav incorrectly replicated acceleration")
+host.autonaving=false
 
 guest.session.input("primary",true)
 advance({host,guest},0.1,8)

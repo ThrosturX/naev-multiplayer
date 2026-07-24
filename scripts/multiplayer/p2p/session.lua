@@ -473,9 +473,13 @@ local function local_state ( p )
    local armour,shield,stress=p:health()
    local cache=naev.cache()
    local target=p:target()
-   -- Input hooks do not see thrust commanded by Naev's autonav AI. Treat
-   -- active autonav as thrust so remote proxies retain engine glow and trails.
-   local accelerating=(cache.accel and cache.accel~=0) or player.autonav()
+   -- Input hooks do not see thrust commanded by Naev's autonav AI. A rising
+   -- squared speed is a cheap proxy for forward thrust that excludes autonav
+   -- coasting and braking without adding engine calls or square roots.
+   local speed2=vx*vx+vy*vy
+   local accelerating=(cache.accel and cache.accel~=0)
+      or (session.local_speed2 and speed2>session.local_speed2+1)
+   session.local_speed2=speed2
    return {x=x,y=y,vx=vx,vy=vy,dir=p:dir(),accel=accelerating and 1 or 0,
       primary=(cache.primary and cache.primary~=0) and 1 or 0,
       secondary=(cache.secondary and cache.secondary~=0) and 1 or 0,
@@ -1238,15 +1242,16 @@ end
 
 publish_player = function ( full )
    local p=player.pilot(); if not p or not session.machine.system then return end
+   local state=local_state(p)
    if full then
       local msg=base("player_manifest"); msg.entity=session.settings.node_id; msg.ship=p:ship():nameRaw(); msg.name=local_player_name(); msg.outfits=outfit_names(p); msg.slots=outfit_slots(p)
       msg.endpoint=session.endpoint
-      local state=local_state(p); msg.x=state.x; msg.y=state.y; msg.vx=state.vx; msg.vy=state.vy; msg.dir=state.dir
+      msg.x=state.x; msg.y=state.y; msg.vx=state.vx; msg.vy=state.vy; msg.dir=state.dir
       msg.armour=state.armour; msg.shield=state.shield; msg.stress=state.stress
       broadcast(msg,true)
    end
    session.sequence=session.sequence+1
-   local state=local_state(p); local msg=base("player_state"); msg.entity=session.settings.node_id; msg.seq=session.sequence
+   local msg=base("player_state"); msg.entity=session.settings.node_id; msg.seq=session.sequence
    for k,v in pairs(state) do msg[k]=v end
    broadcast(msg,false)
 end
@@ -1390,6 +1395,7 @@ end
 function session.start ( settings )
    if session.running then return true end
    clear_local_controls()
+   session.local_speed2=nil
    session.indicators:clear()
    session.settings=session.defaults(settings)
    local ok,host=pcall(enet.host_create,"*:"..tostring(session.settings.listen_port))
@@ -1418,6 +1424,7 @@ end
 
 function session.stop ()
    clear_local_controls()
+   session.local_speed2=nil
    if not session.running then session.indicators:clear(); lock_autonav(false); return end
    if session.machine.system then broadcast(base("leave"),true) end
    session.leave()
@@ -1440,6 +1447,7 @@ function session.enter ( system_name )
    session.last_claim_check=now()
    session.last_liveness=now()
    session.solo_since=nil
+   session.local_speed2=nil
    reset_smoothing()
    session.greeted_system=nil
    lock_autonav(true)
@@ -1452,6 +1460,7 @@ end
 
 function session.leave ()
    if not session.machine or not session.machine.system then
+      session.local_speed2=nil
       session.indicators:clear()
       lock_autonav(false)
       return
@@ -1468,6 +1477,7 @@ function session.leave ()
    session.pending_npc_manifests=nil
    session.initial_sync_until=0
    session.solo_since=nil
+   session.local_speed2=nil
    session.indicators:clear()
    reset_smoothing()
    session.greeted_system=nil
@@ -1523,6 +1533,7 @@ function session.input ( input_name, input_pressed )
    -- menu is open too.
    if session.machine and session.machine.system and not player.isLanded() then
       naev.unpause()
+      session.enforce_time_controls()
    end
    if input_pressed and (input_name=="e_attack" or input_name=="e_hold"
          or input_name=="e_return" or input_name=="e_clear") then

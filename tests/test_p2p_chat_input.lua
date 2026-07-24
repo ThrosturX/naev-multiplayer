@@ -40,6 +40,7 @@ package.loaded["multiplayer.p2p.session"] = {
    enforce_time_controls=function()
       time_control_checks=time_control_checks+1
    end,
+   input=function() end,
 }
 package.loaded.luatk = luatk_stub
 package.loaded.vn = vn_stub
@@ -110,5 +111,33 @@ assert(vn_stub.keypressed == original_keypressed, "VN key handler was not restor
 
 vn_stub.keypressed("m", false)
 assert(map_calls == 1, "starmap handling was not restored after chat closed")
+
+local native_updates = 0
+local function native_update ()
+   native_updates = native_updates + 1
+end
+local function native_run ()
+   vn_stub.update(1/60)
+end
+vn_stub.update = native_update
+vn_stub.run = native_run
+
+local unpauses_before_hail = unpauses
+local checks_before_hail = time_control_checks
+P2P_SESSION_HAIL()
+assert(vn_stub.run ~= native_run, "native hail VN runner was not wrapped")
+vn_stub.run()
+assert(native_updates == 1, "native hail VN update handler did not run")
+assert(unpauses == unpauses_before_hail + 1,
+   "native hail VN did not keep simulation unpaused")
+assert(time_control_checks == checks_before_hail + 1,
+   "native hail VN did not enforce P2P time controls")
+assert(vn_stub.update == native_update, "native hail VN update handler was not restored")
+assert(vn_stub.run == native_run, "native hail VN runner was not restored")
+
+P2P_SESSION_HAIL()
+assert(vn_stub.run ~= native_run, "aborted hail did not install the VN wrapper")
+P2P_SESSION_INPUT("hail", true)
+assert(vn_stub.run == native_run, "aborted hail did not restore the VN runner")
 
 print("ok - P2P chat accepts the starmap binding without opening the map")

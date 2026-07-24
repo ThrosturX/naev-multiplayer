@@ -18,7 +18,7 @@ local mplayerserver = require "multiplayer.server"
 local p2psession    = require "multiplayer.p2p.session"
 local luatk         = require "luatk"
 local vn = require "vn"
--- luacheck: globals load startMultiplayerServer P2P_SESSION_UPDATE P2P_SESSION_INPUT P2P_SESSION_ENTER P2P_SESSION_LEAVE (Hook functions passed by name)
+-- luacheck: globals load startMultiplayerServer P2P_SESSION_UPDATE P2P_SESSION_INPUT P2P_SESSION_HAIL P2P_SESSION_ENTER P2P_SESSION_LEAVE (Hook functions passed by name)
 
 local function pick_one ( ipair )
     return ipair[ rnd.rnd( 1, #ipair ) ]
@@ -36,6 +36,32 @@ local mpbtn
 
 local p2p_hooks = {}
 local p2p_hail_pressed
+local p2p_hail_vn_run
+
+local function p2p_restore_hail_vn ()
+    if not p2p_hail_vn_run then return end
+    vn.run = p2p_hail_vn_run
+    p2p_hail_vn_run = nil
+end
+
+local function p2p_keep_hail_live ()
+    if p2p_hail_vn_run then return end
+    local vn_run = vn.run
+    p2p_hail_vn_run = vn_run
+    vn.run = function(...)
+        vn.run = vn_run
+        p2p_hail_vn_run = nil
+        local vn_update = vn.update
+        vn.update = function(dt)
+            naev.unpause()
+            vn_update(dt)
+            p2psession.enforce_time_controls()
+        end
+        local ok, err = pcall(vn_run, ...)
+        vn.update = vn_update
+        if not ok then error(err, 0) end
+    end
+end
 
 local function p2p_chat_available ()
     if player.isLanded() then return false end
@@ -115,6 +141,7 @@ local function p2p_run_chat ()
 end
 
 local function p2p_stop ()
+    p2p_restore_hail_vn()
     p2psession.stop()
     p2p_hail_pressed = nil
     for _index, h in ipairs(p2p_hooks) do hook.rm(h) end
@@ -128,6 +155,7 @@ local function p2p_start ()
     p2p_hooks = {
         hook.update("P2P_SESSION_UPDATE"),
         hook.input("P2P_SESSION_INPUT"),
+        hook.hail("P2P_SESSION_HAIL"),
         hook.enter("P2P_SESSION_ENTER"),
         hook.land("P2P_SESSION_LEAVE"),
         hook.takeoff("P2P_SESSION_ENTER"),
@@ -137,7 +165,9 @@ local function p2p_start ()
 end
 
 function P2P_SESSION_UPDATE ( dt ) p2psession.update(dt) end
+function P2P_SESSION_HAIL () p2p_keep_hail_live() end
 function P2P_SESSION_INPUT ( input_name, input_pressed )
+    if input_name == "hail" then p2p_restore_hail_vn() end
     p2psession.input(input_name, input_pressed)
     if input_name ~= "hail" then return end
     if input_pressed then
