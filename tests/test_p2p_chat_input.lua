@@ -4,6 +4,7 @@ local luatk_stub = {
 
 local map_calls = 0
 local unpauses = 0
+local time_control_checks = 0
 local typed = ""
 local naev_stub = {
    keyGet = function(binding)
@@ -35,18 +36,25 @@ end
 package.loaded.format = {}
 package.loaded["multiplayer.client"] = {}
 package.loaded["multiplayer.server"] = {}
-package.loaded["multiplayer.p2p.session"] = {}
+package.loaded["multiplayer.p2p.session"] = {
+   enforce_time_controls=function()
+      time_control_checks=time_control_checks+1
+   end,
+}
 package.loaded.luatk = luatk_stub
 package.loaded.vn = vn_stub
 
 naev = naev_stub
 _ = function(value) return value end
-local pilot_target,nav_spob
+local pilot_target,nav_spob,landed
 local player_pilot = {
    target=function() return pilot_target end,
    nav=function() return nav_spob,nil end,
 }
-player = {pilot=function() return player_pilot end}
+player = {
+   pilot=function() return player_pilot end,
+   isLanded=function() return landed==true end,
+}
 
 assert(loadfile("events/multiplayer.lua"))()
 
@@ -66,6 +74,9 @@ assert(run_chat, "P2P chat runner was not captured by the input callback")
 assert(keep_chat_live, "P2P live chat updater was not captured by the input callback")
 assert(chat_available, "P2P chat target guard was not captured by the input callback")
 assert(chat_available(), "empty hail target did not allow P2P chat")
+landed=true
+assert(not chat_available(), "landed player incorrectly allowed P2P chat")
+landed=false
 nav_spob={}
 assert(not chat_available(), "selected spob incorrectly allowed P2P chat")
 nav_spob=nil; pilot_target={}
@@ -89,6 +100,8 @@ chat_state:_update(0)
 chat_state:_update(1/60)
 assert(unpauses == 2, "chat overlay did not keep simulation unpaused from its first frame")
 assert(steady_updates == 2, "chat overlay lost LuaTK's replacement update handler")
+assert(time_control_checks == 2,
+   "chat overlay did not enforce P2P time controls on every update")
 
 run_chat()
 assert(map_calls == 0, "starmap opened while chat input was active")

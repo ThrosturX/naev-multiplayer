@@ -72,7 +72,7 @@ end
 
 local function new_world ( player_name )
    local world={clock=0,wall_clock=0,pilots={},next_id=1,spawn=true,player_name=player_name,c_calls={},
-      speed_enabled=true,autonav_resets=0,unpauses=0,comms={},spobs={},jumps={},
+      speed_enabled=true,autonav_speed_calls=0,unpauses=0,comms={},spobs={},jumps={},
       claim_available=true}
    local function counted ( name )
       world.c_calls[name]=(world.c_calls[name] or 0)+1
@@ -215,7 +215,10 @@ local function new_world ( player_name )
    env.vec2={new=vector}
    env.player={name=function() return world.player_name end,pilot=function() return world.local_pilot end,
       isLanded=function() return false end,
-      autonavReset=function() world.autonav_resets=world.autonav_resets+1 end}
+      autonavSetSpeed=function(speed)
+         world.autonav_speed_calls=world.autonav_speed_calls+1
+         world.autonav_speed=speed
+      end}
    env.system={cur=function()
       return {
          spobs=function() return world.spobs end,
@@ -291,15 +294,17 @@ assert(host.session.machine.deadline==discovery_deadline and host.session.machin
    "duplicate same-system entry restarted discovery")
 assert(not host.speed_enabled,"P2P system entry did not disable the speed key")
 local initial_claim_checks=host.c_calls.claim_test or 0
-local initial_autonav_resets=host.autonav_resets
+local initial_autonav_speed_calls=host.autonav_speed_calls
 update({host},120)
 assert((host.c_calls.claim_test or 0)==initial_claim_checks,
    "P2P rechecked local system claims every rendered frame")
-assert(host.autonav_resets==initial_autonav_resets,
-   "P2P reset autonav every rendered frame")
+assert(host.autonav_speed_calls==initial_autonav_speed_calls+120
+      and host.autonav_speed==1,
+   "P2P did not cap autonav speed on every rendered frame")
 advance({host},2,4)
-assert(host.autonav_resets==initial_autonav_resets+1,
-   "P2P maintenance did not defensively cancel autonav")
+assert(host.autonav_speed_calls==initial_autonav_speed_calls+124
+      and host.autonav_speed==1,
+   "P2P stopped enforcing the autonav speed cap during discovery")
 assert(host.session.machine.state=="host")
 assert(host.local_pilot.effects["Multiplayer: Autonav Pending"],
    "solo-host autonav countdown was not shown")
@@ -309,6 +314,8 @@ assert(not host.speed_enabled,
 advance({host},1.1,4)
 assert(host.speed_enabled,
    "solo host did not regain ordinary autonav time compression")
+assert(host.autonav_speed==nil,
+   "solo host retained the multiplayer autonav speed cap")
 assert(not host.local_pilot.effects["Multiplayer: Autonav Pending"],
    "solo-host autonav countdown remained after autonav was restored")
 host.c_calls={}

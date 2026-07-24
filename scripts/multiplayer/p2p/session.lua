@@ -89,11 +89,12 @@ local function lock_autonav ( locked )
       if session.autonav_locked then return end
       session.autonav_locked=true
       naev.keyEnable("speed",false)
-      player.autonavReset()
+      player.autonavSetSpeed(1)
    else
       if not session.autonav_locked then return end
       session.autonav_locked=nil
       naev.keyEnable("speed",true)
+      player.autonavSetSpeed()
    end
 end
 
@@ -1462,6 +1463,10 @@ function session.input ( input_name, input_pressed )
    naev.cache()[key]=input_pressed and 1 or 0
 end
 
+function session.enforce_time_controls ()
+   if session.autonav_locked then player.autonavSetSpeed(1) end
+end
+
 function session.update ( dt )
    if not session.running then return end
    local stamp=now()
@@ -1476,6 +1481,9 @@ function session.update ( dt )
          session.enter(system_name)
       end
    end
+   -- Autonav can be entered through map and scripted paths that bypass the
+   -- disabled speed input. Keep it usable without allowing time compression.
+   session.enforce_time_controls()
    local processed=0
    local event=session.host:service(0)
    while event do
@@ -1517,10 +1525,6 @@ function session.update ( dt )
    greet_host()
    if stamp-(session.last_liveness or 0)>=1 then
       session.last_liveness=stamp
-      -- Resetting autonav crosses into engine navigation state and does not
-      -- need rendered-frame cadence. The speed key remains disabled between
-      -- these defensive checks.
-      if session.autonav_locked then player.autonavReset() end
       for node,entry in pairs(session.departures) do
          if not exists(entry.pilot) then session.departures[node]=nil end
       end

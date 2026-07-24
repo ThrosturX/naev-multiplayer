@@ -38,6 +38,7 @@ local p2p_hooks = {}
 local p2p_hail_pressed
 
 local function p2p_chat_available ()
+    if player.isLanded() then return false end
     local pp = player.pilot()
     local nav_spob = pp:nav()
     local target = pp:target()
@@ -54,6 +55,9 @@ local function p2p_keep_chat_live ( chat_state )
     chat_update = function(self, dt)
         naev.unpause()
         widget_update(self, dt)
+        -- LuaTK owns the update loop while the chat input is open, so enforce
+        -- shared-session time controls here as well as in hook.update.
+        p2psession.enforce_time_controls()
         -- LuaTK replaces its one-shot focus initializer with its steady-state
         -- updater. Keep wrapping whichever updater it installs.
         if self._update ~= chat_update then
