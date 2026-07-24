@@ -225,8 +225,7 @@ local function play_disconnect_sound ()
    disconnect_sound:play()
 end
 
-local function departure_candidate ( p )
-   local pos=p:pos()
+local function nearby_transition ( pos, pilot_radius, pilot_faction )
    if not pos then return end
    local px,py=pos:get()
 
@@ -239,13 +238,12 @@ local function departure_candidate ( p )
       local distance=dx*dx+dy*dy
       local radius=target:radius()
       if type(radius)~="number" or radius<0 then radius=0 end
-      local pilot_radius=p:radius()
       if type(pilot_radius)~="number" or pilot_radius<0 then pilot_radius=0 end
       -- The last 15 Hz state can trail the real ship slightly. Use the target
       -- radius plus the pilot radius and a small packet/smoothing allowance,
-      -- but never infer a departure from elsewhere in the system.
-      local departure_range=radius+pilot_radius+300
-      if distance > departure_range*departure_range then return end
+      -- but never infer a transition from elsewhere in the system.
+      local transition_range=radius+pilot_radius+300
+      if distance > transition_range*transition_range then return end
       if not best_distance or distance < best_distance then
          best_kind,best_target,best_distance=kind,target,distance
       end
@@ -253,7 +251,6 @@ local function departure_candidate ( p )
 
    local current=system.cur()
    if not current then return end
-   local pilot_faction=p:faction()
    for _index,spob in ipairs(current:spobs()) do
       local usable=false
       local services=spob:services()
@@ -270,6 +267,10 @@ local function departure_candidate ( p )
    end
    for _index,jump in ipairs(current:jumps(true)) do consider("jump",jump) end
    return best_kind,best_target
+end
+
+local function departure_candidate ( p )
+   return nearby_transition(p:pos(),p:radius(),p:faction())
 end
 
 local function clear_departure_controls ( p )
@@ -408,7 +409,8 @@ local function spawn_proxy ( message, display_name )
    if proxy_name==local_player_name() then proxy_name=proxy_name.." #2" end
    local position=(message.x and message.y) and vec2.new(message.x,message.y)
       or player.pilot():pos()
-   local p=pilot.add(message.ship,fac,position,proxy_name,
+   local arrival_kind,arrival_origin=nearby_transition(position,50,fac)
+   local p=pilot.add(message.ship,fac,arrival_origin or position,proxy_name,
       {ai="p2p_remote_control",naked=true})
    if not p then return end
    install_outfits(p,message)
@@ -418,8 +420,12 @@ local function spawn_proxy ( message, display_name )
    p:setNoDeath(true)
    p:setHealth(message.armour or 100,message.shield or 100,message.stress or 0)
    if p:name()~=proxy_name then p:rename(proxy_name) end
-   if message.vx and message.vy then p:setVel(vec2.new(message.vx,message.vy)) end
-   if message.dir then p:setDir(message.dir) end
+   -- Native takeoff and jump-in setup owns initial motion. Subsequent state
+   -- packets smoothly converge the proxy on the remote player's real ship.
+   if not arrival_kind then
+      if message.vx and message.vy then p:setVel(vec2.new(message.vx,message.vy)) end
+      if message.dir then p:setDir(message.dir) end
+   end
    ai_setup.setup(p)
    session.players[message.entity]={pilot=p,node=message.node,local_id=tostring(p:id()),
       sequences={},last_seen=now()}
@@ -467,7 +473,10 @@ local function local_state ( p )
    local armour,shield,stress=p:health()
    local cache=naev.cache()
    local target=p:target()
-   return {x=x,y=y,vx=vx,vy=vy,dir=p:dir(),accel=(cache.accel and cache.accel~=0) and 1 or 0,
+   -- Input hooks do not see thrust commanded by Naev's autonav AI. Treat
+   -- active autonav as thrust so remote proxies retain engine glow and trails.
+   local accelerating=(cache.accel and cache.accel~=0) or player.autonav()
+   return {x=x,y=y,vx=vx,vy=vy,dir=p:dir(),accel=accelerating and 1 or 0,
       primary=(cache.primary and cache.primary~=0) and 1 or 0,
       secondary=(cache.secondary and cache.secondary~=0) and 1 or 0,
       target=target_entity(target),active=active_names(p),energy=p:energy(),
@@ -527,9 +536,14 @@ local function mark_player_aggression ( node )
    end
 end
 
+local request_resync
+
 local function apply_player_state ( message )
    local entry=session.players[message.entity]
-   if not entry or not exists(entry.pilot) then return end
+   if not entry or not exists(entry.pilot) then
+      request_resync("all",message.node)
+      return
+   end
    if not reconcile.accept(entry.sequences,"state",message.seq) then return end
    entry.last_seen=now()
    motion_target(entry,message)
@@ -872,7 +886,7 @@ local function apply_craft_order ( message )
    leader:msg(recipients,message.order,target)
 end
 
-local publish_entities,publish_player,request_resync,publish_manifests
+local publish_entities,publish_player,publish_manifests
 
 local function parse_states ( packed, container, owner )
    local missing=false
@@ -1132,8 +1146,16 @@ local function on_message ( peer, message )
       if message.node==session.settings.node_id
             or not session.machine:accept_sequence("resync:"..message.node,message.seq) then return end
       if session.machine.state=="host" then broadcast(message,true,peer) end
-      if message.scope=="all" then publish_player(true) end
-      publish_manifests(message.scope,message.owner,message.entity)
+      -- Reuse the compatible "all" scope with an owner as a targeted player
+      -- repair. Older peers safely answer it as a full resynchronization.
+      local player_target=message.scope=="all" and message.owner
+      if message.scope=="all"
+            and (not player_target or player_target==session.settings.node_id) then
+         publish_player(true)
+      end
+      if not player_target then
+         publish_manifests(message.scope,message.owner,message.entity)
+      end
       return
    end
    if message.type=="player_manifest" then
@@ -1173,6 +1195,10 @@ local function on_message ( peer, message )
       apply_player_state(message); if session.machine.state=="host" then broadcast(message,false,peer) end
    elseif message.type=="chat" and session.machine:accept_sequence("chat:"..message.node,message.seq) then
       local entry=session.players[message.node]
+      if message.node~=session.settings.node_id
+            and (not entry or not exists(entry.pilot)) then
+         request_resync("all",message.node)
+      end
       if message.node==session.settings.node_id then
          pilot.comm(local_player_name(),message.text)
       elseif entry and exists(entry.pilot) then

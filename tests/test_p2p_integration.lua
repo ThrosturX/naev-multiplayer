@@ -73,7 +73,7 @@ end
 local function new_world ( player_name )
    local world={clock=0,wall_clock=0,pilots={},next_id=1,spawn=true,player_name=player_name,c_calls={},
       speed_enabled=true,autonav_speed_calls=0,unpauses=0,comms={},spobs={},jumps={},
-      claim_available=true}
+      claim_available=true,autonaving=false}
    local function counted ( name )
       world.c_calls[name]=(world.c_calls[name] or 0)+1
    end
@@ -215,6 +215,7 @@ local function new_world ( player_name )
    env.vec2={new=vector}
    env.player={name=function() return world.player_name end,pilot=function() return world.local_pilot end,
       isLanded=function() return false end,
+      autonav=function() return world.autonaving,world.autonav_speed or 1 end,
       autonavSetSpeed=function(speed)
          world.autonav_speed_calls=world.autonav_speed_calls+1
          world.autonav_speed=speed
@@ -246,7 +247,10 @@ local function new_world ( player_name )
       add=function(ship_name,fac,pos,name,params)
          local faction_name=type(fac)=="string" and fac or fac:nameRaw()
          local p=world:add_pilot(ship_name,faction_name,name,false,params and params.ai)
-         p.position=pos; return p
+         p.spawn_origin=pos
+         if pos and pos.get then p.position=pos
+         elseif pos and pos.pos then p.position=pos:pos() end
+         return p
       end,
       toggleSpawn=function(v) world.spawn=v end,
       taskClear=function() end,pushtask=function() end,
@@ -371,6 +375,24 @@ assert(not find(host,"John","P2P Players") and not find(guest,"John","P2P Player
 assert(host_proxy.no_death and not host_proxy.invincible,
    "remote player proxy cannot receive local projectile impacts")
 assert(not host_proxy.hostile,"remote player started hostile before taking hostile action")
+
+host.session.input("accel",true)
+advance({host,guest},0.1,8)
+assert(host_proxy:memory().p2p_accel==1,
+   "manual player acceleration was not replicated")
+host.session.input("accel",false)
+advance({host,guest},0.1,8)
+assert(host_proxy:memory().p2p_accel==0,
+   "manual acceleration release was not replicated")
+host.autonaving=true
+advance({host,guest},0.1,8)
+assert(host_proxy:memory().p2p_accel==1,
+   "autonav acceleration was not replicated")
+host.autonaving=false
+advance({host,guest},0.1,8)
+assert(host_proxy:memory().p2p_accel==0,
+   "ending autonav did not release replicated acceleration")
+
 guest.session.input("primary",true)
 advance({host,guest},0.1,8)
 assert(guest_proxy:memory().p2p_primary and not guest_proxy.hostile,
@@ -636,6 +658,35 @@ local third_host_proxy=third.session.players["10"].pilot
 assert(third_host_proxy.last_chat=="This is John, captain of John. Identify yourself."
       and third_host_proxy.chat_count==1,
    "host did not privately identify itself to a peer discovered through a guest")
+
+-- A raced or otherwise missed player manifest must not leave a permanent
+-- invisible participant. State reaches both the host and other guests, which
+-- request a throttled reliable manifest repair through the normal relay.
+guest_proxy:rm()
+host.session.players["20"]=nil
+local guest_proxy_on_third=third.session.players["20"].pilot
+guest_proxy_on_third:rm()
+third.session.players["20"]=nil
+local guest_player_manifests=guest.session.host.sent_types.player_manifest or 0
+local third_player_manifests=third.session.host.sent_types.player_manifest or 0
+guest.session.last_player=guest.wall_clock+20 -- isolate chat-triggered repair
+assert(guest.session.send_chat("repair my manifest"))
+update({host,guest,third},24)
+assert(host.session.players["20"] and host.session.players["20"].pilot:exists(),
+   "host did not repair a missing remote player proxy")
+assert(third.session.players["20"] and third.session.players["20"].pilot:exists(),
+   "guest did not repair a missing relayed player proxy")
+assert((guest.session.host.sent_types.player_manifest or 0)>guest_player_manifests
+      and (third.session.host.sent_types.player_manifest or 0)==third_player_manifests,
+   "targeted player repair did not isolate the requested participant")
+guest_proxy=host.session.players["20"].pilot
+guest.session.last_player=guest.wall_clock
+assert(guest.session.send_chat("manifest repaired"))
+update({host,guest,third},8)
+assert(guest_proxy.last_chat=="manifest repaired"
+      and third.session.players["20"].pilot.last_chat=="manifest repaired",
+   "chat remained detached after repairing its player proxy")
+
 npc:setPos(vector(500,0))
 escort:setPos(vector(500,0))
 local npc_velocity_sets=npc_replica.velocity_sets or 0
@@ -889,6 +940,28 @@ advance({transition_host,transition_guest},2,16)
 assert(transition_guest.session.machine.state=="host",
    "guest gaining a local claim did not become host")
 transition_guest.session.stop(); transition_host.session.stop()
+
+-- Newly observed players use native Naev arrival states when their first
+-- authoritative position is close to a landable spob or jump point.
+local arrival_host=new_world("Arrival Host")
+local arrival_spob=departure_target(500,0,true)
+arrival_host.spobs={arrival_spob}
+assert(arrival_host.session.start{enabled=true,node_id="45",listen_port=61403,
+   directory="",bootstrap={},recent={}})
+assert(arrival_host.session.enter("Arrival System")); advance({arrival_host},2,4)
+local arrival_guest=new_world("Arrival Guest")
+local arrival_jump=departure_target(0,0,false)
+arrival_guest.jumps={arrival_jump}
+arrival_guest.local_pilot.position=vector(500,0)
+assert(arrival_guest.session.start{enabled=true,node_id="46",listen_port=0,
+   directory="",bootstrap={"127.0.0.1:61403"},recent={}})
+assert(arrival_guest.session.enter("Arrival System"))
+update({arrival_host,arrival_guest},16)
+assert(arrival_host.session.players["46"].pilot.spawn_origin==arrival_spob,
+   "player arriving near a landable spob did not take off from it")
+assert(arrival_guest.session.players["45"].pilot.spawn_origin==arrival_jump,
+   "player arriving near a jump point did not jump in through it")
+arrival_guest.session.stop(); arrival_host.session.stop()
 
 -- Listening on the configured loopback directory port must not dial self.
 local selfloop=new_world("Loopback")
