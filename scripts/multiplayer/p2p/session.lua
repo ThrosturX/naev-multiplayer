@@ -6,6 +6,7 @@ local owned = require "multiplayer.p2p.owned"
 local identity = require "multiplayer.p2p.identity"
 local status = require "multiplayer.p2p.status"
 local enet = require "enet"
+local fmt = require "format"
 local ai_setup = require "ai.core.setup"
 
 local MAX_EVENTS_PER_FRAME = 48
@@ -1770,7 +1771,7 @@ function session.update ( dt )
       connect_configured(); session.last_seed_connect=stamp
    end
    if action=="claim" then
-      print("P2P: claimed local system host")
+      print(fmt.f("P2P: claimed local system host in {syst}",{syst=system.cur()}))
       session.machine.topology:remember_hint(session.machine.system,session.settings.node_id,session.endpoint,session.machine.claim,stamp+60)
       broadcast(claim_message(),true)
       if has_remote_member() then publish_player(true); publish_entities(true) end

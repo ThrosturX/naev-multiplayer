@@ -8,31 +8,9 @@ The plugin is fairly experimental and as such no backwards compatibility is guar
 
 There are many features that haven't been implemented yet, and some that might just get brushed over. I like to stick to the principles that get us all the most amount of fun with the least amount of headaches, so let's make it fun and easy and we'll take it from there.
 
-### Some things to note:
-
-- Expect some desync, but the server is authoritative
-    - If you shoot on your client but there's nothing to shoot at, you don't lose energy because the server doesn't let you shoot
-    - Missiles won't be in sync at all, but they are "predictably" out of sync, so it is a masterable skill
-    - Beams are so out of sync that I removed them from `equipopts`, it's not even funny
-    - If you enter a blocking state such as a menu or the chat, you will risk being disconnected by timeout
-- When you die, the server should respawn you in a new ship, but sometimes you might need to reload a save and reconnect
-    - If you "respawn" in the same ship, you probably just ate a missile on your client that the server said was a miss, just keep playing
-- You can't configure weapons on the client, it doesn't do anything at all other than mess up what you see
-- You can use afterburners and shield boosters (perhaps other modules too) and the effects will be synchronized between clients
-- Autonav works
-    - It should synchronize less often to save bandwidth on idling clients
-    - Speedup does not work (and even if it did, the server would probably start teleporting you around or ask you to respawn)
-
 ### The chat
 
-There is a basic chat feature. You press your hail button and a text window pops up. Type a short message fast before you are disconnected.
-
-Once you have sent your message, you will be resynchronized to where the server says you should be and can continue playing.
-Everyone will see your message if you are connected, you can confirm you are connected if your message appears in your message log.
-
-This is mainly meant for short messages such as "go" or "attack goddard", but can be used for other things as well. Please be civil.
-
-Question marks don't work, use something else instead. Perhaps your peers can decide on something like "ma" (a homage to Firefly, "ma" (嗎) is the Chinese equivalent of a question mark).
+There is a basic chat feature. You press your hail button when nothing is targeted and a text window pops up. You can type a message here that will be broadcast to other connected players.
 
 ## Configuration
 
@@ -48,6 +26,23 @@ To use it, open **Info → Multiplayer → P2P Session Settings** and enable P2P
 Players who enter the same system share its host's pilots and can see and fight alongside one another. Landing, jumping, chatting, and player-owned craft are supported. The directory assists discovery only; gameplay travels directly between players.
 
 Mission state is still local. A system claimed by a local mission or event never joins a remote host, preserving its local population automatically. Game-speed controls are locked while other players are present, while a solo host keeps normal single-player pausing and regains time compression.
+
+## Arena
+
+### Some things to note:
+
+- Expect some desync, but the server is authoritative
+    - If you shoot on your client but there's nothing to shoot at, you don't lose energy because the server doesn't let you shoot
+    - Missiles won't be in sync at all, but they are "predictably" out of sync, so it is a masterable skill
+    - Beams are so out of sync that I removed them from `equipopts`, it's not even funny
+    - If you enter a blocking state such as a menu or the chat, you will risk being disconnected by timeout
+- When you die, the server should respawn you in a new ship, but sometimes you might need to reload a save and reconnect
+    - If you "respawn" in the same ship, you probably just ate a missile on your client that the server said was a miss, just keep playing
+- You can't configure weapons on the client, it doesn't do anything at all other than mess up what you see
+- You can use afterburners and shield boosters (perhaps other modules too) and the effects will be synchronized between clients
+- Autonav works
+    - It should synchronize less often to save bandwidth on idling clients
+    - Speedup does not work (and even if it did, the server would probably start teleporting you around or ask you to respawn)
 
 ### Server configuration
 
