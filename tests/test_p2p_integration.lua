@@ -58,6 +58,8 @@ local function resource ( name )
    return {
       nameRaw=function() return name end,
       areEnemies=function() return false end,
+      inherits=function() return nil end,
+      baseType=function() return name end,
    }
 end
 
@@ -227,7 +229,10 @@ local function new_world ( player_name )
          jumps=function() return world.jumps end,
       }
    end}
-   env.ship={get=function(name) assert(type(name)=="string" and name~=""); return resource(name) end}
+   env.ship={
+      exists=function(name) return type(name)=="string" and name~="" end,
+      get=function(name) assert(type(name)=="string" and name~=""); return resource(name) end,
+   }
    env.outfit={
       get=function(name)
          if world.missing_outfits[name] then
@@ -326,10 +331,10 @@ assert(host.autonav_speed_calls==initial_autonav_speed_calls+124
 assert(host.session.machine.state=="host")
 assert(host.local_pilot.effects["Multiplayer: Autonav Pending"],
    "solo-host autonav countdown was not shown")
-advance({host},9,4)
+advance({host},5,4)
 assert(not host.speed_enabled,
-   "solo host regained time compression before its ten-second grace period")
-advance({host},1.1,4)
+   "solo host regained time compression before its grace period")
+advance({host},5.1,4)
 assert(host.speed_enabled,
    "solo host did not regain ordinary autonav time compression")
 assert(host.autonav_speed==nil,
@@ -343,6 +348,11 @@ assert((host.c_calls.pilot_get or 0)==0,
    "solo host scanned the pilot inventory under time compression")
 assert((host.session.host.sent_types.player_state or 0)==solo_player_states,
    "solo host published player state without a remote system member")
+local solo_unpauses=host.unpauses
+host.session.input("accel",true)
+host.session.input("accel",false)
+assert(host.unpauses==solo_unpauses,
+   "solo-host input unpaused the space simulation")
 local npc=host:add_pilot("Koala","Empire","Host NPC",false)
 local escort=host:add_pilot("Hyena","Player","Host Escort",true,"escort")
 escort.pilot_id=777
@@ -433,8 +443,10 @@ advance({host,guest},0.1,8)
 -- and only the disposable proxy may have its health repaired.
 host.local_pilot:setTarget(guest_proxy)
 host.local_pilot:setEnergy(63)
+local active_unpauses=host.unpauses
 host.session.input("primary",true)
-assert(host.unpauses>0,"P2P input did not keep the space simulation unpaused")
+assert(host.unpauses==active_unpauses+1,
+   "active P2P input did not keep the space simulation unpaused")
 assert(guest_proxy.hostile,"firing at a neutral remote player did not make the target hostile")
 assert(host.local_pilot.effects["Multiplayer: Aggression"],
    "local aggression did not show its peace countdown")

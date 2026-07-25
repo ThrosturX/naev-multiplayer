@@ -202,6 +202,14 @@ local function has_remote_member ()
    return false
 end
 
+function session.keep_simulation_live ()
+   if not session.running or not session.machine or not session.machine.system
+         or player.isLanded() or not has_remote_member() then return false end
+   naev.unpause()
+   session.enforce_time_controls()
+   return true
+end
+
 local function base ( kind )
    return {type=kind,node=session.settings.node_id,system=session.machine.system}
 end
@@ -1601,12 +1609,9 @@ end
 function session.input ( input_name, input_pressed )
    if not session.running then return end
    -- Arena multiplayer unpauses on every input event. P2P must keep pumping
-   -- networking and, for a host, the authoritative NPC simulation while a
-   -- menu is open too.
-   if session.machine and session.machine.system and not player.isLanded() then
-      naev.unpause()
-      session.enforce_time_controls()
-   end
+   -- networking and the authoritative NPC simulation while a menu is open
+   -- too, but a solo host must retain ordinary single-player pausing.
+   session.keep_simulation_live()
    if input_pressed and (input_name=="e_attack" or input_name=="e_hold"
          or input_name=="e_return" or input_name=="e_clear") then
       session.sequence=session.sequence+1

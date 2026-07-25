@@ -5,6 +5,7 @@ local luatk_stub = {
 local map_calls = 0
 local unpauses = 0
 local time_control_checks = 0
+local active_session = true
 local typed = ""
 local naev_stub = {
    keyGet = function(binding)
@@ -37,8 +38,11 @@ package.loaded.format = {}
 package.loaded["multiplayer.client"] = {}
 package.loaded["multiplayer.server"] = {}
 package.loaded["multiplayer.p2p.session"] = {
-   enforce_time_controls=function()
-      time_control_checks=time_control_checks+1
+   keep_simulation_live=function()
+      if active_session then
+         unpauses=unpauses+1
+         time_control_checks=time_control_checks+1
+      end
    end,
    input=function() end,
 }
@@ -104,6 +108,13 @@ assert(steady_updates == 2, "chat overlay lost LuaTK's replacement update handle
 assert(time_control_checks == 2,
    "chat overlay did not enforce P2P time controls on every update")
 
+active_session = false
+chat_state:_update(1/60)
+assert(unpauses == 2, "solo-host chat overlay unpaused the simulation")
+assert(time_control_checks == 2,
+   "solo-host chat overlay enforced shared-session time controls")
+active_session = true
+
 run_chat()
 assert(map_calls == 0, "starmap opened while chat input was active")
 assert(typed == "m", "starmap binding was not forwarded to text input")
@@ -134,6 +145,14 @@ assert(time_control_checks == checks_before_hail + 1,
    "native hail VN did not enforce P2P time controls")
 assert(vn_stub.update == native_update, "native hail VN update handler was not restored")
 assert(vn_stub.run == native_run, "native hail VN runner was not restored")
+
+active_session = false
+local solo_unpauses_before_hail = unpauses
+P2P_SESSION_HAIL()
+vn_stub.run()
+assert(unpauses == solo_unpauses_before_hail,
+   "solo-host native hail VN unpaused the simulation")
+active_session = true
 
 P2P_SESSION_HAIL()
 assert(vn_stub.run ~= native_run, "aborted hail did not install the VN wrapper")

@@ -1,3 +1,5 @@
+notactive = true
+
 local MEMORY = 5*60
 
 local function snapshot ()

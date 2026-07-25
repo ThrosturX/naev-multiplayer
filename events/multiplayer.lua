@@ -64,9 +64,8 @@ local function p2p_keep_hail_live ()
         p2p_hail_vn_run = nil
         local vn_update = vn.update
         vn.update = function(dt)
-            naev.unpause()
+            p2psession.keep_simulation_live()
             vn_update(dt)
-            p2psession.enforce_time_controls()
         end
         local ok, err = pcall(vn_run, ...)
         vn.update = vn_update
@@ -90,11 +89,8 @@ local function p2p_keep_chat_live ( chat_state )
     local widget_update = chat_state._update
     local chat_update
     chat_update = function(self, dt)
-        naev.unpause()
+        p2psession.keep_simulation_live()
         widget_update(self, dt)
-        -- LuaTK owns the update loop while the chat input is open, so enforce
-        -- shared-session time controls here as well as in hook.update.
-        p2psession.enforce_time_controls()
         -- LuaTK replaces its one-shot focus initializer with its steady-state
         -- updater. Keep wrapping whichever updater it installs.
         if self._update ~= chat_update then
@@ -368,7 +364,7 @@ local function vnMultiplayer()
     end
 
     vn.label("p2p_settings")
-    mpvn(_("P2P play leaves ordinary Naev gameplay enabled. Guests use the host's system population, so disable P2P before entering a system where your own mission pilots matter."))
+    mpvn(_("P2P play leaves ordinary Naev gameplay enabled. A system claimed by a local mission or event will not join a remote host, preserving its local pilots."))
     vn.menu({
         { mem.multiplayer.p2p.enabled and _("Disable P2P") or _("Enable P2P"), "p2p_toggle" },
         { fmt.f(_("Listen port: {port}"), {port=mem.multiplayer.p2p.listen_port}), "p2p_port" },
