@@ -49,6 +49,13 @@ end
 package.preload["ai.core.setup"]=function()
    return {setup=function(p) p.ai_setup_called=true end}
 end
+package.preload.format=function()
+   return {f=function(template,values)
+      return (template:gsub("{([%w_]+)}",function(key)
+         return tostring(values[key])
+      end))
+   end}
+end
 
 local function vector ( x, y )
    return {x=x or 0,y=y or 0,get=function(self) return self.x,self.y end}
@@ -353,6 +360,33 @@ host.session.input("accel",true)
 host.session.input("accel",false)
 assert(host.unpauses==solo_unpauses,
    "solo-host input unpaused the space simulation")
+
+host.session.leave()
+assert(host.session.enter("Arandon"))
+assert(host.speed_enabled,
+   "solo host with no discovered players locked time controls after jumping")
+advance({host},2,4)
+assert(host.session.machine.state=="host" and host.speed_enabled
+      and not host.local_pilot.effects["Multiplayer: Autonav Pending"],
+   "solo host with no discovered players started the post-jump autonav timer")
+
+host.session.activity={{system="Gamma Polaris",active=true}}
+host.session.leave()
+assert(host.session.enter("Dvaer"))
+assert(not host.speed_enabled,
+   "solo host ignored discovered activity while entering another system")
+advance({host},2,4)
+assert(host.session.machine.state=="host" and not host.speed_enabled
+      and host.local_pilot.effects["Multiplayer: Autonav Pending"],
+   "solo host skipped the autonav timer despite discovered player activity")
+host.session.activity={}
+advance({host},6.1,4)
+host.session.leave()
+assert(host.session.enter("Delta Polaris"))
+advance({host},2,4)
+assert(host.session.machine.state=="host" and host.speed_enabled,
+   "solo host did not skip the timer when returning without discovered activity")
+
 local npc=host:add_pilot("Koala","Empire","Host NPC",false)
 local escort=host:add_pilot("Hyena","Player","Host Escort",true,"escort")
 escort.pilot_id=777

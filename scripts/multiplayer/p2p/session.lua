@@ -102,8 +102,29 @@ local function lock_autonav ( locked )
    end
 end
 
+local function no_other_players_discovered ( current_system )
+   if session.machine then
+      for node in pairs(session.machine.members) do
+         if node~=session.settings.node_id then return false end
+      end
+   end
+   for _peer,meta in pairs(session.peer_meta) do
+      if meta.verified and meta.cap=="player" then return false end
+   end
+   for _index,entry in ipairs(session.activity or {}) do
+      if entry.active and entry.system~=current_system then return false end
+   end
+   return true
+end
+
 local function refresh_time_controls ( stamp )
    if not session.machine or not session.machine.system then
+      session.solo_since=nil
+      session.indicators:clear_host_alone()
+      lock_autonav(false)
+      return
+   end
+   if session.machine.state=="discovering" and session.skip_host_grace then
       session.solo_since=nil
       session.indicators:clear_host_alone()
       lock_autonav(false)
@@ -116,12 +137,19 @@ local function refresh_time_controls ( stamp )
       end
    end
    if not solo then
+      session.skip_host_grace=nil
       session.solo_since=nil
       session.indicators:clear_host_alone()
       lock_autonav(true)
       return
    end
    stamp=stamp or now()
+   if session.skip_host_grace then
+      session.solo_since=nil
+      session.indicators:clear_host_alone()
+      lock_autonav(false)
+      return
+   end
    session.solo_since=session.solo_since or stamp
    local deadline=session.solo_since+HOST_ALONE_GRACE
    session.indicators:host_alone(deadline,stamp)
@@ -1492,6 +1520,9 @@ function session.start ( settings )
    session.last_activity_query=0
    session.initial_sync_until=0
    session.solo_since=nil
+   session.skip_host_grace=nil
+   session.skip_next_host_grace=nil
+   session.departed_system=nil
    session.last_liveness=now()
    session.last_claim_check=0
    session.endpoint=tostring(host:get_socket_address())
@@ -1523,7 +1554,13 @@ function session.enter ( system_name )
       refresh_time_controls()
       return true
    end
-   session.leave(); session.machine:enter(system_name)
+   session.leave()
+   local skip_host_grace=session.skip_next_host_grace==true
+      and session.departed_system~=system_name
+   session.skip_next_host_grace=nil
+   session.departed_system=nil
+   session.machine:enter(system_name)
+   session.skip_host_grace=skip_host_grace
    session.locally_claimed=locally_claimed()
    session.last_claim_check=now()
    session.last_liveness=now()
@@ -1531,7 +1568,7 @@ function session.enter ( system_name )
    session.local_speed2=nil
    reset_smoothing()
    session.greeted_system=nil
-   lock_autonav(true)
+   lock_autonav(not skip_host_grace)
    connect_configured(); session.last_seed_connect=now()
    print("P2P: discovering system host")
    for peer in pairs(session.peers) do send(peer,base("query"),true) end
@@ -1546,6 +1583,10 @@ function session.leave ()
       lock_autonav(false)
       return
    end
+   local current_system=session.machine.system
+   session.skip_next_host_grace=session.machine.state=="host"
+      and no_other_players_discovered(current_system)
+   session.departed_system=current_system
    broadcast(base("leave"),true)
    for _entity_id,entry in pairs(session.players) do remove_pilot(entry.pilot) end
    for _entity_id,entry in pairs(session.npcs) do remove_pilot(entry.pilot) end

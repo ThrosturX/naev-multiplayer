@@ -25,7 +25,7 @@ To use it, open **Info → Multiplayer → P2P Session Settings** and enable P2P
 
 Players who enter the same system share its host's pilots and can see and fight alongside one another. Landing, jumping, chatting, and player-owned craft are supported. The directory assists discovery only; gameplay travels directly between players.
 
-Mission state is still local. A system claimed by a local mission or event never joins a remote host, preserving its local population automatically. Game-speed controls are locked while other players are present, while a solo host keeps normal single-player pausing and regains time compression.
+Mission state is still local. A system claimed by a local mission or event never joins a remote host, preserving its local population automatically. Game-speed controls are locked while other players are present. A solo host keeps normal single-player pausing and time compression, and skips the post-jump grace timer when no other player activity has been discovered.
 
 ## Arena
 
