@@ -17,6 +17,18 @@ assert(pod.boost_desired(true,math.rad(84),6))
 assert(not pod.boost_desired(true,math.rad(85),100))
 assert(not pod.boost_desired(true,0,5))
 
+local random_values={3,1,1}
+local teams,team_by_slot=assert(pod.random_pairs(4,function(first,last)
+   local value=table.remove(random_values,1)
+   assert(value>=first and value<=last)
+   return value
+end))
+assert(#teams==2 and team_by_slot[1] and team_by_slot[2]
+   and team_by_slot[3] and team_by_slot[4])
+assert(team_by_slot[1]~=team_by_slot[4]
+   and team_by_slot[1]==team_by_slot[3])
+assert(not pod.random_pairs(3))
+
 player={name=function() return "Captain A" end}
 local config={
    enabled=true,directory="example.test:60939",node_id="a1",
@@ -60,8 +72,8 @@ assert(#selected==1 and selected[1].name=="A",
    "real directory profiles were padded with fallbacks")
 
 config.enabled=false
-selected=pod.opponents(config,roster,1,5,validate)
-assert(#selected==5 and selected[1].generic and selected[5].generic,
+selected=pod.opponents(config,roster,1,11,validate)
+assert(#selected==11 and selected[1].generic and selected[11].generic,
    "disabled P2P did not use the generic field")
 
 print("ok - pod racing roster selection")

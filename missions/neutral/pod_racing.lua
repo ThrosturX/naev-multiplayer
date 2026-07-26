@@ -231,7 +231,9 @@ end
 local function roster_profiles ()
    local config=naev.cache().multiplayer_p2p_config
    local cached=naev.cache().multiplayer_contestants
-   return pod.opponents(config,cached,mem.division,5,validate_profile)
+   local track=tracks[mem.track_index]
+   return pod.opponents(config,cached,mem.division,
+      math.max(0,(track.contestants or 6)-1),validate_profile)
 end
 
 local function install_exact ( p, profile )
@@ -250,7 +252,8 @@ local function install_exact ( p, profile )
    return p:spaceworthy()
 end
 
-local function spawn_opponent ( profile, position, direction, faction_value )
+local function spawn_opponent ( profile, position, direction, faction_value,
+      friendly )
    local p=pilot.add(profile.ship,faction_value,position,profile.name,
       {ai="dummy",naked=true})
    if not p then return nil end
@@ -268,7 +271,8 @@ local function spawn_opponent ( profile, position, direction, faction_value )
    p:setDir(direction)
    p:setNoJump(true)
    p:setNoLand(true)
-   p:setHostile(true)
+   if friendly then p:setFriendly(true)
+   else p:setHostile(true) end
    p:control(true)
    return p
 end
@@ -338,8 +342,13 @@ local function declare_winner ( racer )
    if race_over then return end
    race_over=true
    mem.player_won=racer.player==true
+      or (racer.team and racers[1].team==racer.team)
    if mem.player_won then lmisn.sfxVictory() end
-   omsg=player.omsgAdd(fmt.f(_("{name} wins!"),{name=racer.name}),5,50)
+   local message=fmt.f(_("{name} wins!"),{name=racer.name})
+   if racer.team then
+      message=fmt.f(_("{name}'s team wins!"),{name=racer.name})
+   end
+   omsg=player.omsgAdd(message,5,50)
    for _index,entry in ipairs(racers) do
       if entry.pilot:exists() then entry.pilot:control(true) end
    end
@@ -415,27 +424,54 @@ function start_race ()
    pp:control(true)
 
    local profiles=roster_profiles()
-   local factions={}
-   for index=1,#profiles do
-      factions[index]=faction.dynAdd(nil,"pod_racer_"..index,
-         _("Pod Racer"),{ai="pod_racer",clear_allies=true,clear_enemies=true})
-   end
-   for first=1,#profiles do
-      for second=1,#profiles do
-         if first~=second then factions[first]:dynEnemy(factions[second]) end
+   local track=tracks[mem.track_index]
+   local factions,team_by_slot={},nil
+   if track.team_size==2 and #profiles>0 then
+      -- The player makes the field even only when there is an odd number of
+      -- opponents. A randomly selected real profile sits out rather than
+      -- introducing a generic contestant.
+      if #profiles%2==0 then table.remove(profiles,rnd.rnd(1,#profiles)) end
+      local teams
+      teams,team_by_slot=pod.random_pairs(#profiles+1,rnd.rnd)
+      for team=1,#teams do
+         factions[team]=faction.dynAdd(nil,"pod_racer_team_"..team,
+            _("Pod Racer Team"),
+            {ai="pod_racer",clear_allies=true,clear_enemies=true})
+      end
+      -- Enemy checks are symmetric, so each relationship needs registering
+      -- only once. At the twelve-contestant maximum this is fifteen updates.
+      for first=1,#teams-1 do
+         for second=first+1,#teams do
+            factions[first]:dynEnemy(factions[second])
+         end
+      end
+   else
+      for index=1,#profiles do
+         factions[index]=faction.dynAdd(nil,"pod_racer_"..index,
+            _("Pod Racer"),{ai="pod_racer",clear_allies=true,clear_enemies=true})
+      end
+      for first=1,#profiles do
+         for second=1,#profiles do
+            if first~=second then factions[first]:dynEnemy(factions[second]) end
+         end
       end
    end
 
    racers={{
       pilot=pp,name=player.name(),player=true,next_gate=2,last_pos=pp:pos(),
+      team=team_by_slot and team_by_slot[1],
    }}
    for index,profile in ipairs(profiles) do
       local position=grid_position(positions[1],direction,index+1)
-      local opponent=spawn_opponent(profile,position,direction,factions[index])
+      local team=team_by_slot and team_by_slot[index+1]
+      local opponent=spawn_opponent(profile,position,direction,
+         team and factions[team] or factions[index],
+         team_by_slot and team==team_by_slot[1])
       if opponent then
          opponent:memory().pod_gate=gate_aim(2)
          racers[#racers+1]={
             pilot=opponent,name=profile.name,next_gate=2,last_pos=opponent:pos(),
+            team=team,
          }
       end
    end

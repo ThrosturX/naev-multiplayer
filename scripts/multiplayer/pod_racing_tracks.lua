@@ -2,7 +2,13 @@
 -- module table, then adds combat-oriented courses of its own.
 local canonical = require "missions.neutral.race.tracks_qex"
 local tracks = {}
-for index,track in ipairs(canonical) do tracks[index]=track end
+local canonical_contestants = {4,6,8}
+for index,track in ipairs(canonical) do
+   local copy={}
+   for key,value in pairs(track) do copy[key]=value end
+   copy.contestants=canonical_contestants[index]
+   tracks[index]=copy
+end
 
 -- Converts a closed Catmull-Rom path to the relative-control-point cubic
 -- Bézier representation used by Naev's race tracks.
@@ -59,8 +65,10 @@ local crossfire_points = {
 
 tracks[#tracks+1] = {
    name=N_("Melendez Death Knot"),
-   description=N_("Four combat lobes revisit a central killbox before a diagonal revenge gauntlet and final sprint."),
+   description=N_("Random two-pilot teams fight through four combat lobes, a central killbox, and a diagonal revenge gauntlet."),
    reward=350e3,
+   contestants=12,
+   team_size=2,
    scale=4,
    centre=true,
    centre_offset=vec2.new(0,9000),

@@ -45,7 +45,7 @@ assert(service:receive(guest_peer,assert(codec.encode{type="hello",node="20",cap
    endpoint="0.0.0.0:63000"})))
 local roster_at=#sent+1
 assert(service:receive(guest_peer,assert(codec.encode{
-   type="contestant_query",node="20",division=1,request=7,limit=5})))
+   type="contestant_query",node="20",division=1,request=7,limit=11})))
 local contestant=find_sent(roster_at,guest_peer,"contestant_entry")
 local contestant_done=find_sent(roster_at,guest_peer,"contestant_done")
 assert(contestant and contestant.contestant=="10" and contestant.name=="Host Captain")
@@ -57,7 +57,7 @@ assert(service:receive(guest_peer,assert(codec.encode{
    ship="Admonisher",outfits="Laser",slots="1:Laser"})))
 local self_at=#sent+1
 assert(service:receive(guest_peer,assert(codec.encode{
-   type="contestant_query",node="20",division=2,request=8,limit=5})))
+   type="contestant_query",node="20",division=2,request=8,limit=11})))
 assert(not find_sent(self_at,guest_peer,"contestant_entry"))
 assert(find_sent(self_at,guest_peer,"contestant_done").count==0)
 local introduced_at=#sent+1

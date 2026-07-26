@@ -58,7 +58,10 @@ network.update()
 local requests={}
 for _index,packet in ipairs(sent) do
    local message=assert(codec.decode(packet))
-   if message.type=="contestant_query" then requests[message.division]=message.request end
+   if message.type=="contestant_query" then
+      assert(message.limit==11)
+      requests[message.division]=message.request
+   end
 end
 assert(requests[1] and requests[2] and requests[3])
 

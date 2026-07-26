@@ -28,6 +28,10 @@ test("protocol escaping and validation", function()
    assert(codec.encode{type="activity_query",node="a1"})
    assert(codec.encode{type="activity",node="d1",
       entries=codec.escape("Delta Polaris")..",1,0"})
+   assert(codec.encode{type="contestant_query",node="a1",division=1,
+      request=1,limit=11})
+   assert(not codec.encode{type="contestant_query",node="a1",division=1,
+      request=1,limit=12})
    assert(codec.encode{type="hint",node="d1",system="X",host="a1",
       endpoint="host:9",claim="c",ttl=60})
    assert(not codec.encode{type="hint",node="d1",system="X",host="a1",

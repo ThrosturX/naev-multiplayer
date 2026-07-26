@@ -24,22 +24,29 @@ vec2 = {
    end,
 }
 
-local canonical_track = {name="Canonical",track={}}
-local canonical = {canonical_track}
+local canonical = {
+   {name="Peninsula",track={}},
+   {name="Smiling Man",track={}},
+   {name="Qex Tour",track={}},
+}
 package.preload["missions.neutral.race.tracks_qex"] = function()
    return canonical
 end
 
 local tracks = require "multiplayer.pod_racing_tracks"
-assert(#canonical==1 and canonical[1]==canonical_track,
+assert(#canonical==3 and canonical[1].contestants==nil,
    "canonical Qex track table was mutated")
-assert(tracks~=canonical and tracks[1]==canonical_track,
+assert(tracks~=canonical and tracks[1]~=canonical[1]
+   and tracks[1].track==canonical[1].track,
    "canonical tracks were not copied into a separate list")
+assert(tracks[1].contestants==4 and tracks[2].contestants==6
+   and tracks[3].contestants==8,"canonical track contestant limits changed")
 
 local crossfire = tracks[#tracks]
-assert(#tracks==#canonical+1 and crossfire.name=="Melendez Death Knot",
+assert(#tracks==4 and crossfire.name=="Melendez Death Knot",
    "Melendez Death Knot is not the final Pod-only track")
 assert(crossfire.reward==350e3 and crossfire.scale==4)
+assert(crossfire.contestants==12 and crossfire.team_size==2)
 assert(type(crossfire.description)=="string" and crossfire.description~="")
 assert(#crossfire.track>0)
 -- luatk.bezier samples each segment eleven times and gfx.renderLinesH accepts

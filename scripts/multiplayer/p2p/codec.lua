@@ -67,7 +67,7 @@ local required = {
 
 local numeric = {
    seq={0, 9007199254740991}, ttl={1, 60},
-   division={1,3}, request={0,9007199254740991}, limit={1,5}, count={0,5},
+   division={1,3}, request={0,9007199254740991}, limit={1,11}, count={0,11},
    x={-1e9,1e9}, y={-1e9,1e9}, vx={-1e7,1e7}, vy={-1e7,1e7},
    dir={-1e6,1e6}, accel={0,1}, primary={0,1}, secondary={0,1},
    armour={0,1e9}, shield={0,1e9}, stress={0,1e9}, energy={0,1e9},

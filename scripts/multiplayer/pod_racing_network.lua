@@ -6,6 +6,7 @@ local enet = require "enet"
 local network = {}
 local TIMEOUT = 8
 local MAX_EVENTS_PER_UPDATE = 24
+local MAX_CONTESTANTS_PER_DIVISION = 11
 local job
 
 local function now () return naev.ticks() end
@@ -47,7 +48,7 @@ local function request_rosters ()
          node=job.node,
          division=division,
          request=request,
-         limit=5,
+         limit=MAX_CONTESTANTS_PER_DIVISION,
       } then return false end
    end
    return true
@@ -75,7 +76,7 @@ local function receive ( packet )
    local pending=job.pending[message.division]
    if not pending or pending.request~=message.request then return end
    if message.type=="contestant_entry" then
-      if #pending.entries>=5 then return end
+      if #pending.entries>=MAX_CONTESTANTS_PER_DIVISION then return end
       for _index,entry in ipairs(pending.entries) do
          if entry.contestant==message.contestant then return end
       end

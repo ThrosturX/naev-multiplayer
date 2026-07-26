@@ -3,23 +3,66 @@ local pod = {}
 
 local generic = {
    {
-      {name=N_("Rivet"),ship="Hyena"},
-      {name=N_("Scrapper"),ship="Shark"},
-      {name=N_("Hotshot"),ship="Lancelot"},
+      {name=N_("Rivet"),ship="Koala"},
+      {name=N_("Scrapper"),ship="Llama"},
+      {name=N_("Hotshot"),ship="Hyena"},
       {name=N_("Redline"),ship="Dvaered Vendetta"},
-      {name=N_("Needle"),ship="Empire Lancelot"},
+      {name=N_("Needle"),ship="Quicksilver"},
+      {name=N_("Slipstream"),ship="Shark"},
+      {name=N_("Switchback"),ship="Koala"},
+      {name=N_("Fuse"),ship="Ancestor"},
+      {name=N_("Knuckles"),ship="Vendetta"},
+      {name=N_("Stinger"),ship="Empire Lancelot"},
+      {name=N_("Shrapnel"),ship="Alpaca"},
+      {name=N_("Courier"),ship="Koala"},
+      {name=N_("Drift"),ship="Quicksilver"},
+      {name=N_("Dusty"),ship="Llama"},
+      {name=N_("Wasp"),ship="Hyena"},
+      {name=N_("Payload"),ship="Ancestor"},
+      {name=N_("Velvet"),ship="Schroedinger"},
+      {name=N_("Lucky"),ship="Tristan"},
    },{
-      {name=N_("Wrecker"),ship="Admonisher"},
-      {name=N_("Hardcase"),ship="Dvaered Phalanx"},
-      {name=N_("Roadblock"),ship="Dvaered Vigilance"},
-      {name=N_("Burnout"),ship="Empire Pacifier"},
-      {name=N_("Axle"),ship="Rhino"},
+      {name=N_("Wrecker"),ship="Mule"},
+      {name=N_("Hardcase"),ship="Rhino"},
+      {name=N_("Roadblock"),ship="Plowshare"},
+      {name=N_("Burnout"),ship="Starbridge"},
+      {name=N_("Axle"),ship="Mule"},
+      {name=N_("Torque"),ship="Admonisher"},
+      {name=N_("Barricade"),ship="Rhino"},
+      {name=N_("Hammer"),ship="Vigilance"},
+      {name=N_("Overdrive"),ship="Plowshare"},
+      {name=N_("Crank"),ship="Phalanx"},
+      {name=N_("Ripsaw"),ship="Mule"},
+      {name=N_("Deadweight"),ship="Rhino"},
+      {name=N_("Parcel"),ship="Plowshare"},
+      {name=N_("Switchyard"),ship="Starbridge"},
+      {name=N_("Tin Can"),ship="Mule"},
+      {name=N_("Bulldog"),ship="Bedivere"},
+      {name=N_("Haywire"),ship="Admonisher"},
+      {name=N_("Fortress"),ship="Dvaered Phalanx"},
+      {name=N_("Comet"),ship="Starbridge"},
+      {name=N_("Shieldwall"),ship="Rhino"},
    },{
-      {name=N_("Juggernaut"),ship="Kestrel"},
-      {name=N_("War Rig"),ship="Dvaered Goddard"},
-      {name=N_("Big Iron"),ship="Empire Peacemaker"},
-      {name=N_("Thunderhead"),ship="Empire Hawking"},
-      {name=N_("Blacktop"),ship="Pirate Kestrel"},
+      {name=N_("Juggernaut"),ship="Clydesdale"},
+      {name=N_("War Rig"),ship="Zebra"},
+      {name=N_("Big Iron"),ship="Goddard Merchantman"},
+      {name=N_("Thunderhead"),ship="Hawking"},
+      {name=N_("Blacktop"),ship="Clydesdale"},
+      {name=N_("Colossus"),ship="Kestrel"},
+      {name=N_("Dreadnought"),ship="Empire Rainmaker"},
+      {name=N_("Long Haul"),ship="Sirius Providence"},
+      {name=N_("Avalanche"),ship="Clydesdale"},
+      {name=N_("Behemoth"),ship="Dvaered Arsenal"},
+      {name=N_("Ironclad"),ship="Zebra"},
+      {name=N_("Freight Train"),ship="Clydesdale"},
+      {name=N_("Bulwark"),ship="Goddard Merchantman"},
+      {name=N_("Wayfarer"),ship="Empire Rainmaker"},
+      {name=N_("Lockbox"),ship="Sirius Providence"},
+      {name=N_("Catapult"),ship="Kestrel"},
+      {name=N_("Watchtower"),ship="Hawking"},
+      {name=N_("Hangar"),ship="Empire Peacemaker"},
+      {name=N_("Broadside"),ship="Goddard"},
+      {name=N_("Undertow"),ship="Pirate Kestrel"},
    },
 }
 
@@ -114,12 +157,37 @@ function pod.roster_matches_p2p ( config, roster )
       and type(roster.divisions)=="table"
 end
 
-function pod.generics ( division )
+function pod.generics ( division, random )
+   random=random or math.random
    local result={}
    for _index,entry in ipairs(generic[division] or {}) do
       result[#result+1]={name=_(entry.name),ship=entry.ship,generic=true}
    end
+   for index=#result,2,-1 do
+      local swap=random(1,index)
+      result[index],result[swap]=result[swap],result[index]
+   end
    return result
+end
+
+function pod.random_pairs ( count, random )
+   count=math.floor(tonumber(count) or 0)
+   if count<2 or count%2~=0 then return nil,"contestants must form pairs" end
+   random=random or math.random
+   local shuffled={}
+   for index=1,count do shuffled[index]=index end
+   for index=count,2,-1 do
+      local swap=random(1,index)
+      shuffled[index],shuffled[swap]=shuffled[swap],shuffled[index]
+   end
+   local teams,team_by_slot={},{}
+   for index=1,count,2 do
+      local team={shuffled[index],shuffled[index+1]}
+      teams[#teams+1]=team
+      team_by_slot[team[1]]=#teams
+      team_by_slot[team[2]]=#teams
+   end
+   return teams,team_by_slot
 end
 
 local function select_real ( profiles, division, count, validate )
