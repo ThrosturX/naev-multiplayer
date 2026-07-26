@@ -29,6 +29,8 @@ codec.unescape = unescape
 local valid_types = {
    hello=true, query=true, hint=true, punch=true, claim=true, leave=true,
    activity_query=true, activity=true,
+   contestant_register=true, contestant_query=true,
+   contestant_entry=true, contestant_done=true,
    player_manifest=true, player_state=true, chat=true,
    npc_manifest=true, npc_add=true, npc_remove=true, npc_state=true,
    npc_control=true,
@@ -39,6 +41,11 @@ local valid_types = {
 local required = {
    hello={"node","cap"}, query={"node","system"},
    activity_query={"node"}, activity={"node","entries"},
+   contestant_register={"node","division","ship","name","outfits","slots"},
+   contestant_query={"node","division","request","limit"},
+   contestant_entry={"node","contestant","division","request","ship","name",
+      "outfits","slots"},
+   contestant_done={"node","division","request","count"},
    hint={"node","system","host","endpoint","claim","ttl"},
    punch={"node","system","peer","endpoint"},
    claim={"node","system","claim","endpoint"}, leave={"node","system"},
@@ -60,6 +67,7 @@ local required = {
 
 local numeric = {
    seq={0, 9007199254740991}, ttl={1, 60},
+   division={1,3}, request={0,9007199254740991}, limit={1,5}, count={0,5},
    x={-1e9,1e9}, y={-1e9,1e9}, vx={-1e7,1e7}, vy={-1e7,1e7},
    dir={-1e6,1e6}, accel={0,1}, primary={0,1}, secondary={0,1},
    armour={0,1e9}, shield={0,1e9}, stress={0,1e9}, energy={0,1e9},
@@ -85,6 +93,22 @@ local function validate ( message )
    if message.name and (#message.name > 240 or message.name:find("[%z\1-\31\127]")) then
       return nil, "invalid name"
    end
+   if message.ship and (#message.ship > 240
+         or message.ship:find("[%z\1-\31\127]")) then
+      return nil, "invalid ship"
+   end
+   if message.outfits and (#message.outfits > 12000
+         or message.outfits:find("[%z\1-\31\127]")) then
+      return nil, "invalid outfits"
+   end
+   if message.slots and (#message.slots > 12000
+         or message.slots:find("[%z\1-\31\127]")) then
+      return nil, "invalid slots"
+   end
+   if message.ship_fallbacks and (#message.ship_fallbacks > 2048
+         or message.ship_fallbacks:find("[%z\1-\31\127]")) then
+      return nil, "invalid ship fallbacks"
+   end
    if message.ai and (#message.ai > 240 or message.ai:find("[^%w_%-]")) then
       return nil, "invalid ai"
    end
@@ -105,6 +129,9 @@ local function validate ( message )
       return nil, "invalid claim"
    end
    if message.node and not message.node:match("^[%x]+$") then return nil, "invalid node" end
+   if message.contestant and not message.contestant:match("^[%x]+$") then
+      return nil, "invalid contestant"
+   end
    if (message.type=="player_manifest" or message.type=="player_state")
          and message.entity~=message.node then
       return nil, "player entity does not match node"

@@ -89,16 +89,20 @@ peer. The second peer should obtain the host solely from the OCI directory.
 
 ## Upgrade an existing service
 
-From the plugin repository, an existing `/opt/naev-multiplayer` deployment only
-needs three runtime files. Replace `ubuntu@203.0.113.10` with the SSH target:
+From the plugin repository, update the directory runtime and service definition.
+Replace `ubuntu@203.0.113.10` with the SSH target:
 
 ```sh
-rsync -azR directory/main.lua scripts/multiplayer/p2p/codec.lua \
-  scripts/multiplayer/p2p/directory.lua ubuntu@203.0.113.10:/tmp/naev-multiplayer-update/
+rsync -azR directory/main.lua directory/multiplayer-directory.service \
+  scripts/multiplayer/contestant_store.lua scripts/multiplayer/p2p/codec.lua \
+  scripts/multiplayer/p2p/directory.lua \
+  ubuntu@203.0.113.10:/tmp/naev-multiplayer-update/
 ssh ubuntu@203.0.113.10 \
-  'sudo cp -a /tmp/naev-multiplayer-update/. /opt/naev-multiplayer/ && sudo systemctl restart multiplayer-directory && sudo systemctl --no-pager status multiplayer-directory'
+  'sudo cp -a /tmp/naev-multiplayer-update/. /opt/naev-multiplayer/ && sudo install -m 0644 /opt/naev-multiplayer/directory/multiplayer-directory.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart multiplayer-directory && sudo systemctl --no-pager status multiplayer-directory'
 ```
 
 Players must update the plugin too because older `MP2P/1` clients ignore the
-new `punch` message. No firewall changes beyond directory UDP port `60939` are
+new directory messages. The service persists the bounded contestant roster in
+`/var/lib/naev-multiplayer/contestants.db`; systemd creates and protects that
+state directory. No firewall changes beyond directory UDP port `60939` are
 needed on the VM.

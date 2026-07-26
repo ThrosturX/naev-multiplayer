@@ -9,6 +9,8 @@ local MAX_QUERIES_PER_PEER = 128
 local MAX_ACTIVITY_SYSTEMS = 20
 local ACTIVITY_RETENTION = 15*60
 local ACTIVITY_PAYLOAD = 3000
+local MAX_CONTESTANTS = 4096
+local CONTESTANT_RETENTION = 90*24*60*60
 
 local function endpoint_host ( endpoint )
    if type(endpoint)~="string" then return nil end
@@ -36,6 +38,9 @@ function directory.new ( options )
       now=options.now or os.time,
       send_packet=assert(options.send,"directory send callback required"),
       disconnect=options.disconnect or function() end,
+      random=options.random or math.random,
+      contestants=options.contestants or {},
+      contestant_dirty=options.contestant_dirty or function() end,
       peers={}, hosts={}, activity={},
    },directory)
 end
@@ -47,9 +52,10 @@ function directory:send ( peer, message )
 end
 
 function directory:connect ( peer, observed_endpoint )
-   self.peers[peer]={endpoint=canonical_endpoint(observed_endpoint),queries={}}
+   self.peers[peer]={endpoint=canonical_endpoint(observed_endpoint),queries={},
+      contestant_queries=0,contestant_registered=false}
    return self:send(peer,{type="hello",node=self.node_id,cap="directory",
-      features="activity"})
+      features="activity,contestants"})
 end
 
 function directory:disconnect_peer ( peer )
@@ -73,6 +79,97 @@ function directory:prune ()
    -- Claims are deliberately retained while bounded by MAX_HOSTS. A stale
    -- hint costs one failed direct connection before normal local claiming,
    -- while forgetting a reachable host can create a needless split brain.
+   local stamp=self.now()
+   local removed=false
+   for node,entry in pairs(self.contestants) do
+      if type(entry.seen)~="number" or stamp-entry.seen>CONTESTANT_RETENTION then
+         self.contestants[node]=nil
+         removed=true
+      end
+   end
+   local count=0
+   for _node in pairs(self.contestants) do count=count+1 end
+   if count>MAX_CONTESTANTS then
+      local ordered={}
+      for node,entry in pairs(self.contestants) do
+         ordered[#ordered+1]={node=node,seen=entry.seen}
+      end
+      table.sort(ordered,function(a,b) return a.seen>b.seen end)
+      for index=MAX_CONTESTANTS+1,#ordered do
+         self.contestants[ordered[index].node]=nil
+      end
+      removed=true
+   end
+   if removed then self.contestant_dirty() end
+end
+
+function directory:make_contestant_room ()
+   local count,oldest_node,oldest_seen=0
+   for node,entry in pairs(self.contestants) do
+      count=count+1
+      if not oldest_seen or entry.seen<oldest_seen then
+         oldest_node,oldest_seen=node,entry.seen
+      end
+   end
+   if count>=MAX_CONTESTANTS and oldest_node then
+      self.contestants[oldest_node]=nil
+   end
+end
+
+function directory:register_contestant ( message )
+   if not self.contestants[message.node] then self:make_contestant_room() end
+   self.contestants[message.node]={
+      node=message.node,
+      seen=self.now(),
+      division=message.division,
+      name=message.name,
+      ship=message.ship,
+      ship_fallbacks=message.ship_fallbacks or "",
+      outfits=message.outfits,
+      slots=message.slots,
+   }
+   self.contestant_dirty()
+end
+
+function directory:send_contestants ( peer, message )
+   local candidates={}
+   for node,entry in pairs(self.contestants) do
+      if node~=message.node and entry.division==message.division then
+         candidates[#candidates+1]=entry
+      end
+   end
+   for index=#candidates,2,-1 do
+      local swap=self.random(1,index)
+      candidates[index],candidates[swap]=candidates[swap],candidates[index]
+   end
+
+   local count=math.min(message.limit,#candidates)
+   for index=1,count do
+      local entry=candidates[index]
+      self:send(peer,{
+         type="contestant_entry",
+         node=self.node_id,
+         contestant=entry.node,
+         division=entry.division,
+         request=message.request,
+         name=entry.name,
+         ship=entry.ship,
+         ship_fallbacks=entry.ship_fallbacks,
+         outfits=entry.outfits,
+         slots=entry.slots,
+      })
+   end
+   return self:send(peer,{
+      type="contestant_done",
+      node=self.node_id,
+      division=message.division,
+      request=message.request,
+      count=count,
+   })
+end
+
+function directory:dump_contestants ()
+   return self.contestants
 end
 
 function directory:make_host_room ()
@@ -228,6 +325,19 @@ function directory:receive ( peer, packet )
 
    if message.type=="activity_query" then
       return self:send_activity(peer)
+   end
+
+   if message.type=="contestant_register" then
+      if meta.contestant_registered then return nil,"contestant already registered" end
+      meta.contestant_registered=true
+      self:register_contestant(message)
+      return true
+   end
+
+   if message.type=="contestant_query" then
+      if meta.contestant_queries>=6 then return nil,"too many contestant queries" end
+      meta.contestant_queries=meta.contestant_queries+1
+      return self:send_contestants(peer,message)
    end
 
    if message.type=="query" then

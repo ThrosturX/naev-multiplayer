@@ -73,6 +73,12 @@ that player-visible multiplayer behavior works. For protocol or lifecycle
 changes, report the Naev versions, topology, host/client count, reproduction
 steps, and whether disconnect/reconnect and save restrictions were exercised.
 
+Treat `README.md` as player-facing documentation. Do not change it merely to
+record implementation details or provide developer notes. Edit it only when a
+requested player-facing behavior requires documentation there or the user
+explicitly asks for a README change; use `MAINTAINERS.md` or focused technical
+documentation for internal implementation and deployment details.
+
 Keep commits focused and imperative. Pull requests should call out protocol
 changes, compatibility assumptions, security implications, validation run,
 and observed in-game results.

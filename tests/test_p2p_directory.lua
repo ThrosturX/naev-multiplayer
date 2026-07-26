@@ -25,9 +25,13 @@ local host_peer={}
 local guest_peer={}
 assert(service:connect(host_peer,"198.51.100.10:45000"))
 assert(sent[#sent].message.type=="hello" and sent[#sent].message.cap=="directory"
-   and sent[#sent].message.features=="activity")
+   and sent[#sent].message.features=="activity,contestants")
 assert(service:receive(host_peer,assert(codec.encode{type="hello",node="10",cap="player",name="Host",
    endpoint="0.0.0.0:62001"})))
+assert(service:receive(host_peer,assert(codec.encode{
+   type="contestant_register",node="10",division=1,name="Host Captain",
+   ship="Hyena",outfits="Laser%20Cannon",slots="1:Laser%20Cannon",
+   ship_fallbacks="Hyena"})))
 assert(service:receive(host_peer,assert(codec.encode{type="claim",node="10",system="Delta Polaris",
    claim="abc",endpoint="0.0.0.0:62001"})))
 
@@ -39,6 +43,23 @@ assert(service.hosts["Delta Polaris"].alternate=="198.51.100.10:62001")
 assert(service:connect(guest_peer,"198.51.100.20:46000"))
 assert(service:receive(guest_peer,assert(codec.encode{type="hello",node="20",cap="player",name="Guest",
    endpoint="0.0.0.0:63000"})))
+local roster_at=#sent+1
+assert(service:receive(guest_peer,assert(codec.encode{
+   type="contestant_query",node="20",division=1,request=7,limit=5})))
+local contestant=find_sent(roster_at,guest_peer,"contestant_entry")
+local contestant_done=find_sent(roster_at,guest_peer,"contestant_done")
+assert(contestant and contestant.contestant=="10" and contestant.name=="Host Captain")
+assert(contestant_done and contestant_done.count==1 and contestant_done.request==7)
+
+-- A node can replace only its own profile, and is excluded from its results.
+assert(service:receive(guest_peer,assert(codec.encode{
+   type="contestant_register",node="20",division=2,name="Guest Captain",
+   ship="Admonisher",outfits="Laser",slots="1:Laser"})))
+local self_at=#sent+1
+assert(service:receive(guest_peer,assert(codec.encode{
+   type="contestant_query",node="20",division=2,request=8,limit=5})))
+assert(not find_sent(self_at,guest_peer,"contestant_entry"))
+assert(find_sent(self_at,guest_peer,"contestant_done").count==0)
 local introduced_at=#sent+1
 assert(service:receive(guest_peer,assert(codec.encode{type="query",node="20",system="Delta Polaris"})))
 local hint=find_sent(introduced_at,guest_peer,"hint")
@@ -129,6 +150,11 @@ assert(active==false and age==0)
 clock=clock+901
 active=activity_entry("Activity Reach")
 assert(active==nil)
+
+-- Contestant history expires independently of connection liveness.
+clock=clock+90*24*60*60+1
+service:prune()
+assert(next(service.contestants)==nil)
 
 -- Gameplay packets are ignored, and packets before hello are rejected.
 local bad_peer={}

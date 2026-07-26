@@ -20,6 +20,12 @@ The isolated P2P implementation is:
 loaded by Naev. The directory never joins a system or relays gameplay data;
 its reliable `punch` introductions only make both players dial one another.
 
+Pod Racing is deliberately outside the persistent P2P session.
+`events/pod_racing_roster.lua` loads only on entering Qex and owns a bounded,
+short-lived directory client. It publishes a plain roster snapshot through
+`naev.cache()` and exits after one response or timeout. The mission and its AI
+must not be imported by `events/multiplayer.lua` or `p2p/session.lua`.
+
 Only plain settings are persisted. ENet hosts/peers, ownership claims, hooks,
 pilots, and other runtime handles must never enter event memory.
 
@@ -30,6 +36,12 @@ percent-escaped `key=value` lines. Packets are limited to 16 KiB. Keep control,
 manifests, additions, removals, chat, and claims reliable; player/NPC/craft
 state is replaceable and unreliable. Validate peer values before resolving
 ships, factions, outfits, pilots, or UI.
+
+Contestant registration, queries, entries, and completion markers are reliable
+directory-only messages. The directory retains at most 4,096 profiles for 90
+days in its systemd state directory. Clients must validate the advertised ship
+division and every resource locally; missing or malformed profiles fall back to
+generic racers.
 
 Reliable add/remove manifests are the normal entity lifecycle. Initial and
 full-resync NPC manifests use bounded reliable batches, with at most one batch

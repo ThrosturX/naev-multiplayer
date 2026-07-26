@@ -22,7 +22,7 @@ test("protocol escaping and validation", function()
    assert(not codec.decode("MP2P/1 chat\nnode=a1\nsystem=x\nseq=1\ntext=bad%A\n"))
    assert(codec.encode{type="hello",node="a1",cap="player",name="Jane"})
    assert(not codec.encode{type="hello",node="a1",cap="player"})
-   assert(codec.encode{type="hello",node="a1",cap="directory",features="activity"})
+   assert(codec.encode{type="hello",node="a1",cap="directory",features="activity,contestants"})
    assert(not codec.encode{type="hello",node="a1",cap="directory",
       features="activity list"})
    assert(codec.encode{type="activity_query",node="a1"})
@@ -192,6 +192,25 @@ local failed=0
 for _index, item in ipairs(tests) do
    local ok, err=pcall(item[2])
    if ok then print("ok - "..item[1]) else failed=failed+1; io.stderr:write("not ok - "..item[1]..": "..tostring(err).."\n") end
+end
+
+do
+   local register={
+      type="contestant_register",node="a1",division=1,name="Ace",ship="Hyena",
+      outfits="Laser%20Cannon",slots="1:Laser%20Cannon",
+      ship_fallbacks="Hyena",
+   }
+   local packet=assert(codec.encode(register))
+   local decoded=assert(codec.decode(packet))
+   assert(decoded.division==1 and decoded.name=="Ace")
+   assert(not codec.encode{
+      type="contestant_register",node="a1",division=4,name="Ace",ship="Hyena",
+      outfits="Laser",slots="1:Laser",
+   })
+   assert(not codec.encode{
+      type="contestant_entry",node="d1",contestant="not-hex",division=1,
+      request=1,name="Ace",ship="Hyena",outfits="Laser",slots="1:Laser",
+   })
 end
 if failed>0 then os.exit(1) end
 print(string.format("1..%d",#tests))

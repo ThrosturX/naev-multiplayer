@@ -46,6 +46,7 @@ local function p2p_publish_config ()
             and settings.directory or "",
         node_id = type(settings.node_id) == "string"
             and settings.node_id or "",
+        captain = player.name(),
     }
 end
 
