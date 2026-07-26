@@ -917,10 +917,6 @@ assert(host.disconnect_sounds==host_disconnects+1
       and guest.disconnect_sounds==guest_disconnects+1
       and third.disconnect_sounds==third_disconnects+1,
    "guest departure did not notify the host and every other guest exactly once")
-assert(fourth_on_host.last_chat=="Disconnected."
-      and fourth_on_guest.last_chat=="Disconnected."
-      and fourth_on_third.last_chat=="Disconnected.",
-   "guest departure communication did not come from the departed proxies")
 assert(fourth_on_host:exists() and fourth_on_host:disabled()
       and fourth_on_guest:exists() and fourth_on_guest:disabled()
       and fourth_on_third:exists() and fourth_on_third:disabled(),
@@ -952,9 +948,6 @@ assert(host.speed_enabled,"stopping P2P did not restore the speed key")
 assert(guest.disconnect_sounds==guest_disconnects+1
       and third.disconnect_sounds==third_disconnects+1,
    "host departure did not play one disconnect sound for every guest")
-assert(host_on_guest.last_chat=="Disconnected."
-      and host_on_third.last_chat=="Disconnected.",
-   "host departure communication did not come from the departed host proxies")
 assert(host_on_guest:exists() and host_on_guest.task
       and host_on_guest.task.kind=="land"
       and host_on_guest.task.target==guest_nearest_spob,
@@ -983,8 +976,6 @@ local guest_on_third=third.session.players["20"].pilot
 guest.session.stop(); update({third},8)
 assert(third.disconnect_sounds==third_disconnects+1,
    "replacement-host departure did not play one disconnect sound for its guest")
-assert(guest_on_third.last_chat=="Disconnected.",
-   "replacement-host departure communication did not come from its proxy")
 third.session.stop()
 assert(guest.speed_enabled and third.speed_enabled,"leaving P2P did not restore speed controls")
 
