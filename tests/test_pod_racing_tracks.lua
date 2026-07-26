@@ -42,6 +42,9 @@ assert(#tracks==#canonical+1 and crossfire.name=="Melendez Death Knot",
 assert(crossfire.reward==350e3 and crossfire.scale==4)
 assert(type(crossfire.description)=="string" and crossfire.description~="")
 assert(#crossfire.track>0)
+-- luatk.bezier samples each segment eleven times and gfx.renderLinesH accepts
+-- at most 256 vertices in one call.
+assert(#crossfire.track<=23,"Death Knot exceeds the track-preview line limit")
 
 local crossovers=0
 for _index,segment in ipairs(crossfire.track) do

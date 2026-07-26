@@ -28,14 +28,11 @@ end
 local crossfire_points = {
    -- Launch chute.
    vec2.new(-1500,-650),
-   vec2.new(-700,-250),
    vec2.new(0,0),
    -- Broad eastern lobe: the opening overtaking arena.
-   vec2.new(650,500),
    vec2.new(1300,350),
    vec2.new(1500,0),
    vec2.new(1300,-350),
-   vec2.new(650,-500),
    vec2.new(0,0),
    -- Tight northern slingshot.
    vec2.new(-450,650),
@@ -43,11 +40,9 @@ local crossfire_points = {
    vec2.new(450,650),
    vec2.new(0,0),
    -- Broad western lobe, returning traffic toward the leaders.
-   vec2.new(-650,500),
    vec2.new(-1300,350),
    vec2.new(-1500,0),
    vec2.new(-1300,-350),
-   vec2.new(-650,-500),
    vec2.new(0,0),
    -- Tight southern slingshot.
    vec2.new(450,-650),
