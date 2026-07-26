@@ -15,6 +15,7 @@ local ACTIVITY_QUERY_INTERVAL = 30
 local ACTIVITY_RETENTION = 15*60
 local HOST_ALONE_GRACE = 6 -- make "solo p2p" less punishing at gates by keeping this value low
 local AGGRESSION_GRACE = 20
+local NPC_CONTROL_REPAIR_COOLDOWN = 30
 -- The outer codec percent-escapes this packed field again. Keeping the raw
 -- payload well below MAX_PACKET leaves room for worst-case expansion.
 local NPC_MANIFEST_BATCH_PAYLOAD = 4000
@@ -26,6 +27,7 @@ local session = {
    host_inventory={}, owned_inventory={},
    craft_factions={}, host_welcomed={}, pending_leader_owners={}, resync_sent={},
    ownership_cache={}, initial_sync_until=0, pending_npc_manifests=nil,
+   npc_audit_queue={}, npc_audit_at=1,
    activity={}, activity_received=0, last_activity_query=0,
    indicators=status.new(function () return player.pilot() end),
 }
@@ -616,7 +618,7 @@ end
 local player_smoothing={position_gain=2.5,correction_speed=600,velocity_rate=12,
    acceleration=2400,direction_rate=14,max_prediction=0.25}
 local npc_smoothing={position_gain=1.5,correction_speed=250,velocity_rate=8,
-   acceleration=600,direction_rate=10,max_prediction=0.4}
+   acceleration=600,direction_rate=10,direction_speed=2,max_prediction=0.4}
 local craft_smoothing={position_gain=2,correction_speed=400,velocity_rate=10,
    acceleration=1200,direction_rate=12,max_prediction=0.3}
 
@@ -629,7 +631,9 @@ local function smooth_entry ( entry, dt, stamp, limits )
    if math.abs(m.vx-vx)>0.01 or math.abs(m.vy-vy)>0.01 then
       p:setVel(vec2.new(m.vx,m.vy))
    end
-   if math.abs(math.sin((m.dir-dir)/2))>0.00025 then p:setDir(m.dir) end
+   if math.abs(math.sin((m.dir-dir)/2))>0.00025 then
+      p:setDir(m.dir)
+   end
 end
 
 local smooth_elapsed=0
@@ -767,13 +771,38 @@ local function craft_state_record ( p, entity, target_entities )
    if target then
       target_id=target_entities and target_entities[tostring(target:id())]
          or target_entity(target)
+      if (not target_id or target_id=="") and session.machine.state=="host"
+            and target~=player.pilot() then
+         target_id=session.settings.node_id..":"..pilot_id(target)
+      end
       target_id=target_id or ""
    end
    return {entity=entity,x=x,y=y,vx=vx,vy=vy,dir=p:dir(),armour=armour,shield=shield,
       stress=stress,energy=p:energy(),target=target_id,disabled=p:disabled()}
 end
 
-local function manifest_record ( p, entity )
+local function task_goal ( p, target_id )
+   local task=p:taskname()
+   if not task then return "","" end
+   local data=p:taskdata()
+   if data and data==p:target() and target_id and target_id~="" then
+      return task,"pilot:"..target_id
+   end
+   if data then
+      local current=system.cur()
+      if current then
+         for _index,spob in ipairs(current:spobs()) do
+            if data==spob then return task,"spob:"..spob:nameRaw() end
+         end
+         for _index,jump in ipairs(current:jumps(true)) do
+            if data==jump then return task,"jump:"..jump:dest():nameRaw() end
+         end
+      end
+   end
+   return task,""
+end
+
+local function manifest_record ( p, entity, with_control )
    local rec=craft_state_record(p,entity)
    local leader_id=""
    local leader=p:leader()
@@ -787,6 +816,12 @@ local function manifest_record ( p, entity )
    rec.outfits=outfit_names(p)
    rec.slots=outfit_slots(p)
    rec.leader=leader_id
+   if with_control then
+      -- AI identity and the top-level goal are reliable, static manifest
+      -- data. They must never be added to the frequent NPC state record.
+      rec.ai=p:ainame() or ""
+      rec.task,rec.goal=task_goal(p,rec.target)
+   end
    return rec
 end
 
@@ -797,6 +832,7 @@ local function add_message ( rec, kind, owner )
    msg.x=rec.x; msg.y=rec.y; msg.vx=rec.vx; msg.vy=rec.vy; msg.dir=rec.dir
    msg.armour=rec.armour; msg.shield=rec.shield; msg.stress=rec.stress; msg.energy=rec.energy
    msg.target=rec.target; msg.leader=rec.leader
+   msg.ai=rec.ai; msg.task=rec.task; msg.goal=rec.goal
    if session.machine.claim then msg.claim=session.machine.claim end
    if owner then msg.owner=owner end
    return msg
@@ -818,6 +854,11 @@ local function manifest_line ( rec )
    },",")
 end
 
+local function control_line ( rec )
+   return table.concat({manifest_field(rec.entity),manifest_field(rec.ai),
+      manifest_field(rec.task),manifest_field(rec.goal)},",")
+end
+
 local function queue_npc_manifests ( records )
    local entries={}
    for id,p in pairs(records) do entries[#entries+1]={id=id,pilot=p} end
@@ -827,25 +868,30 @@ end
 local function publish_next_npc_manifest_batch ()
    local pending=session.pending_npc_manifests
    if not pending then return end
-   local batch,size={},0
+   local batch,control_batch,size,control_size={},{},0,0
    while pending.at<=#pending.entries do
       local entry=pending.entries[pending.at]
       if not exists(entry.pilot) then
          pending.at=pending.at+1
       else
-         local rec=entry.rec or manifest_record(entry.pilot,entry.id)
+         local rec=entry.rec or manifest_record(entry.pilot,entry.id,true)
          entry.rec=rec
          local line=manifest_line(rec)
-         if #line>NPC_MANIFEST_BATCH_PAYLOAD then
+         local control=control_line(rec)
+         if #line>NPC_MANIFEST_BATCH_PAYLOAD
+               or #control>NPC_MANIFEST_BATCH_PAYLOAD then
             if #batch>0 then break end
             pending.at=pending.at+1
             broadcast(add_message(rec,"npc_add"),true)
             if pending.at>#pending.entries then session.pending_npc_manifests=nil end
             return
          end
-         if #batch>0 and size+#line+1>NPC_MANIFEST_BATCH_PAYLOAD then break end
+         if #batch>0 and (size+#line+1>NPC_MANIFEST_BATCH_PAYLOAD
+               or control_size+#control+1>NPC_MANIFEST_BATCH_PAYLOAD) then break end
          batch[#batch+1]=line
+         control_batch[#control_batch+1]=control
          size=size+#line+1
+         control_size=control_size+#control+1
          pending.at=pending.at+1
       end
    end
@@ -856,6 +902,12 @@ local function publish_next_npc_manifest_batch ()
       msg.seq=session.sequence
       msg.entities=table.concat(batch,";")
       broadcast(msg,true)
+      session.sequence=session.sequence+1
+      local control=base("npc_control")
+      control.claim=session.machine.claim
+      control.seq=session.sequence
+      control.entities=table.concat(control_batch,";")
+      broadcast(control,true)
    end
    if pending.at>#pending.entries then session.pending_npc_manifests=nil end
 end
@@ -927,6 +979,75 @@ local function craft_faction ( owner )
    return fac
 end
 
+local function resolve_task_goal ( goal )
+   if not goal or goal=="" then return nil,true end
+   local entity=goal:match("^pilot:(.+)$")
+   if entity then
+      local target=entity_pilot(entity)
+      return target,target~=nil
+   end
+   local spob_name=goal:match("^spob:(.+)$")
+   local jump_name=goal:match("^jump:(.+)$")
+   local current=system.cur()
+   if not current then return nil,false end
+   if spob_name then
+      for _index,spob in ipairs(current:spobs()) do
+         if spob:nameRaw()==spob_name then return spob,true end
+      end
+   elseif jump_name then
+      for _index,jump in ipairs(current:jumps(true)) do
+         if jump:dest():nameRaw()==jump_name then return jump,true end
+      end
+   end
+   return nil,false
+end
+
+local function control_signature ( p, expected_goal )
+   local task=p:taskname() or ""
+   local target=p:target()
+   local goal=""
+   if task~="" and target and expected_goal
+         and expected_goal:sub(1,6)=="pilot:" then
+      local entity=target_entity(target)
+      if entity~="" then goal="pilot:"..entity end
+   elseif task~="" then
+      local target_id=target and target_entity(target) or ""
+      local _task
+      _task,goal=task_goal(p,target_id)
+   end
+   return p:ainame() or "",task,goal
+end
+
+local function apply_npc_control ( entry, message )
+   if message.ai==nil or message.task==nil or message.goal==nil then return end
+   local p=entry.pilot
+   local current_ai=p:ainame() or ""
+   if message.ai~="" and current_ai~=message.ai then
+      p:changeAI(message.ai)
+      ai_setup.setup(p)
+      current_ai=p:ainame() or ""
+   end
+   if current_ai~=message.ai then return end
+   local current_task=p:taskname() or ""
+   local goal,ready=resolve_task_goal(message.goal)
+   local goal_matches=message.goal=="" or (ready and p:taskdata()==goal)
+   if current_task~=message.task or not goal_matches then
+      if not ready then
+         entry.pending_control={ai=message.ai,task=message.task,goal=message.goal}
+         return
+      end
+      -- Control repair changes only AI/task state. Motion remains under the
+      -- capped velocity and direction reconciliation path.
+      if goal and p:target()~=goal then p:setTarget(goal) end
+      p:taskClear()
+      if message.task~="" then p:pushtask(message.task,goal) end
+   end
+   entry.control={ai=message.ai,task=message.task,goal=message.goal}
+   entry.pending_control=nil
+   entry.control_mismatch=nil
+   entry.control_mismatch_at=nil
+end
+
 local function spawn_npc ( message, craft_owner )
    local container=craft_owner and session.craft or session.npcs
    local existing=container[message.entity]
@@ -938,13 +1059,16 @@ local function spawn_npc ( message, craft_owner )
       if craft_owner then
          existing.leader_id=message.leader
          session.pending_leader_owners[craft_owner]=true
+      else
+         apply_npc_control(existing,message)
       end
       return
    end
    if not resource_get(ship.get,message.ship)
          or (not craft_owner and not resource_get(faction.get,message.faction)) then return end
    local fac=craft_owner and craft_faction(craft_owner) or message.faction
-   local params=craft_owner and {ai="escort",naked=true} or {naked=true}
+   local params=craft_owner and {ai="escort",naked=true}
+      or {ai=message.ai~="" and message.ai or nil,naked=true}
    local p=pilot.add(message.ship,fac,vec2.new(message.x or 0,message.y or 0),
       message.name,params)
    if not p then return end
@@ -961,6 +1085,9 @@ local function spawn_npc ( message, craft_owner )
          energy=message.energy,target=target_id=="-" and "-" or nil,
          disabled=message.disabled==true or message.disabled=="1"}}
    container[message.entity]=entry
+   if not craft_owner then
+      session.npc_audit_queue[#session.npc_audit_queue+1]=message.entity
+   end
    if message.vx and message.vy then p:setVel(vec2.new(message.vx,message.vy)) end
    if message.dir then p:setDir(message.dir) end
    if message.armour then p:setHealth(message.armour,message.shield,message.stress) end
@@ -975,6 +1102,9 @@ local function spawn_npc ( message, craft_owner )
    if craft_owner then
       ai_setup.setup(p)
       session.pending_leader_owners[craft_owner]=true
+   else
+      ai_setup.setup(p)
+      apply_npc_control(entry,message)
    end
 end
 
@@ -1040,8 +1170,9 @@ local function parse_states ( packed, container, owner )
          if bounded then
             motion_target(entry,state,received)
             -- NPC and owned-craft populations can contain hundreds of pilots.
-            -- Correct each replica when its authoritative packet arrives
-            -- instead of rescanning the whole population from hook.update.
+            -- Correct replicas only when their authoritative packet arrives.
+            -- NPC angular correction is capped, so a bad direction is repaired
+            -- over multiple packets without adding any per-frame NPC work.
             smooth_entry(entry,step,received,limits)
             local applied=entry.applied or {}
             entry.applied=applied
@@ -1096,7 +1227,7 @@ local function spawn_npc_manifest ( message )
          local decoded=parse_manifest_field(field)
          if decoded==nil then valid=false else fields[field_count]=decoded end
       end
-      if valid and field_count==17 then
+      if valid and (field_count==17 or field_count==20) then
          local manifest={
             type="npc_add",node=message.node,system=message.system,claim=message.claim,
             seq=message.seq,entity=fields[1],ship=fields[2],name=fields[3],
@@ -1105,8 +1236,31 @@ local function spawn_npc_manifest ( message )
             armour=fields[12],shield=fields[13],stress=fields[14],energy=fields[15],
             target=fields[16]~="" and fields[16] or nil,
             leader=fields[17]~="" and fields[17] or nil,
+            ai=fields[18],task=fields[19],goal=fields[20],
          }
          if codec.validate(manifest) then spawn_npc(manifest) end
+      end
+   end
+end
+
+local function apply_npc_control_batch ( message )
+   for line in message.entities:gmatch("([^;]+)") do
+      local fields,field_count,valid={},0,true
+      for field in line:gmatch("([^,]+)") do
+         field_count=field_count+1
+         local decoded=parse_manifest_field(field)
+         if decoded==nil then valid=false else fields[field_count]=decoded end
+      end
+      if valid and field_count==4 then
+         local control={
+            type="npc_control",node=message.node,system=message.system,
+            claim=message.claim,seq=message.seq,entities=message.entities,
+            entity=fields[1],ai=fields[2],task=fields[3],goal=fields[4],
+         }
+         local entry=session.npcs[control.entity]
+         if codec.validate(control) and entry and exists(entry.pilot) then
+            apply_npc_control(entry,control)
+         end
       end
    end
 end
@@ -1366,6 +1520,10 @@ local function on_message ( peer, message )
          and message.node==session.machine.host and message.claim==session.machine.claim
          and session.machine:accept_sequence("npc_manifest",message.seq) then
       spawn_npc_manifest(message)
+   elseif message.type=="npc_control" and session.machine.state~="host"
+         and message.node==session.machine.host and message.claim==session.machine.claim
+         and session.machine:accept_sequence("npc_control",message.seq) then
+      apply_npc_control_batch(message)
    elseif message.type=="npc_add" and session.machine.state~="host" and message.node==session.machine.host and message.claim==session.machine.claim then spawn_npc(message)
    elseif message.type=="npc_remove" and message.node==session.machine.host and message.claim==session.machine.claim then local e=session.npcs[message.entity]; if e then remove_pilot(e.pilot); session.npcs[message.entity]=nil end
    elseif message.type=="npc_state" and message.node==session.machine.host and message.claim==session.machine.claim and session.machine:accept_sequence("npc",message.seq) then parse_states(message.entities,session.npcs)
@@ -1453,7 +1611,7 @@ publish_entities = function ( full, include_ambient, include_craft )
    if include_ambient and session.machine.state=="host" then
       for id,p in pairs(ambient) do
          if full or not session.host_inventory[id] then
-            if not full then broadcast(add_message(manifest_record(p,id),"npc_add"),true) end
+            if not full then broadcast(add_message(manifest_record(p,id,true),"npc_add"),true) end
          end
       end
       if full then queue_npc_manifests(ambient) end
@@ -1509,7 +1667,7 @@ publish_manifests = function ( scope, owner, entity )
          kind="craft_manifest"
       end
       if p and exists(p) then
-         broadcast(add_message(manifest_record(p,entity),kind,
+         broadcast(add_message(manifest_record(p,entity,kind=="npc_add"),kind,
             kind=="craft_manifest" and session.settings.node_id or nil),true)
          return
       end
@@ -1520,7 +1678,7 @@ publish_manifests = function ( scope, owner, entity )
    if include_ambient and session.machine.state=="host" then
       if entity then
          local p=ambient[entity]
-         if p then broadcast(add_message(manifest_record(p,entity),"npc_add"),true) end
+         if p then broadcast(add_message(manifest_record(p,entity,true),"npc_add"),true) end
       else queue_npc_manifests(ambient) end
    end
    if include_craft then
@@ -1548,6 +1706,64 @@ request_resync = function ( scope, owner, entity )
    broadcast(msg,true)
 end
 
+local function rebuild_npc_audit_queue ()
+   local queue={}
+   for entity in pairs(session.npcs) do queue[#queue+1]=entity end
+   session.npc_audit_queue=queue
+   session.npc_audit_at=1
+   return queue
+end
+
+local function request_npc_control_repair ( entry, entity, stamp )
+   if stamp<(entry.control_repair_after or 0) then return end
+   entry.control_repair_after=stamp+NPC_CONTROL_REPAIR_COOLDOWN
+   entry.control_mismatch=nil
+   entry.control_mismatch_at=nil
+   request_resync("npc",nil,entity)
+end
+
+local function audit_npc_control ( stamp )
+   if session.machine.state=="host" then return end
+   local queue=session.npc_audit_queue
+   if session.npc_audit_at>#queue then queue=rebuild_npc_audit_queue() end
+   if #queue==0 then return end
+
+   -- Audit exactly one NPC per second. AI identity is static and repairs
+   -- immediately; naturally evolving tasks must show the same mismatch on
+   -- two complete round-robin visits before causing network traffic.
+   local entity=queue[session.npc_audit_at]
+   session.npc_audit_at=session.npc_audit_at+1
+   local entry=session.npcs[entity]
+   if not entry then
+      queue=rebuild_npc_audit_queue()
+      if #queue==0 then return end
+      entity=queue[1]
+      session.npc_audit_at=2
+      entry=session.npcs[entity]
+   end
+   if not entry or not exists(entry.pilot) then return end
+   if entry.pending_control then apply_npc_control(entry,entry.pending_control) end
+   local expected=entry.control
+   if not expected then return end
+   local ai,task,goal=control_signature(entry.pilot,expected.goal)
+   if ai~=expected.ai then
+      request_npc_control_repair(entry,entity,stamp)
+      return
+   end
+   if task==expected.task and goal==expected.goal then
+      entry.control_mismatch=nil
+      entry.control_mismatch_at=nil
+      return
+   end
+   local mismatch=task.."\n"..goal.."\n"..expected.task.."\n"..expected.goal
+   if entry.control_mismatch==mismatch then
+      request_npc_control_repair(entry,entity,stamp)
+   else
+      entry.control_mismatch=mismatch
+      entry.control_mismatch_at=stamp
+   end
+end
+
 function session.start ( settings )
    if session.running then return true end
    clear_local_controls()
@@ -1562,6 +1778,8 @@ function session.start ( settings )
    session.member_endpoints={}; session.craft_factions={}; session.departures={}; session.host_welcomed={}
    session.pending_leader_owners={}; session.resync_sent={}; session.ownership_cache={}
    session.pending_npc_manifests=nil
+   session.npc_audit_queue={}
+   session.npc_audit_at=1
    session.activity={}
    session.activity_received=0
    session.activity_generation=0
@@ -1654,6 +1872,8 @@ function session.leave ()
    session.craft_factions={}; session.host_welcomed={}
    session.pending_leader_owners={}; session.resync_sent={}; session.ownership_cache={}
    session.pending_npc_manifests=nil
+   session.npc_audit_queue={}
+   session.npc_audit_at=1
    session.initial_sync_until=0
    session.solo_since=nil
    session.local_speed2=nil
@@ -1858,6 +2078,7 @@ function session.update ( dt )
             request_resync("craft",entry.owner,entity)
          end
       end
+      audit_npc_control(stamp)
       refresh_time_controls(stamp)
    end
    smooth_replicas(dt,stamp)

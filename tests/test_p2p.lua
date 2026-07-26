@@ -50,6 +50,14 @@ test("protocol escaping and validation", function()
       seq=4,x=0,y=0,vx=0,vy=0,dir=0,armour=75,shield=20,stress=5})
    assert(codec.encode{type="resync",node="a1",system="X",seq=5,
       scope="craft",owner="b2",entity="b2:7"})
+   assert(codec.encode{type="npc_add",node="a1",system="X",claim="c",
+      entity="a1:7",seq=6,ship="Llama",name="NPC",faction="Independent",
+      ai="trader",task="hyperspace",goal="jump:Gamma Polaris"})
+   assert(codec.encode{type="npc_control",node="a1",system="X",claim="c",
+      seq=7,entities="va1%253A7,vtrader,vhyperspace,vjump%253AGamma%2520Polaris"})
+   assert(not codec.encode{type="npc_add",node="a1",system="X",claim="c",
+      entity="a1:7",seq=7,ship="Llama",name="NPC",faction="Independent",
+      ai="bad ai"})
    assert(not codec.encode{type="resync",node="a1",system="X",seq=6,
       scope="everything"})
    assert(not codec.encode{type="resync",node="a1",system="X",seq=7,
@@ -151,6 +159,12 @@ test("capped reconciliation and local health", function()
    eq(smooth.vx,10); eq(smooth.vy,-10)
    assert(smooth.dir<0.1 or smooth.dir>2*math.pi-0.1,
       "direction smoothing took the long way around")
+   local turn=reconcile.steer({x=0,y=0,vx=0,vy=0,dir=0},
+      {x=0,y=0,vx=0,vy=0,dir=math.pi},1/3,0,
+      {direction_rate=10,direction_speed=1.5})
+   local turned=math.abs((turn.dir+math.pi)%(2*math.pi)-math.pi)
+   assert(math.abs(turned-0.15)<1e-9,
+      "direction correction exceeded its angular speed cap")
    local health=0
    local placed=0
    local adapter={soft_motion=function() end,set_motion=function() placed=placed+1 end,

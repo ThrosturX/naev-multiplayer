@@ -64,6 +64,9 @@ function reconcile.steer ( current, wanted, dt, age, limits )
    local acceleration=limits.acceleration or 2400
    local direction_rate=limits.direction_rate or 14
    local direction_step=angle_delta(current.dir,wanted.dir)*(1-math.exp(-direction_rate*dt))
+   local direction_cap=(limits.direction_speed or math.huge)*dt
+   if direction_step>direction_cap then direction_step=direction_cap
+   elseif direction_step < -direction_cap then direction_step=-direction_cap end
    return {
       vx=smooth_value(current.vx,wanted_vx,velocity_rate,acceleration,dt),
       vy=smooth_value(current.vy,wanted_vy,velocity_rate,acceleration,dt),

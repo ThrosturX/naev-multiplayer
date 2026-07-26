@@ -31,6 +31,7 @@ local valid_types = {
    activity_query=true, activity=true,
    player_manifest=true, player_state=true, chat=true,
    npc_manifest=true, npc_add=true, npc_remove=true, npc_state=true,
+   npc_control=true,
    craft_manifest=true, craft_state=true, craft_remove=true, craft_order=true,
    resync=true,
 }
@@ -46,6 +47,7 @@ local required = {
       "armour","shield","stress"},
    chat={"node","system","seq","text"},
    npc_manifest={"node","system","claim","seq","entities"},
+   npc_control={"node","system","claim","seq","entities"},
    npc_add={"node","system","claim","entity","seq","ship","name","faction"},
    npc_remove={"node","system","claim","entity","seq"},
    npc_state={"node","system","claim","seq","entities"},
@@ -82,6 +84,15 @@ local function validate ( message )
    end
    if message.name and (#message.name > 240 or message.name:find("[%z\1-\31\127]")) then
       return nil, "invalid name"
+   end
+   if message.ai and (#message.ai > 240 or message.ai:find("[^%w_%-]")) then
+      return nil, "invalid ai"
+   end
+   if message.task and (#message.task > 240 or message.task:find("[^%w_%-]")) then
+      return nil, "invalid task"
+   end
+   if message.goal and (#message.goal > 512 or message.goal:find("[%z\1-\31\127]")) then
+      return nil, "invalid goal"
    end
    if message.system and (#message.system > 240 or message.system:find("[%z\1-\31\127]")) then
       return nil, "invalid system"

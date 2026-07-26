@@ -120,6 +120,9 @@ local function new_world ( player_name )
    end
    function pilot_methods:leader () counted("leader"); return self.leader_pilot end
    function pilot_methods:ainame () return self.ai_name end
+   function pilot_methods:changeAI (name) self.ai_name=name; self.task=nil end
+   function pilot_methods:taskname () return self.task and self.task.kind or nil end
+   function pilot_methods:taskdata () return self.task and self.task.target or nil end
    function pilot_methods:setLeader (v) self.leader_pilot=v end
    function pilot_methods:msg (receivers,kind,data)
       for _index,receiver in ipairs(receivers) do
@@ -128,7 +131,10 @@ local function new_world ( player_name )
    end
    function pilot_methods:setPos (v) self.position=v; self.position_sets=(self.position_sets or 0)+1 end
    function pilot_methods:setVel (v) self.velocity=v; self.velocity_sets=(self.velocity_sets or 0)+1 end
-   function pilot_methods:setDir (v) self.direction=v end
+   function pilot_methods:setDir (v)
+      self.direction_sets=(self.direction_sets or 0)+1
+      self.direction=v
+   end
    function pilot_methods:setTarget (v)
       if v and not v:exists() then error("Pilot is invalid.") end
       self.target_sets=(self.target_sets or 0)+1
@@ -399,7 +405,9 @@ assert(host.session.machine.state=="host" and host.speed_enabled,
 
 local npc=host:add_pilot("Koala","Empire","Host NPC",false)
 local target_npc=host:add_pilot("Llama","Empire","Target NPC",false)
+npc.ai_name="empire"
 npc:setTarget(target_npc)
+npc:pushtask("attack",target_npc)
 local escort=host:add_pilot("Hyena","Player","Host Escort",true,"escort")
 escort.pilot_id=777
 escort:setLeader(host.local_pilot)
@@ -565,8 +573,15 @@ assert(not host.speed_enabled and not guest.speed_enabled,
 
 local npc_replica=find(guest,"Host NPC","Empire")
 assert(npc_replica,"guest did not receive host NPC")
+local target_npc_replica=find(guest,"Target NPC","Empire")
+assert(target_npc_replica and npc_replica:ainame()=="empire"
+      and npc_replica:taskname()=="attack"
+      and npc_replica:taskdata()==target_npc_replica,
+   "guest NPC did not receive the host AI profile and current goal")
 assert((host.session.host.sent_types.npc_manifest or 0)>0,
    "full NPC synchronization did not use a batched manifest")
+assert((host.session.host.sent_types.npc_control or 0)>0,
+   "full NPC synchronization did not batch AI and goal control data")
 assert(npc_replica.no_death,
    "host-authoritative NPC replica could be destroyed by guest-local damage")
 local escort_replica=find(guest,"Host Escort","P2P Craft 10")
@@ -782,8 +797,10 @@ assert(guest_proxy.last_chat=="manifest repaired"
    "chat remained detached after repairing its player proxy")
 
 npc:setPos(vector(500,0))
+npc:setDir(math.pi)
 escort:setPos(vector(500,0))
 local npc_velocity_sets=npc_replica.velocity_sets or 0
+local npc_direction_sets=npc_replica.direction_sets or 0
 local escort_velocity_sets=escort_replica.velocity_sets or 0
 for _index,w in ipairs({host,guest,third}) do
    w.clock=w.clock+1
@@ -799,16 +816,24 @@ local npc_x=select(1,npc_replica:pos():get())
 local escort_x=select(1,escort_replica:pos():get())
 local npc_vx=select(1,npc_replica:vel():get())
 local escort_vx=select(1,escort_replica:vel():get())
+local npc_dir=npc_replica:dir()
 assert(npc_x==0 and (npc_replica.position_sets or 0)==0,
    "NPC reconciliation teleported its replica")
 assert(escort_x==0 and (escort_replica.position_sets or 0)==0,
    "owned-craft reconciliation teleported its replica")
+local npc_dir_error=math.abs((npc_dir-math.pi+math.pi)%(2*math.pi)-math.pi)
+assert(npc_dir~=0 and npc_dir_error>0.01,
+   "NPC direction correction snapped instead of turning gradually")
+assert((npc_replica.direction_sets or 0)>npc_direction_sets,
+   "NPC direction was not reconciled from authoritative state")
 assert(npc_vx>0 and npc_vx<=240,"NPC correction velocity was not acceleration-capped")
 assert(escort_vx>0 and escort_vx<=240,
    "owned-craft correction velocity was not acceleration-capped: "..tostring(escort_vx))
 assert((npc_replica.velocity_sets or 0)-npc_velocity_sets<=4,
-   "NPC reconciliation exceeded its 10 Hz work budget: "
+   "NPC reconciliation exceeded its packet-rate work budget: "
       ..tostring((npc_replica.velocity_sets or 0)-npc_velocity_sets))
+assert((npc_replica.direction_sets or 0)-npc_direction_sets<=2,
+   "NPC turning performed work between state packets")
 assert((escort_replica.velocity_sets or 0)-escort_velocity_sets<=2,
    "owned-craft reconciliation exceeded its 1 Hz work budget")
 npc:setHealth(42,17,3); npc:setEnergy(51)
