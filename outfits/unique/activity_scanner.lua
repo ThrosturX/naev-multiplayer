@@ -33,8 +33,11 @@ local function process ( entries, stamp )
       if entry.active and system_name==origin_name then
          reported[system_name]=stamp
       elseif entry.active and not reported[system_name] then
-         local target=system.exists(system_name)
-         local distance=target and origin:jumpDist(target,false,true)
+         -- Activity names arrive from the directory. Resolve them at this
+         -- external boundary without letting an unknown system stop all
+         -- subsequent scanner updates.
+         local ok,target=pcall(system.get,system_name)
+         local distance=ok and origin:jumpDist(target,false,true)
          if distance and distance<math.huge then
             distance=math.floor(distance)
             reported[system_name]=stamp
@@ -58,6 +61,7 @@ function init ( p, _po )
    mem.reported=mem.reported or {}
    local s=snapshot()
    mem.last_received=s and s.received or nil
+   if s and not player.isLanded() then process(s.entries,s.received) end
 end
 
 function update ( p, _po, _dt )

@@ -130,6 +130,7 @@ local function new_world ( player_name )
    function pilot_methods:setVel (v) self.velocity=v; self.velocity_sets=(self.velocity_sets or 0)+1 end
    function pilot_methods:setDir (v) self.direction=v end
    function pilot_methods:setTarget (v)
+      if v and not v:exists() then error("Pilot is invalid.") end
       self.target_sets=(self.target_sets or 0)+1
       self.target_pilot=v
    end
@@ -361,6 +362,7 @@ host.session.input("accel",false)
 assert(host.unpauses==solo_unpauses,
    "solo-host input unpaused the space simulation")
 
+host.session.activity={{system="Delta Polaris",active=true}}
 host.session.leave()
 assert(host.session.enter("Arandon"))
 assert(host.speed_enabled,
@@ -369,6 +371,14 @@ advance({host},2,4)
 assert(host.session.machine.state=="host" and host.speed_enabled
       and not host.local_pilot.effects["Multiplayer: Autonav Pending"],
    "solo host with no discovered players started the post-jump autonav timer")
+
+host.session.leave()
+assert(host.session.enter("Sirius"))
+assert(host.speed_enabled,
+   "stale activity from the solo host's previous system started the jump timer")
+advance({host},2,4)
+assert(host.session.machine.state=="host" and host.speed_enabled,
+   "stale self activity started the timer after the new system was claimed")
 
 host.session.activity={{system="Gamma Polaris",active=true}}
 host.session.leave()
@@ -388,6 +398,8 @@ assert(host.session.machine.state=="host" and host.speed_enabled,
    "solo host did not skip the timer when returning without discovered activity")
 
 local npc=host:add_pilot("Koala","Empire","Host NPC",false)
+local target_npc=host:add_pilot("Llama","Empire","Target NPC",false)
+npc:setTarget(target_npc)
 local escort=host:add_pilot("Hyena","Player","Host Escort",true,"escort")
 escort.pilot_id=777
 escort:setLeader(host.local_pilot)
@@ -438,6 +450,14 @@ assert(not find(host,"John","P2P Players") and not find(guest,"John","P2P Player
 assert(host_proxy.no_death and not host_proxy.invincible,
    "remote player proxy cannot receive local projectile impacts")
 assert(not host_proxy.hostile,"remote player started hostile before taking hostile action")
+
+local stale_target=find(guest,"Target NPC","Empire")
+assert(stale_target,"guest did not receive the target NPC fixture")
+stale_target:rm()
+advance({host,guest},0.5,16)
+local repaired_target=find(guest,"Target NPC","Empire")
+assert(repaired_target and repaired_target~=stale_target,
+   "invalid target replica was not pruned and recreated by resynchronization")
 
 host.session.input("accel",true)
 advance({host,guest},0.1,8)

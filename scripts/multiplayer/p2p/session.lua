@@ -112,7 +112,12 @@ local function no_other_players_discovered ( current_system )
       if meta.verified and meta.cap=="player" then return false end
    end
    for _index,entry in ipairs(session.activity or {}) do
-      if entry.active and entry.system~=current_system then return false end
+      local self_generation=session.self_activity[entry.system]
+      local stale_self=self_generation
+         and self_generation>=session.activity_generation
+      if entry.active and entry.system~=current_system and not stale_self then
+         return false
+      end
    end
    return true
 end
@@ -154,6 +159,14 @@ local function refresh_time_controls ( stamp )
    local deadline=session.solo_since+HOST_ALONE_GRACE
    session.indicators:host_alone(deadline,stamp)
    lock_autonav(stamp<deadline)
+end
+
+local function refresh_discovered_time_controls ( stamp )
+   if not session.skip_host_grace or not session.machine
+         or not session.machine.system
+         or no_other_players_discovered(session.machine.system) then return end
+   session.skip_host_grace=nil
+   refresh_time_controls(stamp)
 end
 
 local function clear_local_controls ()
@@ -487,6 +500,10 @@ local reconcile_craft_leaders
 local function spawn_proxy ( message, display_name )
    if message.node == session.settings.node_id then return end
    local existing=session.players[message.entity]
+   if existing and not exists(existing.pilot) then
+      session.players[message.entity]=nil
+      existing=nil
+   end
    if existing then
       existing.last_seen=now()
       return
@@ -550,9 +567,16 @@ local function target_entity ( target )
 end
 
 local function entity_pilot ( id )
-   if id==session.settings.node_id then return player.pilot() end
+   if id==session.settings.node_id then
+      local p=player.pilot()
+      if exists(p) then return p end
+      return nil
+   end
    local entry=session.players[id] or session.npcs[id] or session.craft[id]
-   if entry then return entry.pilot end
+   if entry then
+      if exists(entry.pilot) then return entry.pilot end
+      return nil
+   end
    -- The host's authoritative ambient pilots and each owner's real craft are
    -- not kept in replica tables. Resolve their stable pilot IDs when a remote
    -- order or target refers back to a real local entity.
@@ -642,6 +666,7 @@ local request_resync
 local function apply_player_state ( message )
    local entry=session.players[message.entity]
    if not entry or not exists(entry.pilot) then
+      session.players[message.entity]=nil
       request_resync("all",message.node)
       return
    end
@@ -904,9 +929,14 @@ end
 
 local function spawn_npc ( message, craft_owner )
    local container=craft_owner and session.craft or session.npcs
-   if container[message.entity] then
+   local existing=container[message.entity]
+   if existing and not exists(existing.pilot) then
+      container[message.entity]=nil
+      existing=nil
+   end
+   if existing then
       if craft_owner then
-         container[message.entity].leader_id=message.leader
+         existing.leader_id=message.leader
          session.pending_leader_owners[craft_owner]=true
       end
       return
@@ -997,6 +1027,10 @@ local function parse_states ( packed, container, owner )
    for line in packed:gmatch("([^;]+)") do
       local f={}; for value in line:gmatch("([^,]+)") do f[#f+1]=value end
       local id=f[1]; local entry=container[id]
+      if entry and not exists(entry.pilot) then
+         container[id]=nil
+         entry=nil
+      end
       if entry and (not owner or entry.owner==owner) and exists(entry.pilot) then
          local state={x=tonumber(f[2]),y=tonumber(f[3]),vx=tonumber(f[4]),vy=tonumber(f[5]),dir=tonumber(f[6]),armour=tonumber(f[7]),shield=tonumber(f[8]),stress=tonumber(f[9]),energy=tonumber(f[10])}
          local bounded=state.x and state.energy and math.abs(state.x)<=1e9 and math.abs(state.y)<=1e9
@@ -1155,6 +1189,7 @@ local function on_message ( peer, message )
          session.settings.recent=session.machine.topology:serialize_peers()
       end
       if message.cap=="player" and session.machine.system then send(peer,base("query"),true) end
+      if message.cap=="player" then refresh_discovered_time_controls() end
       if message.cap=="directory" then
          if session.machine.state=="host" then send(peer,claim_message(),true) end
          if has_feature(meta,"activity") then
@@ -1215,6 +1250,18 @@ local function on_message ( peer, message )
          end
          session.activity=activity
          session.activity_received=received
+         session.activity_generation=session.activity_generation+1
+         for system_name,generation in pairs(session.self_activity) do
+            if generation<session.activity_generation then
+               session.self_activity[system_name]=nil
+            end
+         end
+         if session.machine.system then
+            refresh_discovered_time_controls(received)
+         elseif session.skip_next_host_grace then
+            session.skip_next_host_grace=
+               no_other_players_discovered(session.departed_system)
+         end
          naev.cache().multiplayer_activity={
             received=received,
             entries=activity,
@@ -1517,6 +1564,8 @@ function session.start ( settings )
    session.pending_npc_manifests=nil
    session.activity={}
    session.activity_received=0
+   session.activity_generation=0
+   session.self_activity={}
    session.last_activity_query=0
    session.initial_sync_until=0
    session.solo_since=nil
@@ -1586,6 +1635,14 @@ function session.leave ()
    local current_system=session.machine.system
    session.skip_next_host_grace=session.machine.state=="host"
       and no_other_players_discovered(current_system)
+   if session.machine.state=="host" then
+      for _index,entry in ipairs(session.activity) do
+         if entry.active and entry.system==current_system then
+            session.self_activity[current_system]=session.activity_generation
+            break
+         end
+      end
+   end
    session.departed_system=current_system
    broadcast(base("leave"),true)
    for _entity_id,entry in pairs(session.players) do remove_pilot(entry.pilot) end
