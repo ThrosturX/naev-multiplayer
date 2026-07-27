@@ -1325,8 +1325,37 @@ for _round=1,4 do punch_guest.session.update_object_client() end
 local replacement_buoy=find(punch_guest,"Message Buoy","P2P Message Buoys")
 assert(replacement_buoy and replacement_buoy~=local_buoy,
    "paused gameplay prevented the object client from completing deployment")
--- Simulate the engine removing the pilot without delivering its death hook.
--- The per-frame audit must still report exact-ID destruction.
+-- Docking removes only the local representation. Taking off must replace the
+-- directory subscription and recreate the persisted buoy from a fresh query.
+punch_guest.session.leave()
+assert(replacement_buoy.removed,
+   "docking did not remove the local persistent-object representation")
+assert(punch_guest.session.enter("Gamma Polaris"))
+local takeoff_query
+directory_event=fake_directory:service(0)
+while directory_event do
+   if directory_event.type=="receive" then
+      local message=assert(wire_codec.decode(directory_event.data))
+      if message.type=="object_query" then takeoff_query=message end
+   end
+   directory_event=fake_directory:service(0)
+end
+assert(takeoff_query and takeoff_query.system=="Gamma Polaris",
+   "taking off did not refresh the persistent-object subscription")
+object_directory_peer:send(assert(wire_codec.encode{
+   type="object_entry",node="d1",request=takeoff_query.request,
+   object=replacement_create.object,
+}),0,"reliable")
+object_directory_peer:send(assert(wire_codec.encode{
+   type="object_done",node="d1",system="Gamma Polaris",
+   request=takeoff_query.request,count=1,
+}),0,"reliable")
+for _round=1,4 do punch_guest.session.update_object_client() end
+replacement_buoy=find(punch_guest,"Message Buoy","P2P Message Buoys")
+assert(replacement_buoy,
+   "persisted message buoy was not recreated after docking and takeoff")
+-- Naev can remove system pilots before the landing lifecycle callback. A
+-- missing local representation must never be inferred to be destruction.
 replacement_buoy.removed=true
 update({punch_guest},4)
 local replacement_destruction
@@ -1338,9 +1367,31 @@ while directory_event do
    end
    directory_event=fake_directory:service(0)
 end
+assert(not replacement_destruction,
+   "engine removal of a local buoy falsely deleted its persistent object")
+-- A live subscription push restores a missing representation. Only its real
+-- death hook may then report observer-authorized destruction.
+object_directory_peer:send(assert(wire_codec.encode{
+   type="object_entry",node="d1",request=0,
+   object=replacement_create.object,
+}),0,"reliable")
+for _round=1,4 do punch_guest.session.update_object_client() end
+replacement_buoy=find(punch_guest,"Message Buoy","P2P Message Buoys")
+assert(replacement_buoy
+      and punch_guest.session.message_buoy_destroyed(
+         replacement_object.id,replacement_buoy),
+   "pilot death hook did not authorize exact-ID buoy destruction")
+directory_event=fake_directory:service(0)
+while directory_event do
+   if directory_event.type=="receive" then
+      local message=assert(wire_codec.decode(directory_event.data))
+      if message.type=="object_delete" then replacement_destruction=message end
+   end
+   directory_event=fake_directory:service(0)
+end
 assert(replacement_destruction
       and replacement_destruction.object_id==replacement_object.id,
-   "missing local buoy pilot was silently orphaned in the directory")
+   "real buoy destruction was not reported by exact object ID")
 object_directory_peer:disconnect_now()
 update({punch_guest},4)
 assert(punch_guest.cache.multiplayer_p2p_objects==false,

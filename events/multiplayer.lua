@@ -194,6 +194,10 @@ end
 
 function P2P_SESSION_UPDATE ( dt )
     p2psession.update(dt)
+    -- The regular update loop is authoritative whenever simulation is live.
+    -- The separate safe hook keeps the same bounded object client moving only
+    -- through periods where Naev suspends updates, such as a paused solo host.
+    space_objects.pump()
     local cache = naev.cache()
     local request = cache.multiplayer_buoy_prompt
     if request then

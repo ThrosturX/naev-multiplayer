@@ -8,6 +8,7 @@ local time_control_checks = 0
 local active_session = true
 local typed = ""
 local naev_stub = {
+   cache = function() return {} end,
    keyGet = function(binding)
       assert(binding == "starmap")
       return "M"
@@ -44,10 +45,13 @@ package.loaded["multiplayer.p2p.session"] = {
          time_control_checks=time_control_checks+1
       end
    end,
+   update=function() end,
    input=function() end,
 }
+local object_pumps=0
 package.loaded["multiplayer.p2p.space_objects"] = {
-   start=function() end,stop=function() end,pump=function() end,
+   start=function() end,stop=function() end,
+   pump=function() object_pumps=object_pumps+1 end,
    update=function() end,
 }
 package.loaded.luatk = luatk_stub
@@ -118,6 +122,11 @@ assert(unpauses == 2, "solo-host chat overlay unpaused the simulation")
 assert(time_control_checks == 2,
    "solo-host chat overlay enforced shared-session time controls")
 active_session = true
+
+local pumps_before_update=object_pumps
+P2P_SESSION_UPDATE(1/60)
+assert(object_pumps==pumps_before_update+1,
+   "live gameplay update did not service the persistent-object client")
 
 run_chat()
 assert(map_calls == 0, "starmap opened while chat input was active")

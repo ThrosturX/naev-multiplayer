@@ -1,7 +1,7 @@
 <ship name="Message Buoy">
  <points>0</points>
- <base_type path="Zalek_Scout_Drone">Za'lek Scout Drone</base_type>
- <gfx size="28">zalek_drone_scout.gltf</gfx>
+ <base_type path="Message_Buoy">Message Buoy</base_type>
+ <gfx size="28">message_buoy.gltf</gfx>
  <sound>engine_nexus</sound>
  <class display="Message Buoy">Yacht</class>
  <price>1</price>

@@ -2528,11 +2528,11 @@ function session.update ( dt )
    end
    for object_id,entry in pairs(session.local_objects) do
       if not exists(entry.pilot) then
-         -- The pilot hook is the primary destruction path, but engine hook
-         -- teardown can race pilot removal. Treat an unexpectedly missing
-         -- local copy as destruction instead of silently orphaning its
-         -- persistent directory object.
-         session.message_buoy_destroyed(object_id,entry.pilot)
+         -- Naev removes system pilots during landing and other transitions
+         -- before every lifecycle hook has necessarily run. Absence alone is
+         -- not evidence of combat destruction; only the pilot death hook may
+         -- authorize an observer deletion at the directory.
+         remove_local_object(object_id)
       elseif stamp>=entry.announce_at then
          entry.pilot:broadcast(entry.object.data.text,true)
          entry.announce_at=stamp+BUOY_BROADCAST_INTERVAL
