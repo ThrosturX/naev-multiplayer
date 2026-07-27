@@ -124,13 +124,14 @@ local function ship_fallback_names ( s )
    return table.concat(names,",")
 end
 
-function pod.local_profile ( node )
+function pod.local_profile ( node, track )
    local p=player.pilot()
    if not p or not p:exists() then return nil end
    local s=p:ship()
    return {
       type="contestant_register",
       node=node,
+      track=track,
       division=pod.division_for_size(s:size()),
       name=player.name(),
       ship=s:nameRaw(),
@@ -140,7 +141,7 @@ function pod.local_profile ( node )
    }
 end
 
-function pod.roster_matches_p2p ( config, roster )
+function pod.roster_matches_p2p ( config, roster, track )
    return type(config)=="table"
       and config.enabled==true
       and type(config.directory)=="string"
@@ -154,6 +155,7 @@ function pod.roster_matches_p2p ( config, roster )
       and roster.directory==config.directory
       and roster.node_id==config.node_id
       and roster.captain==config.captain
+      and roster.track==track
       and type(roster.divisions)=="table"
 end
 
@@ -217,9 +219,9 @@ local function select_real ( profiles, division, count, validate )
    return selected
 end
 
-function pod.opponents ( config, roster, division, count, validate )
+function pod.opponents ( config, roster, division, count, validate, track )
    if type(config)=="table" and config.enabled==true then
-      if not pod.roster_matches_p2p(config,roster)
+      if not pod.roster_matches_p2p(config,roster,track)
             or type(roster.divisions[division])~="table" then
          return {}
       end

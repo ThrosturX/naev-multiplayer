@@ -32,12 +32,13 @@ local function publish ()
       directory=job.directory,
       node_id=job.node,
       captain=job.captain,
+      track=job.track,
       divisions=job.divisions,
    }
 end
 
 local function request_rosters ()
-   local profile=pod.local_profile(job.node)
+   local profile=pod.local_profile(job.node,job.track)
    if not profile or not send(profile) then return false end
    for division=1,3 do
       job.request=job.request+1
@@ -47,6 +48,7 @@ local function request_rosters ()
          type="contestant_query",
          node=job.node,
          division=division,
+         track=job.track,
          request=request,
          limit=MAX_CONTESTANTS_PER_DIVISION,
       } then return false end
@@ -75,6 +77,7 @@ local function receive ( packet )
    end
    local pending=job.pending[message.division]
    if not pending or pending.request~=message.request then return end
+   if message.track~=job.track then return end
    if message.type=="contestant_entry" then
       if #pending.entries>=MAX_CONTESTANTS_PER_DIVISION then return end
       for _index,entry in ipairs(pending.entries) do
@@ -100,14 +103,16 @@ local function receive ( packet )
    end
 end
 
-function network.start ( config )
+function network.start ( config, track )
    network.stop(true)
    if type(config)~="table" or config.enabled~=true
          or type(config.directory)~="string" or config.directory==""
          or type(config.node_id)~="string"
          or not config.node_id:match("^[%x]+$")
          or type(config.captain)~="string"
-         or config.captain~=player.name() then
+         or config.captain~=player.name()
+         or (track~=nil and (type(track)~="string" or track==""
+            or #track>64 or track:find("[^%w_%-]"))) then
       return nil,"contestant directory unavailable"
    end
    local host=enet.host_create("*:0")
@@ -119,6 +124,7 @@ function network.start ( config )
       peer=peer,
       node=config.node_id,
       captain=config.captain,
+      track=track,
       directory=config.directory,
       endpoint=tostring(host:get_socket_address()),
       verified=false,

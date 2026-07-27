@@ -87,6 +87,10 @@ local function validate ( message )
          or message.features:find("[^%w_,%-]")) then
       return nil, "invalid features"
    end
+   if message.track and (#message.track>64
+         or message.track:find("[^%w_%-]")) then
+      return nil, "invalid track"
+   end
    if message.type == "hello" and message.cap == "player" then
       if type(message.name) ~= "string" or message.name == "" then return nil, "missing name" end
    end

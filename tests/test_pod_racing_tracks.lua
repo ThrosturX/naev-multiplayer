@@ -41,11 +41,14 @@ assert(tracks~=canonical and tracks[1]~=canonical[1]
    "canonical tracks were not copied into a separate list")
 assert(tracks[1].contestants==4 and tracks[2].contestants==6
    and tracks[3].contestants==8,"canonical track contestant limits changed")
+assert(tracks[1].id=="peninsula" and tracks[2].id=="smiling_man"
+   and tracks[3].id=="qex_tour","canonical track IDs changed")
 
 local crossfire = tracks[#tracks]
 assert(#tracks==4 and crossfire.name=="Melendez Death Knot",
    "Melendez Death Knot is not the final Pod-only track")
 assert(crossfire.reward==350e3 and crossfire.scale==4)
+assert(crossfire.id=="death_knot")
 assert(crossfire.contestants==12 and crossfire.team_size==2
    and crossfire.team_min_contestants==6)
 assert(type(crossfire.description)=="string" and crossfire.description~="")

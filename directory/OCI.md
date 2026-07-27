@@ -94,7 +94,9 @@ Replace `ubuntu@203.0.113.10` with the SSH target:
 
 ```sh
 rsync -azR directory/main.lua directory/multiplayer-directory.service \
-  scripts/multiplayer/contestant_store.lua scripts/multiplayer/p2p/codec.lua \
+  scripts/multiplayer/contestant_store.lua \
+  scripts/multiplayer/contestant_track_store.lua \
+  scripts/multiplayer/p2p/codec.lua \
   scripts/multiplayer/p2p/directory.lua \
   ubuntu@203.0.113.10:/tmp/naev-multiplayer-update/
 ssh ubuntu@203.0.113.10 \
@@ -102,7 +104,8 @@ ssh ubuntu@203.0.113.10 \
 ```
 
 Players must update the plugin too because older `MP2P/1` clients ignore the
-new directory messages. The service persists the bounded contestant roster in
-`/var/lib/naev-multiplayer/contestants.db`; systemd creates and protects that
-state directory. No firewall changes beyond directory UDP port `60939` are
-needed on the VM.
+new directory messages. The service persists the latest contestant profiles in
+`/var/lib/naev-multiplayer/contestants.db` and exact track profiles in
+`/var/lib/naev-multiplayer/contestant-tracks.db`; systemd creates and protects
+that state directory. No firewall changes beyond directory UDP port `60939`
+are needed on the VM.

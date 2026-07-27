@@ -48,9 +48,10 @@ local config={
 }
 local roster={
    received=100,directory="example.test:60939",node_id="a1",
-   captain="Captain A",divisions={},
+   captain="Captain A",track="death_knot",divisions={},
 }
-assert(pod.roster_matches_p2p(config,roster))
+assert(pod.roster_matches_p2p(config,roster,"death_knot"))
+assert(not pod.roster_matches_p2p(config,roster,"peninsula"))
 config.captain="Captain B"
 assert(not pod.roster_matches_p2p(config,roster))
 config.captain="Captain A"
@@ -75,11 +76,11 @@ local function validate ( profile )
    return profile
 end
 
-local selected=pod.opponents(config,roster,1,5,validate)
+local selected=pod.opponents(config,roster,1,5,validate,"death_knot")
 assert(#selected==0,"enabled P2P without a division roster used fallbacks")
 
 roster.divisions[1]=profiles
-selected=pod.opponents(config,roster,1,5,validate)
+selected=pod.opponents(config,roster,1,5,validate,"death_knot")
 assert(#selected==1 and selected[1].name=="A",
    "real directory profiles were padded with fallbacks")
 

@@ -25,11 +25,13 @@ local host_peer={}
 local guest_peer={}
 assert(service:connect(host_peer,"198.51.100.10:45000"))
 assert(sent[#sent].message.type=="hello" and sent[#sent].message.cap=="directory"
-   and sent[#sent].message.features=="activity,contestants")
+   and sent[#sent].message.features==
+      "activity,contestants,contestants_by_track")
 assert(service:receive(host_peer,assert(codec.encode{type="hello",node="10",cap="player",name="Host",
    endpoint="0.0.0.0:62001"})))
 assert(service:receive(host_peer,assert(codec.encode{
-   type="contestant_register",node="10",division=1,name="Host Captain",
+   type="contestant_register",node="10",track="peninsula",division=1,
+   name="Host Captain",
    ship="Hyena",outfits="Laser%20Cannon",slots="1:Laser%20Cannon",
    ship_fallbacks="Hyena"})))
 assert(service:receive(host_peer,assert(codec.encode{type="claim",node="10",system="Delta Polaris",
@@ -52,14 +54,68 @@ assert(contestant and contestant.contestant=="10" and contestant.name=="Host Cap
 assert(contestant_done and contestant_done.count==1 and contestant_done.request==7)
 
 -- A node can replace only its own profile, and is excluded from its results.
+service:register_contestant{
+   node="10",division=2,name="Host Captain",ship="Rhino",
+   outfits="Laser%20Turret",slots="1:Laser%20Turret",
+}
+assert(service.contestants["10"].ship=="Rhino"
+   and service.track_contestants["10:peninsula:1"].ship=="Hyena",
+   "latest fallback profile or exact track profile was not retained")
 assert(service:receive(guest_peer,assert(codec.encode{
    type="contestant_register",node="20",division=2,name="Guest Captain",
    ship="Admonisher",outfits="Laser",slots="1:Laser"})))
 local self_at=#sent+1
 assert(service:receive(guest_peer,assert(codec.encode{
    type="contestant_query",node="20",division=2,request=8,limit=11})))
-assert(not find_sent(self_at,guest_peer,"contestant_entry"))
-assert(find_sent(self_at,guest_peer,"contestant_done").count==0)
+local medium=find_sent(self_at,guest_peer,"contestant_entry")
+assert(medium and medium.contestant=="10" and medium.ship=="Rhino",
+   "division query lost another division or included the querying node")
+assert(find_sent(self_at,guest_peer,"contestant_done").count==1)
+
+-- Exact track/class profiles come first. If that pool is short, the directory
+-- fills it from each player's latest compatible profile, newest first.
+clock=110
+service:register_contestant{
+   node="30",track="qex_tour",division=1,name="Older Fallback",
+   ship="Shark",outfits="Laser",slots="1:Laser",
+}
+clock=120
+service:register_contestant{
+   node="40",track="smiling_man",division=1,name="Newer Fallback",
+   ship="Vendetta",outfits="Laser",slots="1:Laser",
+}
+clock=130
+service:register_contestant{
+   node="50",track="qex_tour",division=1,name="Changed Division",
+   ship="Shark",outfits="Laser",slots="1:Laser",
+}
+clock=140
+service:register_contestant{
+   node="50",track="death_knot",division=2,name="Changed Division",
+   ship="Admonisher",outfits="Laser",slots="1:Laser",
+}
+local track_at=#sent+1
+assert(service:send_contestants(guest_peer,{
+   type="contestant_query",node="20",track="peninsula",division=1,
+   request=9,limit=11,
+}))
+local track_entries={}
+for index=track_at,#sent do
+   local message=sent[index].message
+   if message.type=="contestant_entry" then
+      track_entries[#track_entries+1]=message
+      assert(message.track=="peninsula")
+   end
+end
+assert(#track_entries==4)
+assert(track_entries[1].contestant=="10" and track_entries[1].ship=="Hyena",
+   "exact track profile was not preferred over the player's latest profile")
+assert(track_entries[2].contestant=="50" and track_entries[2].ship=="Shark",
+   "compatible cross-pool profile was hidden by a newer weight class")
+assert(track_entries[3].contestant=="40"
+   and track_entries[4].contestant=="30",
+   "cross-pool fallback profiles were not returned most-recent first")
+assert(find_sent(track_at,guest_peer,"contestant_done").track=="peninsula")
 local introduced_at=#sent+1
 assert(service:receive(guest_peer,assert(codec.encode{type="query",node="20",system="Delta Polaris"})))
 local hint=find_sent(introduced_at,guest_peer,"hint")
@@ -155,6 +211,7 @@ assert(active==nil)
 clock=clock+90*24*60*60+1
 service:prune()
 assert(next(service.contestants)==nil)
+assert(next(service.track_contestants)==nil)
 
 -- Gameplay packets are ignored, and packets before hello are rejected.
 local bad_peer={}

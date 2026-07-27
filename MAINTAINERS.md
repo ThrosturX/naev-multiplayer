@@ -41,10 +41,13 @@ state is replaceable and unreliable. Validate peer values before resolving
 ships, factions, outfits, pilots, or UI.
 
 Contestant registration, queries, entries, and completion markers are reliable
-directory-only messages. The directory retains at most 4,096 profiles for 90
-days in its systemd state directory. Clients must validate the advertised ship
-division and every resource locally; missing or malformed profiles fall back to
-generic racers.
+directory-only messages. The directory retains bounded latest-profile and
+track-specific pools for 90 days in its systemd state directory. Track queries
+prefer the matching track and ship division, then fill from the most recently
+registered profiles in that division. Clients must validate the advertised
+ship division and every resource locally; missing or malformed directory
+profiles are discarded and may produce a smaller field, never a synthetic
+player.
 
 Reliable add/remove manifests are the normal entity lifecycle. Initial and
 full-resync NPC manifests use bounded reliable batches, with at most one batch

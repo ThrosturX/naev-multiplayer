@@ -234,7 +234,7 @@ local function roster_profiles ()
    local cached=naev.cache().multiplayer_contestants
    local track=tracks[mem.track_index]
    return pod.opponents(config,cached,mem.division,
-      math.max(0,(track.contestants or 6)-1),validate_profile)
+      math.max(0,(track.contestants or 6)-1),validate_profile,track.id)
 end
 
 local function install_exact ( p, profile )
@@ -383,17 +383,18 @@ function start_race ()
    end
    local config=naev.cache().multiplayer_p2p_config
    local cached=naev.cache().multiplayer_contestants
+   local track=tracks[mem.track_index]
    if type(config)=="table" and config.enabled==true
-         and not pod.roster_matches_p2p(config,cached) then
+         and not pod.roster_matches_p2p(config,cached,track.id) then
       mem.roster_deadline=mem.roster_deadline or naev.ticks()+ROSTER_WAIT
       if not roster_requested then
-         roster_requested=roster_network.start(config)==true
+         roster_requested=roster_network.start(config,track.id)==true
       end
       if roster_requested and roster_network.active() then
          roster_network.update()
       end
       cached=naev.cache().multiplayer_contestants
-      if pod.roster_matches_p2p(config,cached) then
+      if pod.roster_matches_p2p(config,cached,track.id) then
          roster_network.stop(false)
          roster_requested=nil
       elseif naev.ticks()<mem.roster_deadline then

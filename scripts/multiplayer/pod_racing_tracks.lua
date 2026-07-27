@@ -3,10 +3,12 @@
 local canonical = require "missions.neutral.race.tracks_qex"
 local tracks = {}
 local canonical_contestants = {4,6,8}
+local canonical_ids = {"peninsula","smiling_man","qex_tour"}
 for index,track in ipairs(canonical) do
    local copy={}
    for key,value in pairs(track) do copy[key]=value end
    copy.contestants=canonical_contestants[index]
+   copy.id=canonical_ids[index]
    tracks[index]=copy
 end
 
@@ -64,6 +66,7 @@ local crossfire_points = {
 }
 
 tracks[#tracks+1] = {
+   id="death_knot",
    name=N_("Melendez Death Knot"),
    description=N_("Large fields form random two-pilot teams to fight through four combat lobes, a central killbox, and a diagonal revenge gauntlet."),
    reward=350e3,

@@ -12,6 +12,10 @@ local ACTIVITY_PAYLOAD = 3000
 local MAX_CONTESTANTS = 4096
 local CONTESTANT_RETENTION = 90*24*60*60
 
+local function track_contestant_key ( node, track, division )
+   return node..":"..track..":"..tostring(division)
+end
+
 local function endpoint_host ( endpoint )
    if type(endpoint)~="string" then return nil end
    return endpoint:match("^([^:%s]+):%d+$")
@@ -41,6 +45,8 @@ function directory.new ( options )
       random=options.random or math.random,
       contestants=options.contestants or {},
       contestant_dirty=options.contestant_dirty or function() end,
+      track_contestants=options.track_contestants or {},
+      track_contestant_dirty=options.track_contestant_dirty or function() end,
       peers={}, hosts={}, activity={},
    },directory)
 end
@@ -55,7 +61,7 @@ function directory:connect ( peer, observed_endpoint )
    self.peers[peer]={endpoint=canonical_endpoint(observed_endpoint),queries={},
       contestant_queries=0,contestant_registered=false}
    return self:send(peer,{type="hello",node=self.node_id,cap="directory",
-      features="activity,contestants"})
+      features="activity,contestants,contestants_by_track"})
 end
 
 function directory:disconnect_peer ( peer )
@@ -80,45 +86,49 @@ function directory:prune ()
    -- hint costs one failed direct connection before normal local claiming,
    -- while forgetting a reachable host can create a needless split brain.
    local stamp=self.now()
-   local removed=false
-   for node,entry in pairs(self.contestants) do
-      if type(entry.seen)~="number" or stamp-entry.seen>CONTESTANT_RETENTION then
-         self.contestants[node]=nil
-         removed=true
+   local function prune_profiles ( profiles )
+      local removed=false
+      for key,entry in pairs(profiles) do
+         if type(entry.seen)~="number"
+               or stamp-entry.seen>CONTESTANT_RETENTION then
+            profiles[key]=nil
+            removed=true
+         end
       end
-   end
-   local count=0
-   for _node in pairs(self.contestants) do count=count+1 end
-   if count>MAX_CONTESTANTS then
+      local count=0
+      for _key in pairs(profiles) do count=count+1 end
+      if count<=MAX_CONTESTANTS then return removed end
       local ordered={}
-      for node,entry in pairs(self.contestants) do
-         ordered[#ordered+1]={node=node,seen=entry.seen}
+      for key,entry in pairs(profiles) do
+         ordered[#ordered+1]={key=key,seen=entry.seen}
       end
       table.sort(ordered,function(a,b) return a.seen>b.seen end)
       for index=MAX_CONTESTANTS+1,#ordered do
-         self.contestants[ordered[index].node]=nil
+         profiles[ordered[index].key]=nil
       end
-      removed=true
+      return true
    end
-   if removed then self.contestant_dirty() end
+   if prune_profiles(self.contestants) then self.contestant_dirty() end
+   if prune_profiles(self.track_contestants) then
+      self.track_contestant_dirty()
+   end
 end
 
-function directory:make_contestant_room ()
-   local count,oldest_node,oldest_seen=0
-   for node,entry in pairs(self.contestants) do
+local function make_contestant_room ( profiles )
+   local count,oldest_key,oldest_seen=0
+   for key,entry in pairs(profiles) do
       count=count+1
       if not oldest_seen or entry.seen<oldest_seen then
-         oldest_node,oldest_seen=node,entry.seen
+         oldest_key,oldest_seen=key,entry.seen
       end
    end
-   if count>=MAX_CONTESTANTS and oldest_node then
-      self.contestants[oldest_node]=nil
+   if count>=MAX_CONTESTANTS and oldest_key then
+      profiles[oldest_key]=nil
    end
 end
 
 function directory:register_contestant ( message )
-   if not self.contestants[message.node] then self:make_contestant_room() end
-   self.contestants[message.node]={
+   local entry={
       node=message.node,
       seen=self.now(),
       division=message.division,
@@ -128,20 +138,68 @@ function directory:register_contestant ( message )
       outfits=message.outfits,
       slots=message.slots,
    }
+   if not self.contestants[message.node] then
+      make_contestant_room(self.contestants)
+   end
+   self.contestants[message.node]=entry
    self.contestant_dirty()
+   if message.track then
+      local key=track_contestant_key(message.node,message.track,message.division)
+      if not self.track_contestants[key] then
+         make_contestant_room(self.track_contestants)
+      end
+      local track_entry={}
+      for field,value in pairs(entry) do track_entry[field]=value end
+      track_entry.track=message.track
+      self.track_contestants[key]=track_entry
+      self.track_contestant_dirty()
+   end
 end
 
 function directory:send_contestants ( peer, message )
-   local candidates={}
-   for node,entry in pairs(self.contestants) do
-      if node~=message.node and entry.division==message.division then
-         candidates[#candidates+1]=entry
+   local candidates,seen={},{}
+   if message.track then
+      for _key,entry in pairs(self.track_contestants) do
+         if entry.node~=message.node and entry.track==message.track
+               and entry.division==message.division then
+            candidates[#candidates+1]=entry
+            seen[entry.node]=true
+         end
+      end
+      table.sort(candidates,function(a,b)
+         if a.seen~=b.seen then return a.seen>b.seen end
+         return a.node<b.node
+      end)
+   end
+
+   local fallback_by_node={}
+   if message.track then
+      for _key,entry in pairs(self.track_contestants) do
+         local previous=fallback_by_node[entry.node]
+         if entry.node~=message.node and not seen[entry.node]
+               and entry.division==message.division
+               and (not previous or entry.seen>previous.seen) then
+            fallback_by_node[entry.node]=entry
+         end
       end
    end
-   for index=#candidates,2,-1 do
-      local swap=self.random(1,index)
-      candidates[index],candidates[swap]=candidates[swap],candidates[index]
+   for node,entry in pairs(self.contestants) do
+      local previous=fallback_by_node[node]
+      if node~=message.node and not seen[node]
+            and entry.division==message.division
+            and (not previous or entry.seen>previous.seen) then
+         fallback_by_node[node]=entry
+      end
    end
+   local fallback={}
+   for _node,entry in pairs(fallback_by_node) do
+      fallback[#fallback+1]=entry
+   end
+   table.sort(fallback,function(a,b)
+      if a.seen~=b.seen then return a.seen>b.seen end
+      return a.node<b.node
+   end)
+   for _index,entry in ipairs(fallback) do candidates[#candidates+1]=entry end
 
    local count=math.min(message.limit,#candidates)
    for index=1,count do
@@ -151,6 +209,7 @@ function directory:send_contestants ( peer, message )
          node=self.node_id,
          contestant=entry.node,
          division=entry.division,
+         track=message.track,
          request=message.request,
          name=entry.name,
          ship=entry.ship,
@@ -163,6 +222,7 @@ function directory:send_contestants ( peer, message )
       type="contestant_done",
       node=self.node_id,
       division=message.division,
+      track=message.track,
       request=message.request,
       count=count,
    })
@@ -170,6 +230,10 @@ end
 
 function directory:dump_contestants ()
    return self.contestants
+end
+
+function directory:dump_track_contestants ()
+   return self.track_contestants
 end
 
 function directory:make_host_room ()
