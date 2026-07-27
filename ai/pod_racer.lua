@@ -9,9 +9,24 @@ mem.atk_kill = true
 mem.atk_board = false
 mem.land_planet = false
 
+local function beam_duration ( p, weapon_set )
+   local _name,weapons=p:weapset(weapon_set)
+   local duration=0
+   for _index,weapon in ipairs(weapons) do
+      if weapon.charge~=nil then
+         local configured=weapon.outfit:specificstats().duration
+         duration=math.max(duration,tonumber(configured) or 0)
+      end
+   end
+   return duration
+end
+
 function create ()
    create_pre()
    create_post()
+   local p=ai.pilot()
+   mem.pod_primary_beam_duration=beam_duration(p,1)
+   mem.pod_secondary_beam_duration=beam_duration(p,2)
 end
 
 function control ()
@@ -62,8 +77,22 @@ function pod_race ()
    atk.fighterbays()
    if distance<=(atk.turrets_range() or 0) then atk.turrets() end
    if distance<=(atk.seeker_turrets_range() or 0) then atk.seeker_turrets() end
+   local primary_held=mem.pod_primary_beam_duration>0 and not ai.timeup(0)
+   local secondary_held=mem.pod_secondary_beam_duration>0 and not ai.timeup(1)
+   if primary_held then atk.primary() end
+   if secondary_held then atk.secondary() end
    if math.abs(ai.dir(target))<math.rad(18) then
-      if distance<=(atk.primary_range() or 0) then atk.primary() end
-      if distance<=(atk.secondary_range() or 0) then atk.secondary() end
+      if distance<=(atk.primary_range() or 0) then
+         atk.primary()
+         if mem.pod_primary_beam_duration>0 and not primary_held then
+            ai.settimer(0,mem.pod_primary_beam_duration)
+         end
+      end
+      if distance<=(atk.secondary_range() or 0) then
+         atk.secondary()
+         if mem.pod_secondary_beam_duration>0 and not secondary_held then
+            ai.settimer(1,mem.pod_secondary_beam_duration)
+         end
+      end
    end
 end
