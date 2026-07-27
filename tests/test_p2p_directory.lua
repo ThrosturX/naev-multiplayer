@@ -26,7 +26,7 @@ local guest_peer={}
 assert(service:connect(host_peer,"198.51.100.10:45000"))
 assert(sent[#sent].message.type=="hello" and sent[#sent].message.cap=="directory"
    and sent[#sent].message.features==
-      "activity,contestants,contestants_by_track")
+      "activity,contestants,contestants_by_track,objects")
 assert(service:receive(host_peer,assert(codec.encode{type="hello",node="10",cap="player",name="Host",
    endpoint="0.0.0.0:62001"})))
 assert(service:receive(host_peer,assert(codec.encode{

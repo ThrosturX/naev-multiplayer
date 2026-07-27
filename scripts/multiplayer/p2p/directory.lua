@@ -1,6 +1,7 @@
 -- Minimal in-memory MP2P/1 directory. Networking is injected so this module
 -- can be tested without lua-enet or a Naev process.
 local codec = require "multiplayer.p2p.codec"
+local ObjectDirectory = require "multiplayer.p2p.object_directory"
 
 local directory = {}
 directory.__index = directory
@@ -37,7 +38,7 @@ end
 
 function directory.new ( options )
    options=options or {}
-   return setmetatable({
+   local self=setmetatable({
       node_id=assert(options.node_id,"directory node ID required"),
       now=options.now or os.time,
       send_packet=assert(options.send,"directory send callback required"),
@@ -49,6 +50,14 @@ function directory.new ( options )
       track_contestant_dirty=options.track_contestant_dirty or function() end,
       peers={}, hosts={}, activity={},
    },directory)
+   self.objects=ObjectDirectory.new{
+      node_id=self.node_id,
+      values=options.objects or {},
+      now=self.now,
+      dirty=options.object_dirty,
+      send=function(peer,message) return self:send(peer,message) end,
+   }
+   return self
 end
 
 function directory:send ( peer, message )
@@ -61,7 +70,7 @@ function directory:connect ( peer, observed_endpoint )
    self.peers[peer]={endpoint=canonical_endpoint(observed_endpoint),queries={},
       contestant_queries=0,contestant_registered=false}
    return self:send(peer,{type="hello",node=self.node_id,cap="directory",
-      features="activity,contestants,contestants_by_track"})
+      features="activity,contestants,contestants_by_track,objects"})
 end
 
 function directory:disconnect_peer ( peer )
@@ -74,6 +83,7 @@ function directory:disconnect_peer ( peer )
       end
    end
    self.peers[peer]=nil
+   self.objects:disconnect(peer)
 end
 
 function directory:reject ( peer )
@@ -417,8 +427,17 @@ function directory:receive ( peer, packet )
       return true
    end
 
+   if message.type=="object_query" or message.type=="object_create"
+         or message.type=="object_delete" then
+      return self.objects:receive(peer,meta.node,message)
+   end
+
    -- Directory peers never join systems or relay gameplay messages.
    return true
+end
+
+function directory:dump_objects ()
+   return self.objects:dump()
 end
 
 return directory

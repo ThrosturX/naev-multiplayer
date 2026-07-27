@@ -13,6 +13,7 @@ DynamicUser=true
 StateDirectory=naev-multiplayer
 Environment=MP2P_CONTESTANT_FILE=/var/lib/naev-multiplayer/contestants.db
 Environment=MP2P_CONTESTANT_TRACK_FILE=/var/lib/naev-multiplayer/contestant-tracks.db
+Environment=MP2P_OBJECT_FILE=/var/lib/naev-multiplayer/objects.db
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

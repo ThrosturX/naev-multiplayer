@@ -43,10 +43,12 @@ assert(tracks[1].contestants==4 and tracks[2].contestants==6
    and tracks[3].contestants==8,"canonical track contestant limits changed")
 assert(tracks[1].id=="peninsula" and tracks[2].id=="smiling_man"
    and tracks[3].id=="qex_tour","canonical track IDs changed")
+assert(tracks[3].name=="Alteris Tour" and tracks[3].centre==true,
+   "Qex Tour was not recentered and renamed for Alteris")
 
 local crossfire = tracks[#tracks]
-assert(#tracks==4 and crossfire.name=="Melendez Death Knot",
-   "Melendez Death Knot is not the final Pod-only track")
+assert(#tracks==4 and crossfire.name=="Darkshed Death Knot",
+   "Darkshed Death Knot is not the final Death Race-only track")
 assert(crossfire.reward==350e3 and crossfire.scale==4)
 assert(crossfire.id=="death_knot")
 assert(crossfire.contestants==12 and crossfire.team_size==2
@@ -97,4 +99,4 @@ end
 assert(crossfire.track[#crossfire.track][4]:dist(crossfire.track[1][1])==0,
    "final Bézier segment does not close the loop")
 
-print("ok - pod racing track definitions")
+print("ok - death race track definitions")

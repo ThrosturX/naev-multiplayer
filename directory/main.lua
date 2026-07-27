@@ -7,12 +7,15 @@ local enet=require "enet"
 local Directory=require "multiplayer.p2p.directory"
 local ContestantStore=require "multiplayer.contestant_store"
 local ContestantTrackStore=require "multiplayer.contestant_track_store"
+local ObjectStore=require "multiplayer.object_store"
 
 local bind=arg[1] or os.getenv("MP2P_DIRECTORY_BIND") or "*:60939"
 local contestant_path=arg[2] or os.getenv("MP2P_CONTESTANT_FILE")
    or "/var/lib/naev-multiplayer/contestants.db"
 local contestant_track_path=arg[3] or os.getenv("MP2P_CONTESTANT_TRACK_FILE")
    or "/var/lib/naev-multiplayer/contestant-tracks.db"
+local object_path=arg[4] or os.getenv("MP2P_OBJECT_FILE")
+   or "/var/lib/naev-multiplayer/objects.db"
 local node_id=os.getenv("MP2P_DIRECTORY_NODE_ID")
 math.randomseed(os.time())
 if not node_id or not node_id:match("^[%x]+$") then
@@ -33,14 +36,27 @@ if contestant_track_file then
       contestant_track_file:read("*a"))
    contestant_track_file:close()
 end
+local objects={}
+local object_file=io.open(object_path,"rb")
+if object_file then
+   local warning
+   objects,warning=ObjectStore.decode(object_file:read("*a"))
+   object_file:close()
+   if warning then io.stderr:write("object database: ",warning,"\n") end
+end
 local contestants_dirty=false
 local track_contestants_dirty=false
+-- Materialize the separately versioned database on first start so operators
+-- can verify the feature without waiting for the first player-created object.
+local objects_dirty=object_file==nil
 local service=Directory.new{
    node_id=node_id,
    contestants=contestants,
    contestant_dirty=function() contestants_dirty=true end,
    track_contestants=track_contestants,
    track_contestant_dirty=function() track_contestants_dirty=true end,
+   objects=objects,
+   object_dirty=function() objects_dirty=true end,
    send=function(peer,packet) return peer:send(packet,0,"reliable") end,
    disconnect=function(peer) peer:disconnect_now() end,
 }
@@ -62,6 +78,25 @@ local function save_contestants ()
       return
    end
    contestants_dirty=false
+end
+
+local function save_objects ()
+   if not objects_dirty then return end
+   local temporary=object_path..".tmp"
+   local file,err=io.open(temporary,"wb")
+   if not file then
+      io.stderr:write("unable to write persistent objects: ",tostring(err),"\n")
+      return
+   end
+   file:write(ObjectStore.encode(service:dump_objects()))
+   file:close()
+   local ok,rename_err=os.rename(temporary,object_path)
+   if not ok then
+      io.stderr:write("unable to replace persistent objects: ",
+         tostring(rename_err),"\n")
+      return
+   end
+   objects_dirty=false
 end
 
 local function save_track_contestants ()
@@ -102,4 +137,5 @@ while true do
    service:prune()
    save_contestants()
    save_track_contestants()
+   save_objects()
 end

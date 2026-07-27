@@ -1,5 +1,6 @@
--- Pod Racing shares Qex's established courses without mutating the canonical
--- module table, then adds combat-oriented courses of its own.
+-- Death Race reuses Qex's established course shapes without mutating the
+-- canonical module table, then adds a combat-oriented course of its own.
+-- Stable internal IDs are retained for existing directory contestant records.
 local canonical = require "missions.neutral.race.tracks_qex"
 local tracks = {}
 local canonical_contestants = {4,6,8}
@@ -9,6 +10,10 @@ for index,track in ipairs(canonical) do
    for key,value in pairs(track) do copy[key]=value end
    copy.contestants=canonical_contestants[index]
    copy.id=canonical_ids[index]
+   if index==3 then
+      copy.name=N_("Alteris Tour")
+      copy.centre=true
+   end
    tracks[index]=copy
 end
 
@@ -67,7 +72,7 @@ local crossfire_points = {
 
 tracks[#tracks+1] = {
    id="death_knot",
-   name=N_("Melendez Death Knot"),
+   name=N_("Darkshed Death Knot"),
    description=N_("Large fields form random two-pilot teams to fight through four combat lobes, a central killbox, and a diagonal revenge gauntlet."),
    reward=350e3,
    contestants=12,

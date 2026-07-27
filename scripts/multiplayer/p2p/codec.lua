@@ -35,6 +35,8 @@ local valid_types = {
    npc_manifest=true, npc_add=true, npc_remove=true, npc_state=true,
    npc_control=true,
    craft_manifest=true, craft_state=true, craft_remove=true, craft_order=true,
+   object_create=true, object_query=true, object_entry=true, object_done=true,
+   object_delete=true, object_deleted=true, object_result=true,
    resync=true,
 }
 
@@ -62,12 +64,20 @@ local required = {
    craft_state={"node","system","owner","seq","entities"},
    craft_remove={"node","system","owner","entity","seq"},
    craft_order={"node","system","owner","seq","order"},
+   object_create={"node","request","object_id","object"},
+   object_query={"node","system","request"},
+   object_entry={"node","request","object"},
+   object_done={"node","system","request","count"},
+   object_delete={"node","request","object_id"},
+   object_deleted={"node","object_id","revision"},
+   object_result={"node","request","action","ok","code","object_id","revision"},
    resync={"node","system","seq","scope"},
 }
 
 local numeric = {
    seq={0, 9007199254740991}, ttl={1, 60},
-   division={1,3}, request={0,9007199254740991}, limit={1,11}, count={0,11},
+   division={1,3}, request={0,9007199254740991}, limit={1,11},
+   count={0,4096}, revision={1,9007199254740991}, ok={0,1},
    x={-1e9,1e9}, y={-1e9,1e9}, vx={-1e7,1e7}, vy={-1e7,1e7},
    dir={-1e6,1e6}, accel={0,1}, primary={0,1}, secondary={0,1},
    armour={0,1e9}, shield={0,1e9}, stress={0,1e9}, energy={0,1e9},
@@ -128,6 +138,20 @@ local function validate ( message )
    if message.entries and (#message.entries > 12000
          or message.entries:find("[%z\1-\31\127]")) then
       return nil, "invalid entries"
+   end
+   if message.object and (#message.object > 12000
+         or message.object:find("[%z\1-\31\127]")) then
+      return nil, "invalid object"
+   end
+   if message.object_id and (#message.object_id > 128
+         or not message.object_id:match("^[%w_%-]+$")) then
+      return nil, "invalid object id"
+   end
+   if message.action and message.action~="create"
+         and message.action~="delete" then return nil,"invalid object action" end
+   if message.code and (#message.code>32
+         or not message.code:match("^[%w_%-]+$")) then
+      return nil,"invalid result code"
    end
    if message.claim and (#message.claim > 128 or message.claim:find("[%z\1-\31\127]")) then
       return nil, "invalid claim"

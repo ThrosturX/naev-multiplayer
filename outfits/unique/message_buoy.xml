@@ -1,0 +1,17 @@
+<outfit name="Message Buoy">
+ <general>
+  <rarity>4</rarity>
+  <typename>Message Buoy</typename>
+  <slot>utility</slot>
+  <size>small</size>
+  <mass>1</mass>
+  <price>100000</price>
+  <description>Deploys a persistent, destructible message buoy through an object-capable multiplayer directory.</description>
+  <desc_extra>Only one message buoy may be fitted at a time. The fitted buoy is consumed after the directory confirms deployment.</desc_extra>
+  <gfx_store>fake_transponder</gfx_store>
+  <limit>message_buoy</limit>
+ </general>
+ <specific type="modification">
+  <lua>outfits/unique/message_buoy.lua</lua>
+ </specific>
+</outfit>

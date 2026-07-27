@@ -89,4 +89,4 @@ selected=pod.opponents(config,roster,1,11,validate)
 assert(#selected==11 and selected[1].generic and selected[11].generic,
    "disabled P2P did not use the generic field")
 
-print("ok - pod racing roster selection")
+print("ok - death race roster selection")

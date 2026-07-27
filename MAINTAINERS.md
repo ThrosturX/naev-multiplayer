@@ -20,13 +20,13 @@ The isolated P2P implementation is:
 loaded by Naev. The directory never joins a system or relays gameplay data;
 its reliable `punch` introductions only make both players dial one another.
 
-Pod Racing is deliberately outside the persistent P2P session.
-`events/pod_racing_roster.lua` loads only on entering Qex and owns a bounded,
+Death Race is deliberately outside the persistent P2P session.
+`events/pod_racing_roster.lua` loads only on entering Alteris and owns a bounded,
 short-lived directory client. It publishes a plain roster snapshot through
 `naev.cache()` and exits after one response or timeout. If that prefetch did
-not run, such as when loading a save already landed in Qex, the mission services
-the same bounded client while its directory-contact message is visible. The
-mission and its AI must not be imported by `events/multiplayer.lua` or
+not run, such as when loading a save already landed on Darkshed, the mission
+services the same bounded client while its directory-contact message is visible.
+The mission and its AI must not be imported by `events/multiplayer.lua` or
 `p2p/session.lua`.
 
 Only plain settings are persisted. ENet hosts/peers, ownership claims, hooks,

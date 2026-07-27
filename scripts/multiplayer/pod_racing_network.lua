@@ -1,4 +1,4 @@
--- Short-lived directory client used only by the Qex contestant-roster event.
+-- Short-lived directory client used only by the Alteris Death Race roster.
 local codec = require "multiplayer.p2p.codec"
 local pod = require "multiplayer.pod_racing"
 local enet = require "enet"

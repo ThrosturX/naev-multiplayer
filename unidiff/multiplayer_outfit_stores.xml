@@ -1,9 +1,11 @@
 <unidiff name="multiplayer_outfit_stores">
  <spob name="Halir">
   <tech_add>Distress Beacon</tech_add>
+  <tech_add>Message Buoy</tech_add>
  </spob>
  <spob name="Mining Vrata Guildhouse">
   <tech_add>Distress Beacon</tech_add>
+  <tech_add>Message Buoy</tech_add>
  </spob>
  <spob name="New Haven">
   <tech_add>Activity Scanner</tech_add>

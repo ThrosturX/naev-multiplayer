@@ -1,9 +1,9 @@
 --[[
 <?xml version='1.0' encoding='utf8'?>
-<event name="Pod Racing Roster">
+<event name="Death Race Roster">
  <location>enter</location>
  <chance>100</chance>
- <system>Qex</system>
+ <system>Alteris</system>
 </event>
 --]]
 local network = require "multiplayer.pod_racing_network"

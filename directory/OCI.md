@@ -96,8 +96,11 @@ Replace `ubuntu@203.0.113.10` with the SSH target:
 rsync -azR directory/main.lua directory/multiplayer-directory.service \
   scripts/multiplayer/contestant_store.lua \
   scripts/multiplayer/contestant_track_store.lua \
+  scripts/multiplayer/object_store.lua \
   scripts/multiplayer/p2p/codec.lua \
   scripts/multiplayer/p2p/directory.lua \
+  scripts/multiplayer/p2p/object_directory.lua \
+  scripts/multiplayer/p2p/objects.lua \
   ubuntu@203.0.113.10:/tmp/naev-multiplayer-update/
 ssh ubuntu@203.0.113.10 \
   'sudo cp -a /tmp/naev-multiplayer-update/. /opt/naev-multiplayer/ && sudo install -m 0644 /opt/naev-multiplayer/directory/multiplayer-directory.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl restart multiplayer-directory && sudo systemctl --no-pager status multiplayer-directory'
@@ -105,7 +108,8 @@ ssh ubuntu@203.0.113.10 \
 
 Players must update the plugin too because older `MP2P/1` clients ignore the
 new directory messages. The service persists the latest contestant profiles in
-`/var/lib/naev-multiplayer/contestants.db` and exact track profiles in
-`/var/lib/naev-multiplayer/contestant-tracks.db`; systemd creates and protects
-that state directory. No firewall changes beyond directory UDP port `60939`
-are needed on the VM.
+`/var/lib/naev-multiplayer/contestants.db`, exact track profiles in
+`/var/lib/naev-multiplayer/contestant-tracks.db`, and persistent space objects
+in the separately versioned `/var/lib/naev-multiplayer/objects.db`; systemd
+creates and protects that state directory. No firewall changes beyond directory
+UDP port `60939` are needed on the VM.

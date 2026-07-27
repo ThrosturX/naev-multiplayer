@@ -155,6 +155,9 @@ local function new_world ( player_name )
       self.is_disabled=true
    end
    function pilot_methods:setHostile (v) self.hostile=v==nil or v end
+   function pilot_methods:setFriendly (v) self.friendly=v==nil or v end
+   function pilot_methods:setVisplayer (v) self.visible_to_player=v==nil or v end
+   function pilot_methods:setHilight (v) self.hilighted=v==nil or v end
    function pilot_methods:effectAdd (name,duration)
       self.effects=self.effects or {}
       self.effect_adds=self.effect_adds or {}
@@ -193,6 +196,15 @@ local function new_world ( player_name )
       end
       return true
    end
+   function pilot_methods:outfitSlot (slot)
+      local name=self.outfit_names[slot]
+      return name and resource(name) or nil
+   end
+   function pilot_methods:outfitRmSlot (slot)
+      if not self.outfit_names[slot] then return false end
+      self.outfit_names[slot]=nil
+      return true
+   end
    function pilot_methods:outfitToggle (slot,on)
       for _index,active in ipairs(self.active_outfits) do
          if active.slot==slot then
@@ -219,6 +231,7 @@ local function new_world ( player_name )
    world.local_pilot=world:add_pilot("Llama","Player",player_name,true)
 
    local env=setmetatable({}, {__index=_G})
+   env._=function(value) return value end
    -- Naev's Lua sandbox does not expose os.clock. Keep the integration world
    -- honest so per-frame networking cannot accidentally depend on it again.
    env.os={}
@@ -232,6 +245,10 @@ local function new_world ( player_name )
    env.vec2={new=vector}
    env.player={name=function() return world.player_name end,pilot=function() return world.local_pilot end,
       isLanded=function() return false end,
+      msg=function(text)
+         world.player_messages=world.player_messages or {}
+         world.player_messages[#world.player_messages+1]=text
+      end,
       autonav=function() return world.autonaving,world.autonav_speed or 1 end,
       autonavSetSpeed=function(speed)
          world.autonav_speed_calls=world.autonav_speed_calls+1
@@ -262,6 +279,15 @@ local function new_world ( player_name )
    }
    env.faction={get=function(name) return resource(name) end,
       dynAdd=function(_base,raw) return resource(raw) end}
+   env.hook={
+      pilot=function(p,kind,callback,data)
+         local handle={pilot=p,kind=kind,callback=callback,data=data}
+         world.pilot_hooks=world.pilot_hooks or {}
+         world.pilot_hooks[#world.pilot_hooks+1]=handle
+         return handle
+      end,
+      rm=function(handle) handle.removed=true end,
+   }
    env.audio={new=function(path)
       if path=="snd/sounds/hail.opus" then
          return {play=function() world.hail_sounds=(world.hail_sounds or 0)+1 end}
@@ -1138,21 +1164,136 @@ while directory_event do
 end
 assert(directory_peer,"guest did not connect to fake directory")
 directory_peer:send(assert(wire_codec.encode{
-   type="hello",node="d1",cap="directory",features="activity"}),0,"reliable")
+   type="hello",node="d1",cap="directory",features="activity,objects"}),0,"reliable")
 update({punch_guest},4)
 assert(not punch_guest.session.machine.members.d1,
    "directory-only node entered the gameplay election membership")
-local activity_query
+local activity_query,object_query
 directory_event=fake_directory:service(0)
 while directory_event do
    if directory_event.type=="receive" then
       local message=assert(wire_codec.decode(directory_event.data))
       if message.type=="activity_query" then activity_query=message end
+      if message.type=="object_query" then object_query=message end
    end
    directory_event=fake_directory:service(0)
 end
 assert(activity_query and activity_query.node=="90",
    "activity-capable directory was not queried")
+assert(object_query and object_query.system=="Gamma Polaris",
+   "object-capable directory was not queried on entry")
+directory_peer:send(assert(wire_codec.encode{
+   type="object_done",node="d1",system="Gamma Polaris",
+   request=object_query.request,count=0}),0,"reliable")
+update({punch_guest},4)
+assert(punch_guest.cache.multiplayer_p2p_objects==true,
+   "object-capable directory was not advertised to the outfit")
+
+local buoy_slot=select(2,punch_guest.local_pilot:outfitAddSlot(
+   resource("Message Buoy"),4))
+buoy_slot=buoy_slot or 4
+assert(punch_guest.session.create_message_buoy("Watch the gate.",buoy_slot))
+local create_message
+directory_event=fake_directory:service(0)
+while directory_event do
+   if directory_event.type=="receive" then
+      local message=assert(wire_codec.decode(directory_event.data))
+      if message.type=="object_create" then create_message=message end
+   end
+   directory_event=fake_directory:service(0)
+end
+assert(create_message,"message buoy creation was not sent reliably")
+local created_object=assert(require("multiplayer.p2p.objects").decode(
+   create_message.object))
+assert(created_object.data.text=="Watch the gate."
+   and created_object.data.captain=="Punch Guest"
+   and created_object.endpoints[1].system=="Gamma Polaris",
+   "message buoy submission did not capture its immutable spatial record")
+-- Simulate both the create result and live push being lost after persistence.
+-- At the deadline the client must query before calling this a failure.
+advance({punch_guest},11,8)
+local reconcile_query
+directory_event=fake_directory:service(0)
+while directory_event do
+   if directory_event.type=="receive" then
+      local message=assert(wire_codec.decode(directory_event.data))
+      if message.type=="object_query" then reconcile_query=message end
+   end
+   directory_event=fake_directory:service(0)
+end
+assert(reconcile_query,"creation timeout did not trigger reconciliation")
+directory_peer:send(assert(wire_codec.encode{
+   type="object_entry",node="d1",request=reconcile_query.request,
+   object=create_message.object,
+}),0,"reliable")
+directory_peer:send(assert(wire_codec.encode{
+   type="object_done",node="d1",system="Gamma Polaris",
+   request=reconcile_query.request,count=1,
+}),0,"reliable")
+update({punch_guest},4)
+assert(punch_guest.cache.multiplayer_buoy_consume
+      and punch_guest.cache.multiplayer_buoy_consume.slot==buoy_slot,
+   "query did not reconcile a persisted creation after acknowledgement loss")
+local local_buoy=find(punch_guest,"Message Buoy","P2P Message Buoys")
+assert(local_buoy and local_buoy.friendly and local_buoy.visible_to_player
+      and local_buoy.hilighted,
+   "subscribed client did not spawn one anonymous neutral local message buoy")
+advance({punch_guest},1.1,4)
+assert(local_buoy.last_chat=="Watch the gate." and local_buoy.chat_count==1,
+   "message buoy did not broadcast shortly after spawning")
+advance({punch_guest},30,4)
+assert(local_buoy.chat_count==2,
+   "message buoy did not repeat its broadcast after thirty seconds")
+assert(punch_guest.session.message_buoy_destroyed(created_object.id,local_buoy))
+local destruction
+directory_event=fake_directory:service(0)
+while directory_event do
+   if directory_event.type=="receive" then
+      local message=assert(wire_codec.decode(directory_event.data))
+      if message.type=="object_delete" then destruction=message end
+   end
+   directory_event=fake_directory:service(0)
+end
+assert(destruction and destruction.object_id==created_object.id,
+   "local destruction was not reported by exact object ID")
+directory_peer:disconnect_now()
+update({punch_guest},4)
+assert(punch_guest.cache.multiplayer_p2p_objects==false,
+   "directory loss left message-buoy deployment advertised")
+advance({punch_guest},6,8)
+directory_event=fake_directory:service(0)
+while directory_event do
+   if directory_event.type=="connect" then directory_peer=directory_event.peer end
+   directory_event=fake_directory:service(0)
+end
+assert(directory_peer and not directory_peer.closed,
+   "object directory did not reconnect")
+directory_peer:send(assert(wire_codec.encode{
+   type="hello",node="d1",cap="directory",features="activity,objects",
+}),0,"reliable")
+update({punch_guest},4)
+local reconnect_query,retried_destruction
+directory_event=fake_directory:service(0)
+while directory_event do
+   if directory_event.type=="receive" then
+      local message=assert(wire_codec.decode(directory_event.data))
+      if message.type=="object_query" then reconnect_query=message
+      elseif message.type=="object_delete" then retried_destruction=message end
+   end
+   directory_event=fake_directory:service(0)
+end
+assert(reconnect_query and retried_destruction
+      and retried_destruction.object_id==created_object.id,
+   "queued destruction was not retried after directory reconnect")
+directory_peer:send(assert(wire_codec.encode{
+   type="object_done",node="d1",system="Gamma Polaris",
+   request=reconnect_query.request,count=0,
+}),0,"reliable")
+directory_peer:send(assert(wire_codec.encode{
+   type="object_result",node="d1",request=retried_destruction.request,
+   action="delete",ok=1,code="not_found",object_id=created_object.id,revision=1,
+}),0,"reliable")
+update({punch_guest},4)
 directory_peer:send(assert(wire_codec.encode{
    type="activity",node="d1",entries=
       wire_codec.escape("Gamma Polaris")..",1,0;"
@@ -1186,7 +1327,7 @@ assert(host_verified==1 and guest_verified==1,
    "directory candidates did not converge on one verified player connection")
 assert(punch_guest.session.identities:raw_name("80")=="Punch Host",
    "direct hello did not refresh a relay-only player identity")
-punch_guest.wall_clock=punch_guest.wall_clock+61
+punch_guest.wall_clock=punch_guest.wall_clock+62
 recent=punch_guest.session.recent_activity()
 assert(#recent==2 and not recent[1].active and recent[1].age>=61,
    "stale directory snapshot remained marked active")

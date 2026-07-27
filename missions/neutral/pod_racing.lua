@@ -1,10 +1,10 @@
 --[[
 <?xml version='1.0' encoding='utf8'?>
-<mission name="Pod Racing">
+<mission name="Death Race">
  <priority>4</priority>
  <chance>100</chance>
  <location>Bar</location>
- <spob>Melendez Dome</spob>
+ <spob>Darkshed</spob>
 </mission>
 --]]
 local fmt = require "format"
@@ -32,7 +32,7 @@ local race_over, omsg, progress_hook, finish_hook, countdown_hooks, roster_hook
 local countdown_protected, roster_requested
 
 -- luacheck: globals create approach_terminal start_race countdown allowmove
--- luacheck: globals update_race return_to_dome race_landed loaded abort
+-- luacheck: globals update_race return_to_terminal race_landed loaded abort
 
 local function lerp ( a, b, t )
    return a+(b-a)*t
@@ -62,12 +62,11 @@ end
 
 function create ()
    mem.race_spob=spob.cur()
-   -- The canonical Qex Racing offer claims this system while its terminal is
-   -- present. Pod Racing must remain an independent second bar terminal, so
-   -- it deliberately does not compete for that claim.
+   -- Keep the offer independent of system claims so its terminal does not
+   -- block unrelated Alteris content.
    mem.lengths={}
    for index,track in ipairs(tracks) do mem.lengths[index]=track_length(track) end
-   misn.npcAdd("approach_terminal",_("Pod Racing Terminal"),"minerva_terminal",
+   misn.npcAdd("approach_terminal",_("Death Race Terminal"),"minerva_terminal",
       _("A battered terminal advertises armed, no-rules racing against contestants from across the galaxy."),
       4)
 end
@@ -78,13 +77,13 @@ local function show_intro ()
    vn.clear()
    vn.scene()
    vn.transition()
-   vn.na(_("The terminal detects that you have no Pod Racing record and offers a short explanation."))
+   vn.na(_("The terminal detects that you have no Death Race record and offers a short explanation."))
    vn.menu{
       {_("Get an explanation"),"explain"},
       {_("Skip the explanation"),"done"},
    }
    vn.label("explain")
-   vn.na(_("Pod Racing is decided by position, not a clock. Pass every gate in order; the first surviving racer through the final gate wins."))
+   vn.na(_("Death Race is decided by position, not a clock. Pass every gate in order; the first surviving racer through the final gate wins."))
    vn.na(_("Weapons are unrestricted and destruction is real. Racers may attack each other, so bring a combat-ready ship and expect your opponents to do the same."))
    vn.na(_("Ships compete in Light, Medium, or Heavy divisions so that interceptors are not matched against battleships. When P2P is enabled, opponents are based on captains registered with the multiplayer directory."))
    vn.na(_("Speed matters. Use an afterburner, Hades Torch, adrenal gland, or any other movement advantage your ship can sustain."))
@@ -103,7 +102,7 @@ function approach_terminal ()
       vn.clear()
       vn.scene()
       vn.transition()
-      vn.na(_("Your ship is not spaceworthy and cannot enter Pod Racing:\n\n")..reason)
+      vn.na(_("Your ship is not spaceworthy and cannot enter the Death Race:\n\n")..reason)
       vn.run()
       return
    end
@@ -117,7 +116,7 @@ function approach_terminal ()
       luatk.close()
    end)
    luatk.newButton(wdw,-20,-20,80,30,_("Close"),luatk.close)
-   luatk.newText(wdw,0,10,w,20,_("Choose Pod Racing Track"),nil,"centre")
+   luatk.newText(wdw,0,10,w,20,_("Choose a Death Race Track"),nil,"centre")
    luatk.newText(wdw,240,40,w-260,65,fmt.f(
       _("Weapons-free, lethal racing\nDivision: {division}\nFirst through every gate wins."),
       {division=pod.division_name(division)}))
@@ -151,10 +150,10 @@ Reward: {reward}]]),{
    mem.reward=rewards[selected]
    mem.player_won=false
    misn.accept()
-   misn.setTitle(_("Pod Racing"))
-   misn.setDesc(_("Win a lethal armed race at Melendez Dome."))
+   misn.setTitle(_("Death Race"))
+   misn.setDesc(_("Win a lethal armed race launched from Darkshed."))
    misn.setReward(fmt.credits(mem.reward))
-   misn.osdCreate(_("Pod Racing"),{
+   misn.osdCreate(_("Death Race"),{
       _("Pass every gate in order and finish first."),
    })
    hook.load("loaded")
@@ -359,7 +358,7 @@ local function declare_winner ( racer )
    for _index,entry in ipairs(racers) do
       if entry.pilot:exists() then entry.pilot:control(true) end
    end
-   finish_hook=hook.timer(5,"return_to_dome")
+   finish_hook=hook.timer(5,"return_to_terminal")
 end
 
 local function gate_centre ( index )
@@ -399,7 +398,7 @@ function start_race ()
          roster_requested=nil
       elseif naev.ticks()<mem.roster_deadline then
          if not omsg then
-            omsg=player.omsgAdd(_("Contacting the Pod Racing directory…"),0,50)
+            omsg=player.omsgAdd(_("Contacting the Death Race directory…"),0,50)
          end
          roster_hook=hook.timer(0.1,"start_race")
          return
@@ -410,11 +409,10 @@ function start_race ()
    mem.roster_deadline=nil
    if omsg then player.omsgRm(omsg); omsg=nil end
 
-   -- Unlike canonical Qex Racing, this mission does not claim the system so
-   -- its terminal can coexist with the ordinary racing terminal. Do not clear
-   -- unrelated pilots: doing so can fire other events' death hooks without an
-   -- attacker (and destroys their state). Hide and suspend them instead; Naev
-   -- does not update hidden pilots, and cleanup restores the same handles.
+   -- Do not clear unrelated pilots: doing so can fire other events' death
+   -- hooks without an attacker (and destroys their state). Hide and suspend
+   -- them instead; Naev does not update hidden pilots, and cleanup restores
+   -- the same handles.
    hidden_pilots={}
    local pp=player.pilot()
    for _index,p in ipairs(pilot.get(nil,true)) do
@@ -453,7 +451,7 @@ function start_race ()
       for team=1,#teams do
          team_sizes[team]=#teams[team]
          factions[team]=faction.dynAdd(nil,"pod_racer_team_"..team,
-            _("Pod Racer Team"),
+            _("Death Racer Team"),
             {ai="pod_racer",clear_allies=true,clear_enemies=true})
       end
       -- Enemy checks are symmetric, so each relationship needs registering
@@ -466,7 +464,7 @@ function start_race ()
    else
       for index=1,#profiles do
          factions[index]=faction.dynAdd(nil,"pod_racer_"..index,
-            _("Pod Racer"),{ai="pod_racer",clear_allies=true,clear_enemies=true})
+            _("Death Racer"),{ai="pod_racer",clear_allies=true,clear_enemies=true})
       end
       for first=1,#profiles do
          for second=1,#profiles do
@@ -561,7 +559,7 @@ function update_race ()
    progress_hook=hook.timer(0.1,"update_race")
 end
 
-function return_to_dome ()
+function return_to_terminal ()
    finish_hook=nil
    cleanup()
    hook.land("race_landed")
@@ -573,7 +571,7 @@ function race_landed ()
    vn.scene()
    vn.transition()
    if mem.player_won then
-      vn.na(fmt.f(_("You won the Pod Race and receive {reward}."),{
+      vn.na(fmt.f(_("You won the Death Race and receive {reward}."),{
          reward=fmt.credits(mem.reward),
       }))
       vn.func(function() player.pay(mem.reward) end)

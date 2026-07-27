@@ -113,4 +113,4 @@ for index=previous+1,#sent do
 end
 network.stop(true)
 
-print("ok - pod racing contestant network")
+print("ok - death race contestant network")

@@ -18,7 +18,7 @@ local mplayerserver = require "multiplayer.server"
 local p2psession    = require "multiplayer.p2p.session"
 local luatk         = require "luatk"
 local vn = require "vn"
--- luacheck: globals load startMultiplayerServer P2P_SESSION_UPDATE P2P_SESSION_INPUT P2P_SESSION_HAIL P2P_SESSION_ENTER P2P_SESSION_LEAVE (Hook functions passed by name)
+-- luacheck: globals load startMultiplayerServer P2P_SESSION_UPDATE P2P_SESSION_INPUT P2P_SESSION_HAIL P2P_SESSION_ENTER P2P_SESSION_LEAVE P2P_BUOY_CONSUME P2P_OBJECT_DESTROYED (Hook functions passed by name)
 
 local function pick_one ( ipair )
     return ipair[ rnd.rnd( 1, #ipair ) ]
@@ -174,7 +174,45 @@ local function p2p_start ()
     p2p_publish_config()
 end
 
-function P2P_SESSION_UPDATE ( dt ) p2psession.update(dt) end
+local function p2p_run_buoy_prompt ( request )
+    vn.reset()
+    local input_state = luatk.vn(function()
+        local window = luatk.msgInput(_("MESSAGE BUOY"), _("Message:"), 96, function(msg)
+            if not msg then return end
+            local ok, err = p2psession.create_message_buoy(msg, request.slot)
+            if not ok and err then player.msg("#r"..tostring(err).."#0") end
+        end)
+        p2p_size_chat(window)
+    end)
+    p2p_keep_chat_live(input_state)
+    p2p_run_chat()
+end
+
+function P2P_SESSION_UPDATE ( dt )
+    p2psession.update(dt)
+    local cache = naev.cache()
+    local consume = cache.multiplayer_buoy_consume
+    if consume then
+        cache.multiplayer_buoy_consume = nil
+        hook.safe("P2P_BUOY_CONSUME", consume.slot, consume.object_id)
+    end
+    local request = cache.multiplayer_buoy_prompt
+    if request then
+        cache.multiplayer_buoy_prompt = nil
+        p2p_run_buoy_prompt(request)
+    end
+end
+function P2P_BUOY_CONSUME ( slot, _object_id )
+    local p = player.pilot()
+    slot = tonumber(slot)
+    local fitted = p and slot and p:outfitSlot(slot)
+    if fitted and fitted:nameRaw() == "Message Buoy" then
+        p:outfitRmSlot(slot)
+    end
+end
+function P2P_OBJECT_DESTROYED ( p, _attacker, object_id )
+    p2psession.message_buoy_destroyed(object_id, p)
+end
 function P2P_SESSION_HAIL () p2p_keep_hail_live() end
 function P2P_SESSION_INPUT ( input_name, input_pressed )
     if input_name == "hail" then p2p_restore_hail_vn() end

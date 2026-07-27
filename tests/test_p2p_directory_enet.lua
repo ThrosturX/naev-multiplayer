@@ -3,6 +3,7 @@ package.path = "scripts/?.lua;scripts/?/init.lua;" .. package.path
 local enet=require "enet"
 local codec=require "multiplayer.p2p.codec"
 local Directory=require "multiplayer.p2p.directory"
+local Object=require "multiplayer.p2p.objects"
 
 local server=assert(enet.host_create("*:0",16,1))
 local server_port=assert(server:get_socket_address():match(":(%d+)$"))
@@ -66,6 +67,87 @@ assert(hint.endpoint=="127.0.0.1:"..advertised:match(":(%d+)$"))
 assert(hint.ttl>=1 and hint.ttl<=60)
 assert(host_punch and host_punch.peer=="20")
 assert(guest_punch and guest_punch.peer=="10")
+
+local buoy={
+   id="enet_buoy",kind="message_buoy",owner="10",created=1,revision=1,
+   data={text="ENet loopback",captain="Host"},
+   endpoints={{id="enet_buoy_p",system="Delta Polaris",x=1,y=2,dir=3,
+      role="physical",visible=true}},
+}
+host_peer:send(assert(codec.encode{
+   type="object_query",node="10",system="Delta Polaris",request=1,
+}),0,"reliable")
+guest_peer:send(assert(codec.encode{
+   type="object_query",node="20",system="Delta Polaris",request=2,
+}),0,"reliable")
+host_peer:send(assert(codec.encode{
+   type="object_create",node="10",request=3,object_id=buoy.id,
+   object=assert(Object.encode(buoy)),
+}),0,"reliable")
+
+local create_result,host_entry,guest_entry
+deadline=os.clock()+2
+while (not create_result or not host_entry or not guest_entry)
+      and os.clock()<deadline do
+   local event=server:service(5)
+   while event do
+      if event.type=="receive" then assert(service:receive(event.peer,event.data)) end
+      event=server:service(0)
+   end
+   event=host_client:service(0)
+   while event do
+      if event.type=="receive" then
+         local message=assert(codec.decode(event.data))
+         if message.type=="object_result" and message.action=="create" then
+            create_result=message
+         elseif message.type=="object_entry" then host_entry=message end
+      end
+      event=host_client:service(0)
+   end
+   event=guest_client:service(0)
+   while event do
+      if event.type=="receive" then
+         local message=assert(codec.decode(event.data))
+         if message.type=="object_entry" then guest_entry=message end
+      end
+      event=guest_client:service(0)
+   end
+end
+assert(create_result and create_result.ok==1)
+assert(host_entry and guest_entry,
+   "real ENet subscriptions did not receive live object creation")
+assert(Object.decode(guest_entry.object).id=="enet_buoy")
+
+guest_peer:send(assert(codec.encode{
+   type="object_delete",node="20",request=4,object_id="enet_buoy",
+}),0,"reliable")
+local host_deleted,guest_deleted
+deadline=os.clock()+2
+while (not host_deleted or not guest_deleted) and os.clock()<deadline do
+   local event=server:service(5)
+   while event do
+      if event.type=="receive" then assert(service:receive(event.peer,event.data)) end
+      event=server:service(0)
+   end
+   event=host_client:service(0)
+   while event do
+      if event.type=="receive" then
+         local message=assert(codec.decode(event.data))
+         if message.type=="object_deleted" then host_deleted=message end
+      end
+      event=host_client:service(0)
+   end
+   event=guest_client:service(0)
+   while event do
+      if event.type=="receive" then
+         local message=assert(codec.decode(event.data))
+         if message.type=="object_deleted" then guest_deleted=message end
+      end
+      event=guest_client:service(0)
+   end
+end
+assert(host_deleted and guest_deleted and not service:dump_objects().enet_buoy,
+   "real ENet object deletion did not cascade to subscribers")
 
 host_client:destroy(); guest_client:destroy(); server:destroy()
 print("ok - real ENet directory loopback")
