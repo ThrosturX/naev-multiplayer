@@ -17,17 +17,29 @@ assert(pod.boost_desired(true,math.rad(84),6))
 assert(not pod.boost_desired(true,math.rad(85),100))
 assert(not pod.boost_desired(true,0,5))
 
-local random_values={3,1,1}
-local teams,team_by_slot=assert(pod.random_pairs(4,function(first,last)
+local random_values={3,1}
+local teams,team_by_slot=assert(pod.random_teams(4,function(first,last)
    local value=table.remove(random_values,1)
    assert(value>=first and value<=last)
    return value
 end))
 assert(#teams==2 and team_by_slot[1] and team_by_slot[2]
    and team_by_slot[3] and team_by_slot[4])
-assert(team_by_slot[1]~=team_by_slot[4]
-   and team_by_slot[1]==team_by_slot[3])
-assert(not pod.random_pairs(3))
+assert(team_by_slot[1]==team_by_slot[3]
+   and team_by_slot[1]~=team_by_slot[4])
+
+teams,team_by_slot=assert(pod.random_teams(3,function(first,last)
+   assert(first==2 and last==3)
+   return 2
+end))
+assert(#teams==2 and #teams[1]==2 and #teams[2]==1)
+assert(team_by_slot[1]==team_by_slot[2]
+   and team_by_slot[3]~=team_by_slot[1])
+assert(not pod.random_teams(1))
+local team_track={team_size=2,team_min_contestants=6}
+assert(not pod.uses_teams(team_track,5))
+assert(pod.uses_teams(team_track,6))
+assert(not pod.uses_teams({},12))
 
 player={name=function() return "Captain A" end}
 local config={

@@ -170,24 +170,35 @@ function pod.generics ( division, random )
    return result
 end
 
-function pod.random_pairs ( count, random )
+function pod.random_teams ( count, random )
    count=math.floor(tonumber(count) or 0)
-   if count<2 or count%2~=0 then return nil,"contestants must form pairs" end
+   if count<2 then return nil,"player needs a teammate" end
    random=random or math.random
+   local teammate=count==2 and 2 or random(2,count)
    local shuffled={}
-   for index=1,count do shuffled[index]=index end
-   for index=count,2,-1 do
+   for slot=2,count do
+      if slot~=teammate then shuffled[#shuffled+1]=slot end
+   end
+   for index=#shuffled,2,-1 do
       local swap=random(1,index)
       shuffled[index],shuffled[swap]=shuffled[swap],shuffled[index]
    end
-   local teams,team_by_slot={},{}
-   for index=1,count,2 do
-      local team={shuffled[index],shuffled[index+1]}
+   local teams={{1,teammate}}
+   local team_by_slot={[1]=1,[teammate]=1}
+   for index=1,#shuffled,2 do
+      local team={shuffled[index]}
+      if shuffled[index+1] then team[2]=shuffled[index+1] end
       teams[#teams+1]=team
       team_by_slot[team[1]]=#teams
-      team_by_slot[team[2]]=#teams
+      if team[2] then team_by_slot[team[2]]=#teams end
    end
    return teams,team_by_slot
+end
+
+function pod.uses_teams ( track, count )
+   if type(track)~="table" or track.team_size~=2 then return false end
+   count=tonumber(count)
+   return count~=nil and count>=(track.team_min_contestants or 2)
 end
 
 local function select_real ( profiles, division, count, validate )

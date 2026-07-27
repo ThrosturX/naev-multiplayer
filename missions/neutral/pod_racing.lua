@@ -19,6 +19,7 @@ local luasfx = require "luaspfx.sfx"
 local lmisn = require "lmisn"
 
 local tracks = require "multiplayer.pod_racing_tracks"
+local roster_network = require "multiplayer.pod_racing_network"
 local rewards = {}
 for index,track in ipairs(tracks) do rewards[index]=track.reward or 100e3 end
 local start_sfx = audiodata.new("snd/sounds/race_start")
@@ -28,7 +29,7 @@ local ROSTER_WAIT = 9
 
 local racers, gates, markers, hidden_pilots
 local race_over, omsg, progress_hook, finish_hook, countdown_hooks, roster_hook
-local countdown_protected
+local countdown_protected, roster_requested
 
 -- luacheck: globals create approach_terminal start_race countdown allowmove
 -- luacheck: globals update_race return_to_dome race_landed loaded abort
@@ -311,6 +312,8 @@ local function release_countdown_protection ()
 end
 
 local function cleanup ()
+   roster_network.stop(false)
+   roster_requested=nil
    clear_hook(roster_hook)
    clear_hook(progress_hook)
    clear_hook(finish_hook)
@@ -345,8 +348,12 @@ local function declare_winner ( racer )
       or (racer.team and racers[1].team==racer.team)
    if mem.player_won then lmisn.sfxVictory() end
    local message=fmt.f(_("{name} wins!"),{name=racer.name})
-   if racer.team then
-      message=fmt.f(_("{name}'s team wins!"),{name=racer.name})
+   if racer.team_size and racer.team_size>1 then
+      if mem.player_won and not racer.player then
+         message=_("Your team wins!")
+      else
+         message=fmt.f(_("{name}'s team wins!"),{name=racer.name})
+      end
    end
    omsg=player.omsgAdd(message,5,50)
    for _index,entry in ipairs(racers) do
@@ -379,7 +386,17 @@ function start_race ()
    if type(config)=="table" and config.enabled==true
          and not pod.roster_matches_p2p(config,cached) then
       mem.roster_deadline=mem.roster_deadline or naev.ticks()+ROSTER_WAIT
-      if naev.ticks()<mem.roster_deadline then
+      if not roster_requested then
+         roster_requested=roster_network.start(config)==true
+      end
+      if roster_requested and roster_network.active() then
+         roster_network.update()
+      end
+      cached=naev.cache().multiplayer_contestants
+      if pod.roster_matches_p2p(config,cached) then
+         roster_network.stop(false)
+         roster_requested=nil
+      elseif naev.ticks()<mem.roster_deadline then
          if not omsg then
             omsg=player.omsgAdd(_("Contacting the Pod Racing directory…"),0,50)
          end
@@ -387,6 +404,8 @@ function start_race ()
          return
       end
    end
+   roster_network.stop(false)
+   roster_requested=nil
    mem.roster_deadline=nil
    if omsg then player.omsgRm(omsg); omsg=nil end
 
@@ -425,15 +444,13 @@ function start_race ()
 
    local profiles=roster_profiles()
    local track=tracks[mem.track_index]
-   local factions,team_by_slot={},nil
-   if track.team_size==2 and #profiles>0 then
-      -- The player makes the field even only when there is an odd number of
-      -- opponents. A randomly selected real profile sits out rather than
-      -- introducing a generic contestant.
-      if #profiles%2==0 then table.remove(profiles,rnd.rnd(1,#profiles)) end
+   local factions,team_by_slot,team_sizes={},nil,nil
+   if pod.uses_teams(track,#profiles+1) then
       local teams
-      teams,team_by_slot=pod.random_pairs(#profiles+1,rnd.rnd)
+      teams,team_by_slot=pod.random_teams(#profiles+1,rnd.rnd)
+      team_sizes={}
       for team=1,#teams do
+         team_sizes[team]=#teams[team]
          factions[team]=faction.dynAdd(nil,"pod_racer_team_"..team,
             _("Pod Racer Team"),
             {ai="pod_racer",clear_allies=true,clear_enemies=true})
@@ -460,6 +477,7 @@ function start_race ()
    racers={{
       pilot=pp,name=player.name(),player=true,next_gate=2,last_pos=pp:pos(),
       team=team_by_slot and team_by_slot[1],
+      team_size=team_sizes and team_sizes[team_by_slot[1]],
    }}
    for index,profile in ipairs(profiles) do
       local position=grid_position(positions[1],direction,index+1)
@@ -471,7 +489,7 @@ function start_race ()
          opponent:memory().pod_gate=gate_aim(2)
          racers[#racers+1]={
             pilot=opponent,name=profile.name,next_gate=2,last_pos=opponent:pos(),
-            team=team,
+            team=team,team_size=team_sizes and team_sizes[team],
          }
       end
    end

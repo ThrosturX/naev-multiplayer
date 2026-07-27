@@ -46,7 +46,8 @@ local crossfire = tracks[#tracks]
 assert(#tracks==4 and crossfire.name=="Melendez Death Knot",
    "Melendez Death Knot is not the final Pod-only track")
 assert(crossfire.reward==350e3 and crossfire.scale==4)
-assert(crossfire.contestants==12 and crossfire.team_size==2)
+assert(crossfire.contestants==12 and crossfire.team_size==2
+   and crossfire.team_min_contestants==6)
 assert(type(crossfire.description)=="string" and crossfire.description~="")
 assert(#crossfire.track>0)
 -- luatk.bezier samples each segment eleven times and gfx.renderLinesH accepts

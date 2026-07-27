@@ -65,10 +65,11 @@ local crossfire_points = {
 
 tracks[#tracks+1] = {
    name=N_("Melendez Death Knot"),
-   description=N_("Random two-pilot teams fight through four combat lobes, a central killbox, and a diagonal revenge gauntlet."),
+   description=N_("Large fields form random two-pilot teams to fight through four combat lobes, a central killbox, and a diagonal revenge gauntlet."),
    reward=350e3,
    contestants=12,
    team_size=2,
+   team_min_contestants=6,
    scale=4,
    centre=true,
    centre_offset=vec2.new(0,9000),
