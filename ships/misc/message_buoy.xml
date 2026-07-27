@@ -1,7 +1,7 @@
 <ship name="Message Buoy">
  <points>0</points>
  <base_type path="Message_Buoy">Message Buoy</base_type>
- <gfx size="28">message_buoy.gltf</gfx>
+ <gfx size="24">message_buoy.gltf</gfx>
  <sound>engine_nexus</sound>
  <class display="Message Buoy">Yacht</class>
  <price>1</price>
@@ -17,9 +17,10 @@
  </movement>
  <health>
   <shield>20</shield>
-  <armour>50</armour>
-  <energy>0</energy>
-  <shield_regen>0</shield_regen>
+  <armour>250</armour>
+  <energy>10</energy>
+  <shield_regen>3</shield_regen>
+  <armour_regen>1</armour_regen>
   <energy_regen>0.001</energy_regen>
  </health>
  <characteristics>

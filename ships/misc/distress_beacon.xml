@@ -1,7 +1,7 @@
 <ship name="Distress Beacon">
  <points>0</points>
  <base_type>Distress_Beacon</base_type>
- <gfx size="47">llama</gfx>
+ <gfx size="16">message_buoy.gltf</gfx>
  <sound>engine_nexus</sound>
  <class display="Distress Beacon">Interceptor</class>
  <price>1</price>
