@@ -46,6 +46,10 @@ package.loaded["multiplayer.p2p.session"] = {
    end,
    input=function() end,
 }
+package.loaded["multiplayer.p2p.space_objects"] = {
+   start=function() end,stop=function() end,pump=function() end,
+   update=function() end,
+}
 package.loaded.luatk = luatk_stub
 package.loaded.vn = vn_stub
 

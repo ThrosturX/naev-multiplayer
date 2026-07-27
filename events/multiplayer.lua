@@ -16,9 +16,10 @@ local fmt           = require "format"
 local mplayerclient = require "multiplayer.client"
 local mplayerserver = require "multiplayer.server"
 local p2psession    = require "multiplayer.p2p.session"
+local space_objects = require "multiplayer.p2p.space_objects"
 local luatk         = require "luatk"
 local vn = require "vn"
--- luacheck: globals load startMultiplayerServer P2P_SESSION_UPDATE P2P_SESSION_INPUT P2P_SESSION_HAIL P2P_SESSION_ENTER P2P_SESSION_LEAVE P2P_BUOY_CONSUME P2P_OBJECT_DESTROYED (Hook functions passed by name)
+-- luacheck: globals load startMultiplayerServer P2P_SESSION_UPDATE P2P_OBJECT_UPDATE P2P_SESSION_INPUT P2P_SESSION_HAIL P2P_SESSION_ENTER P2P_SESSION_LEAVE P2P_BUOY_CONSUME P2P_OBJECT_DESTROYED (Hook functions passed by name)
 
 local function pick_one ( ipair )
     return ipair[ rnd.rnd( 1, #ipair ) ]
@@ -91,6 +92,7 @@ local function p2p_keep_chat_live ( chat_state )
     local chat_update
     chat_update = function(self, dt)
         p2psession.keep_simulation_live()
+        space_objects.pump()
         widget_update(self, dt)
         -- LuaTK replaces its one-shot focus initializer with its steady-state
         -- updater. Keep wrapping whichever updater it installs.
@@ -150,6 +152,7 @@ end
 
 local function p2p_stop ()
     p2p_restore_hail_vn()
+    space_objects.stop()
     p2psession.stop()
     p2p_hail_pressed = nil
     for _index, h in ipairs(p2p_hooks) do hook.rm(h) end
@@ -171,6 +174,7 @@ local function p2p_start ()
         hook.jumpout("P2P_SESSION_LEAVE"),
     }
     if not player.isLanded() then p2psession.enter(system.cur():nameRaw()) end
+    space_objects.start(p2psession)
     p2p_publish_config()
 end
 
@@ -191,16 +195,14 @@ end
 function P2P_SESSION_UPDATE ( dt )
     p2psession.update(dt)
     local cache = naev.cache()
-    local consume = cache.multiplayer_buoy_consume
-    if consume then
-        cache.multiplayer_buoy_consume = nil
-        hook.safe("P2P_BUOY_CONSUME", consume.slot, consume.object_id)
-    end
     local request = cache.multiplayer_buoy_prompt
     if request then
         cache.multiplayer_buoy_prompt = nil
         p2p_run_buoy_prompt(request)
     end
+end
+function P2P_OBJECT_UPDATE ( generation )
+    space_objects.update(generation)
 end
 function P2P_BUOY_CONSUME ( slot, _object_id )
     local p = player.pilot()

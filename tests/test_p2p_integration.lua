@@ -324,7 +324,12 @@ local function new_world ( player_name )
 end
 
 local function update ( worlds, rounds )
-   for _round=1,rounds or 1 do for _index,w in ipairs(worlds) do w.session.update() end end
+   for _round=1,rounds or 1 do
+      for _index,w in ipairs(worlds) do
+         w.session.update()
+         w.session.update_object_client()
+      end
+   end
 end
 local function advance ( worlds, seconds, rounds )
    for _index,w in ipairs(worlds) do
@@ -1168,21 +1173,39 @@ directory_peer:send(assert(wire_codec.encode{
 update({punch_guest},4)
 assert(not punch_guest.session.machine.members.d1,
    "directory-only node entered the gameplay election membership")
-local activity_query,object_query
+local activity_query,object_query,object_directory_peer
 directory_event=fake_directory:service(0)
 while directory_event do
+   if directory_event.type=="connect" and directory_event.peer~=directory_peer then
+      object_directory_peer=directory_event.peer
+   end
    if directory_event.type=="receive" then
       local message=assert(wire_codec.decode(directory_event.data))
       if message.type=="activity_query" then activity_query=message end
-      if message.type=="object_query" then object_query=message end
+      if message.type=="hello" and directory_event.peer~=directory_peer then
+         object_directory_peer=directory_event.peer
+      end
    end
    directory_event=fake_directory:service(0)
 end
 assert(activity_query and activity_query.node=="90",
    "activity-capable directory was not queried")
+assert(object_directory_peer,
+   "object service did not open its pause-independent directory connection")
+object_directory_peer:send(assert(wire_codec.encode{
+   type="hello",node="d1",cap="directory",features="activity,objects"}),0,"reliable")
+update({punch_guest},4)
+directory_event=fake_directory:service(0)
+while directory_event do
+   if directory_event.type=="receive" then
+      local message=assert(wire_codec.decode(directory_event.data))
+      if message.type=="object_query" then object_query=message end
+   end
+   directory_event=fake_directory:service(0)
+end
 assert(object_query and object_query.system=="Gamma Polaris",
    "object-capable directory was not queried on entry")
-directory_peer:send(assert(wire_codec.encode{
+object_directory_peer:send(assert(wire_codec.encode{
    type="object_done",node="d1",system="Gamma Polaris",
    request=object_query.request,count=0}),0,"reliable")
 update({punch_guest},4)
@@ -1222,11 +1245,11 @@ while directory_event do
    directory_event=fake_directory:service(0)
 end
 assert(reconcile_query,"creation timeout did not trigger reconciliation")
-directory_peer:send(assert(wire_codec.encode{
+object_directory_peer:send(assert(wire_codec.encode{
    type="object_entry",node="d1",request=reconcile_query.request,
    object=create_message.object,
 }),0,"reliable")
-directory_peer:send(assert(wire_codec.encode{
+object_directory_peer:send(assert(wire_codec.encode{
    type="object_done",node="d1",system="Gamma Polaris",
    request=reconcile_query.request,count=1,
 }),0,"reliable")
@@ -1244,6 +1267,7 @@ assert(local_buoy.last_chat=="Watch the gate." and local_buoy.chat_count==1,
 advance({punch_guest},30,4)
 assert(local_buoy.chat_count==2,
    "message buoy did not repeat its broadcast after thirty seconds")
+local_buoy.removed=true
 assert(punch_guest.session.message_buoy_destroyed(created_object.id,local_buoy))
 local destruction
 directory_event=fake_directory:service(0)
@@ -1256,19 +1280,80 @@ while directory_event do
 end
 assert(destruction and destruction.object_id==created_object.id,
    "local destruction was not reported by exact object ID")
-directory_peer:disconnect_now()
+assert(punch_guest.session.create_message_buoy("Second marker.",buoy_slot),
+   "client refused an immediate replacement buoy deployment")
+local replacement_create
+directory_event=fake_directory:service(0)
+while directory_event do
+   if directory_event.type=="receive" then
+      local message=assert(wire_codec.decode(directory_event.data))
+      if message.type=="object_create" then replacement_create=message end
+   end
+   directory_event=fake_directory:service(0)
+end
+assert(not replacement_create,
+   "replacement creation raced its unconfirmed destruction report")
+object_directory_peer:send(assert(wire_codec.encode{
+   type="object_result",node="d1",request=destruction.request,
+   action="delete",ok=1,code="deleted",
+   object_id=created_object.id,revision=1,
+}),0,"reliable")
+update({punch_guest},4)
+directory_event=fake_directory:service(0)
+while directory_event do
+   if directory_event.type=="receive" then
+      local message=assert(wire_codec.decode(directory_event.data))
+      if message.type=="object_create" then replacement_create=message end
+   end
+   directory_event=fake_directory:service(0)
+end
+assert(replacement_create,
+   "confirmed destruction did not release the queued replacement creation")
+local replacement_object=assert(require("multiplayer.p2p.objects").decode(
+   replacement_create.object))
+-- The directory processed both reliable requests in order, but only its
+-- create acknowledgement reached the client. The acknowledgement alone must
+-- be enough to make the accepted replacement visible locally.
+object_directory_peer:send(assert(wire_codec.encode{
+   type="object_result",node="d1",request=replacement_create.request,
+   action="create",ok=1,code="created",
+   object_id=replacement_object.id,revision=1,
+}),0,"reliable")
+-- A solo host's hook.update is suspended while paused. Service only the
+-- dedicated object client and prove the acknowledgement still completes.
+for _round=1,4 do punch_guest.session.update_object_client() end
+local replacement_buoy=find(punch_guest,"Message Buoy","P2P Message Buoys")
+assert(replacement_buoy and replacement_buoy~=local_buoy,
+   "paused gameplay prevented the object client from completing deployment")
+-- Simulate the engine removing the pilot without delivering its death hook.
+-- The per-frame audit must still report exact-ID destruction.
+replacement_buoy.removed=true
+update({punch_guest},4)
+local replacement_destruction
+directory_event=fake_directory:service(0)
+while directory_event do
+   if directory_event.type=="receive" then
+      local message=assert(wire_codec.decode(directory_event.data))
+      if message.type=="object_delete" then replacement_destruction=message end
+   end
+   directory_event=fake_directory:service(0)
+end
+assert(replacement_destruction
+      and replacement_destruction.object_id==replacement_object.id,
+   "missing local buoy pilot was silently orphaned in the directory")
+object_directory_peer:disconnect_now()
 update({punch_guest},4)
 assert(punch_guest.cache.multiplayer_p2p_objects==false,
    "directory loss left message-buoy deployment advertised")
 advance({punch_guest},6,8)
 directory_event=fake_directory:service(0)
 while directory_event do
-   if directory_event.type=="connect" then directory_peer=directory_event.peer end
+   if directory_event.type=="connect" then object_directory_peer=directory_event.peer end
    directory_event=fake_directory:service(0)
 end
-assert(directory_peer and not directory_peer.closed,
+assert(object_directory_peer and not object_directory_peer.closed,
    "object directory did not reconnect")
-directory_peer:send(assert(wire_codec.encode{
+object_directory_peer:send(assert(wire_codec.encode{
    type="hello",node="d1",cap="directory",features="activity,objects",
 }),0,"reliable")
 update({punch_guest},4)
@@ -1283,15 +1368,16 @@ while directory_event do
    directory_event=fake_directory:service(0)
 end
 assert(reconnect_query and retried_destruction
-      and retried_destruction.object_id==created_object.id,
+      and retried_destruction.object_id==replacement_object.id,
    "queued destruction was not retried after directory reconnect")
-directory_peer:send(assert(wire_codec.encode{
+object_directory_peer:send(assert(wire_codec.encode{
    type="object_done",node="d1",system="Gamma Polaris",
    request=reconnect_query.request,count=0,
 }),0,"reliable")
-directory_peer:send(assert(wire_codec.encode{
+object_directory_peer:send(assert(wire_codec.encode{
    type="object_result",node="d1",request=retried_destruction.request,
-   action="delete",ok=1,code="not_found",object_id=created_object.id,revision=1,
+   action="delete",ok=1,code="not_found",
+   object_id=replacement_object.id,revision=1,
 }),0,"reliable")
 update({punch_guest},4)
 directory_peer:send(assert(wire_codec.encode{
@@ -1327,6 +1413,26 @@ assert(host_verified==1 and guest_verified==1,
    "directory candidates did not converge on one verified player connection")
 assert(punch_guest.session.identities:raw_name("80")=="Punch Host",
    "direct hello did not refresh a relay-only player identity")
+local directory_gameplay
+directory_event=fake_directory:service(0)
+while directory_event do
+   if directory_event.type=="receive" then
+      local message=assert(wire_codec.decode(directory_event.data))
+      if message.type=="player_manifest" or message.type=="player_state"
+            or message.type=="chat" or message.type=="npc_manifest"
+            or message.type=="npc_add" or message.type=="npc_remove"
+            or message.type=="npc_state" or message.type=="npc_control"
+            or message.type=="craft_manifest" or message.type=="craft_state"
+            or message.type=="craft_remove" or message.type=="craft_order"
+            or message.type=="resync" then
+         directory_gameplay=message.type
+      end
+   end
+   directory_event=fake_directory:service(0)
+end
+assert(not directory_gameplay,
+   "gameplay traffic leaked onto the directory connection: "
+      ..tostring(directory_gameplay))
 punch_guest.wall_clock=punch_guest.wall_clock+62
 recent=punch_guest.session.recent_activity()
 assert(#recent==2 and not recent[1].active and recent[1].age>=61,

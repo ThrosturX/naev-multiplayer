@@ -6,6 +6,7 @@ local owned = require "multiplayer.p2p.owned"
 local identity = require "multiplayer.p2p.identity"
 local status = require "multiplayer.p2p.status"
 local Object = require "multiplayer.p2p.objects"
+local ObjectClient = require "multiplayer.p2p.object_client"
 local enet = require "enet"
 local fmt = require "format"
 local ai_setup = require "ai.core.setup"
@@ -34,6 +35,7 @@ local session = {
    npc_audit_queue={}, npc_audit_at=1,
    local_objects={}, local_object_pilots={}, pending_object_requests={},
    pending_object_deletes={}, object_request=0,
+   object_client=nil,
    activity={}, activity_received=0, last_activity_query=0,
    indicators=status.new(function () return player.pilot() end),
 }
@@ -226,8 +228,13 @@ local function send ( peer, message, reliable )
 end
 
 local function broadcast ( message, reliable, except )
-   for peer in pairs(session.peers) do
-      if peer ~= except then send(peer,message,reliable) end
+   for peer,meta in pairs(session.peer_meta) do
+      if peer~=except and meta.verified
+            and (meta.cap=="player"
+               or (meta.cap=="directory"
+                  and (message.type=="claim" or message.type=="leave"))) then
+         send(peer,message,reliable)
+      end
    end
 end
 
@@ -1308,10 +1315,8 @@ end
 local buoy_faction
 
 local function object_directory_peer ()
-   for peer,meta in pairs(session.peer_meta) do
-      if meta.verified and meta.cap=="directory" and has_feature(meta,"objects") then
-         return peer,meta
-      end
+   if session.object_client and session.object_client:available() then
+      return session.object_client
    end
 end
 
@@ -1381,6 +1386,12 @@ local function spawn_local_object ( object )
 end
 
 local function complete_object_create ( request, pending, object_id )
+   -- The reliable result is independently sufficient proof that the directory
+   -- accepted this exact object. Do not depend on the separate subscription
+   -- push to make the deploying client see its own buoy.
+   if pending.object and pending.object.id==object_id then
+      spawn_local_object(pending.object)
+   end
    session.pending_object_requests[request]=nil
    naev.cache().multiplayer_buoy_consume={
       slot=pending.slot,object_id=object_id,
@@ -1435,10 +1446,18 @@ local function finish_object_query ( message )
    if not pending or pending.action~="query"
          or pending.system~=message.system then return end
    session.pending_object_requests[message.request]=nil
+   local occupied=false
+   for _id,object in pairs(pending.objects) do
+      if object.kind=="message_buoy"
+            and Object.visible_in(object,pending.system) then
+         occupied=true
+         break
+      end
+   end
    for request,creation in pairs(session.pending_object_requests) do
       if creation.action=="create_reconcile"
             and creation.system==message.system then
-         fail_object_create(request,"missing")
+         fail_object_create(request,occupied and "occupied" or "missing")
       end
    end
    if not session.machine or session.machine.system~=message.system then return end
@@ -1478,20 +1497,55 @@ local function send_pending_object_deletes ( peer )
    end
 end
 
+local function has_pending_object_delete ( system_name )
+   for _object_id,entry in pairs(session.pending_object_deletes) do
+      if not entry.system or entry.system==system_name then return true end
+   end
+   return false
+end
+
+local function send_object_create ( peer, request, pending )
+   if not peer then return false end
+   pending.action="create"
+   pending.deadline=now()+OBJECT_REQUEST_TIMEOUT
+   if send(peer,{type="object_create",node=session.settings.node_id,
+         request=request,object_id=pending.object_id,
+         object=pending.packed},true) then return true end
+   pending.action="create_wait_delete"
+   pending.deadline=now()+OBJECT_RECONCILE_TIMEOUT
+   return false
+end
+
+local function send_waiting_object_creates ( peer )
+   if not peer then return end
+   for request,pending in pairs(session.pending_object_requests) do
+      if pending.action=="create_wait_delete"
+            and not has_pending_object_delete(pending.system) then
+         send_object_create(peer,request,pending)
+      end
+   end
+end
+
 local function object_result ( message )
    local pending=session.pending_object_requests[message.request]
    if not pending then return end
    if pending.action=="create" or pending.action=="create_reconcile" then
+      if message.action~="create"
+            or message.object_id~=pending.object_id then return end
       if message.ok==1 then
+         if pending.object then pending.object.revision=message.revision end
          complete_object_create(message.request,pending,message.object_id)
       else
          fail_object_create(message.request,message.code)
       end
    elseif pending.action=="delete" then
+      if message.action~="delete"
+            or message.object_id~=pending.object_id then return end
       session.pending_object_requests[message.request]=nil
       local entry=session.pending_object_deletes[pending.object_id]
       if message.ok==1 then
          session.pending_object_deletes[pending.object_id]=nil
+         send_waiting_object_creates(object_directory_peer())
       elseif entry then
          entry.sent=false
       end
@@ -1506,8 +1560,92 @@ local function handle_directory_object_message ( message )
    elseif message.type=="object_deleted" then
       remove_local_object(message.object_id)
       session.pending_object_deletes[message.object_id]=nil
+      send_waiting_object_creates(object_directory_peer())
    elseif message.type=="object_result" then
       object_result(message)
+   end
+end
+
+local function reset_object_requests_after_disconnect ()
+   for request,pending in pairs(session.pending_object_requests) do
+      if pending.action=="create" then
+         pending.action="create_reconcile"
+         pending.deadline=now()+OBJECT_RECONCILE_TIMEOUT
+      elseif pending.action=="query" then
+         session.pending_object_requests[request]=nil
+      elseif pending.action=="delete" then
+         session.pending_object_requests[request]=nil
+         local queued=session.pending_object_deletes[pending.object_id]
+         if queued then queued.sent=false; queued.request=nil end
+      end
+   end
+end
+
+local function process_object_deadlines ( stamp )
+   local expired={}
+   for request,pending in pairs(session.pending_object_requests) do
+      if stamp>=pending.deadline then expired[#expired+1]=request end
+   end
+   for _index,request in ipairs(expired) do
+      local pending=session.pending_object_requests[request]
+      if pending.action=="create" then
+         pending.action="create_reconcile"
+         pending.deadline=stamp+OBJECT_RECONCILE_TIMEOUT
+         local peer=object_directory_peer()
+         if peer then query_objects(peer) end
+      elseif pending.action=="create_reconcile" then
+         fail_object_create(request,"timeout")
+      elseif pending.action=="create_wait_delete" then
+         fail_object_create(request,"timeout")
+      elseif pending.action=="delete" then
+         session.pending_object_requests[request]=nil
+         local queued=session.pending_object_deletes[pending.object_id]
+         if queued then queued.sent=false; queued.request=nil end
+      else
+         session.pending_object_requests[request]=nil
+      end
+   end
+   if stamp-(session.last_object_retry or 0)>=1 then
+      session.last_object_retry=stamp
+      local peer=object_directory_peer()
+      send_pending_object_deletes(peer)
+      send_waiting_object_creates(peer)
+   end
+end
+
+-- Persistent-object traffic must remain live while a solo P2P host is paused.
+-- It therefore has a dedicated ENet host serviced by a recurring safe hook,
+-- independently of the gameplay transport serviced by hook.update.
+function session.update_object_client ()
+   if not session.running then return false end
+   if session.object_client then session.object_client:update() end
+   process_object_deadlines(now())
+   return true
+end
+
+local function start_object_client ()
+   if session.object_client or session.settings.directory=="" then return end
+   session.object_client=ObjectClient.new{
+      endpoint=session.settings.directory,
+      node=session.settings.node_id,
+      name=local_player_name(),
+      now=now,
+      on_ready=function(client)
+         publish_object_capability()
+         send_pending_object_deletes(client)
+         query_objects(client)
+         send_waiting_object_creates(client)
+      end,
+      on_message=handle_directory_object_message,
+      on_disconnect=function()
+         reset_object_requests_after_disconnect()
+         publish_object_capability()
+      end,
+   }
+   local object_ok,object_err=session.object_client:start()
+   if not object_ok then
+      print("P2P: "..tostring(object_err))
+      session.object_client=nil
    end
 end
 
@@ -1564,11 +1702,7 @@ local function on_message ( peer, message )
             send(peer,{type="activity_query",node=session.settings.node_id},true)
             session.last_activity_query=now()
          end
-         if has_feature(meta,"objects") then
-            publish_object_capability()
-            send_pending_object_deletes(peer)
-            query_objects(peer)
-         end
+         if has_feature(meta,"objects") then start_object_client() end
       end
       return
    end
@@ -1604,12 +1738,7 @@ local function on_message ( peer, message )
       return
    end
    if meta.cap=="directory" then
-      if message.type=="object_entry" or message.type=="object_done"
-            or message.type=="object_deleted" or message.type=="object_result" then
-         if has_feature(meta,"objects") then
-            handle_directory_object_message(message)
-         end
-      elseif message.type=="activity" then
+      if message.type=="activity" then
          local received=now()
          local activity={}
          if message.entries~="-" then
@@ -2008,6 +2137,7 @@ function session.start ( settings )
    session.pending_object_deletes={}
    session.object_request=0
    session.last_object_retry=0
+   session.object_client=nil
    session.npc_audit_queue={}
    session.npc_audit_at=1
    session.activity={}
@@ -2043,9 +2173,11 @@ function session.stop ()
    end
    if session.machine.system then broadcast(base("leave"),true) end
    session.leave()
+   if session.object_client then session.object_client:stop() end
    for peer in pairs(session.peers) do peer:disconnect_now() end
    session.settings.recent=session.machine.topology:serialize_peers()
-   session.machine:stop(); session.host=nil; session.running=false; session.peers={}; session.endpoints={}; session.peer_meta={}; session.identities=nil
+   session.machine:stop(); session.host=nil; session.object_client=nil
+   session.running=false; session.peers={}; session.endpoints={}; session.peer_meta={}; session.identities=nil
    publish_object_capability()
 end
 
@@ -2076,11 +2208,7 @@ function session.enter ( system_name )
    connect_configured(); session.last_seed_connect=now()
    print("P2P: discovering system host")
    for peer in pairs(session.peers) do send(peer,base("query"),true) end
-   for peer,meta in pairs(session.peer_meta) do
-      if meta.verified and meta.cap=="directory" and has_feature(meta,"objects") then
-         query_objects(peer)
-      end
-   end
+   query_objects(object_directory_peer())
    publish_player(true)
    return true
 end
@@ -2147,6 +2275,13 @@ function session.create_message_buoy ( text, slot )
    end
    local peer=object_directory_peer()
    if not peer then return nil,_("The configured directory does not support persistent objects.") end
+   for _request,pending in pairs(session.pending_object_requests) do
+      if (pending.action=="create" or pending.action=="create_reconcile"
+            or pending.action=="create_wait_delete")
+            and pending.system==session.machine.system then
+         return nil,_("A message buoy deployment is already in progress.")
+      end
+   end
    local object_id=session.settings.node_id.."_"..random_id()
    local x,y=player.pilot():pos():get()
    local object={
@@ -2162,13 +2297,17 @@ function session.create_message_buoy ( text, slot )
    local packed,err=Object.encode(object)
    if not packed then return nil,tostring(err) end
    local request=next_object_request()
+   local waiting=has_pending_object_delete(session.machine.system)
    session.pending_object_requests[request]={
-      action="create",object_id=object_id,slot=slot,
-      system=session.machine.system,
-      deadline=now()+OBJECT_REQUEST_TIMEOUT,
+      action=waiting and "create_wait_delete" or "create",
+      object_id=object_id,slot=slot,system=session.machine.system,
+      object=object,packed=packed,
+      deadline=now()+(waiting and OBJECT_RECONCILE_TIMEOUT
+         or OBJECT_REQUEST_TIMEOUT),
    }
-   if not send(peer,{type="object_create",node=session.settings.node_id,
-         request=request,object_id=object_id,object=packed},true) then
+   if waiting then
+      player.msg(_("Waiting for the destroyed message buoy to be removed…"))
+   elseif not send_object_create(peer,request,session.pending_object_requests[request]) then
       session.pending_object_requests[request]=nil
       return nil,_("The message buoy directory is unavailable.")
    end
@@ -2182,7 +2321,10 @@ function session.message_buoy_destroyed ( object_id, destroyed_pilot )
    if entry.hook then hook.rm(entry.hook) end
    if entry.local_id then session.local_object_pilots[entry.local_id]=nil end
    session.local_objects[object_id]=nil
-   session.pending_object_deletes[object_id]={sent=false}
+   local endpoint=message_buoy_endpoint(entry.object)
+   session.pending_object_deletes[object_id]={
+      sent=false,system=endpoint and endpoint.system,
+   }
    send_pending_object_deletes(object_directory_peer())
    return true
 end
@@ -2304,22 +2446,6 @@ function session.update ( dt )
          if message then on_message(event.peer,message) else print("P2P: rejected packet: " .. tostring(err)) end
       elseif event.type=="disconnect" then
          local meta=session.peer_meta[event.peer]
-         local object_directory_lost=meta and meta.verified
-            and meta.cap=="directory" and has_feature(meta,"objects")
-         if object_directory_lost then
-            for request,pending in pairs(session.pending_object_requests) do
-               if pending.action=="create" then
-                  pending.action="create_reconcile"
-                  pending.deadline=now()+OBJECT_RECONCILE_TIMEOUT
-               elseif pending.action=="query" then
-                  session.pending_object_requests[request]=nil
-               elseif pending.action=="delete" then
-                  session.pending_object_requests[request]=nil
-                  local queued=session.pending_object_deletes[pending.object_id]
-                  if queued then queued.sent=false; queued.request=nil end
-               end
-            end
-         end
          if meta and meta.node then
             local last_connection=not connected_node(meta.node,event.peer,true)
             if last_connection then
@@ -2335,7 +2461,6 @@ function session.update ( dt )
             end
          end
          local endpoint=session.peers[event.peer]; session.peers[event.peer]=nil; session.peer_meta[event.peer]=nil; if endpoint then session.endpoints[endpoint]=nil end
-         if object_directory_lost then publish_object_capability() end
       end
       if processed>=MAX_EVENTS_PER_FRAME then break end
       event=session.host:service(0)
@@ -2401,35 +2526,13 @@ function session.update ( dt )
       audit_npc_control(stamp)
       refresh_time_controls(stamp)
    end
-   local expired={}
-   for request,pending in pairs(session.pending_object_requests) do
-      if stamp>=pending.deadline then expired[#expired+1]=request end
-   end
-   for _index,request in ipairs(expired) do
-      local pending=session.pending_object_requests[request]
-      if pending.action=="create" then
-         pending.action="create_reconcile"
-         pending.deadline=stamp+OBJECT_RECONCILE_TIMEOUT
-         local peer=object_directory_peer()
-         if peer then query_objects(peer) end
-      elseif pending.action=="create_reconcile" then
-         fail_object_create(request,"timeout")
-      elseif pending.action=="delete" then
-         session.pending_object_requests[request]=nil
-         local queued=session.pending_object_deletes[pending.object_id]
-         if queued then queued.sent=false; queued.request=nil end
-      else
-         session.pending_object_requests[request]=nil
-      end
-   end
-   if stamp-(session.last_object_retry or 0)>=1 then
-      session.last_object_retry=stamp
-      send_pending_object_deletes(object_directory_peer())
-   end
    for object_id,entry in pairs(session.local_objects) do
       if not exists(entry.pilot) then
-         session.local_objects[object_id]=nil
-         if entry.local_id then session.local_object_pilots[entry.local_id]=nil end
+         -- The pilot hook is the primary destruction path, but engine hook
+         -- teardown can race pilot removal. Treat an unexpectedly missing
+         -- local copy as destruction instead of silently orphaning its
+         -- persistent directory object.
+         session.message_buoy_destroyed(object_id,entry.pilot)
       elseif stamp>=entry.announce_at then
          entry.pilot:broadcast(entry.object.data.text,true)
          entry.announce_at=stamp+BUOY_BROADCAST_INTERVAL

@@ -19,6 +19,11 @@ The isolated P2P implementation is:
 `directory/main.lua` is the standalone blocking lua-enet adapter. It is not
 loaded by Naev. The directory never joins a system or relays gameplay data;
 its reliable `punch` introductions only make both players dial one another.
+The session shares one ENet host with directory and player connections for NAT
+mapping, but generic gameplay broadcasts must target verified player peers
+only. Directory peers receive explicit directory requests plus the `claim` and
+`leave` lifecycle messages they consume; routing manifests or state packets to
+them can queue object control traffic behind an entire system population.
 
 Death Race is deliberately outside the persistent P2P session.
 `events/pod_racing_roster.lua` loads only on entering Alteris and owns a bounded,
@@ -116,6 +121,12 @@ The update hook must call `service(0)` and drain only immediately available
 events. Remove update, enter, takeoff, landing, and jump hooks when disabling
 P2P. Guests disable ambient spawning only after a host is directly verified,
 and re-enable it when leaving or stopping.
+
+Persistent space objects use a separate ENet client from gameplay. Naev stops
+`hook.update` while a solo host is paused, so `space_objects.lua` services the
+bounded object client through recurring safe hooks. Do not move object
+acknowledgements, retries, subscriptions, or reconnects back onto the gameplay
+host; buoy deployment and deletion must remain live without simulation ticks.
 
 Player health is never imported. Remote player proxies are invincible locally,
 but their locally simulated weapons may damage the real player. NPC and owned

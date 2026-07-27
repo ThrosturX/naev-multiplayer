@@ -13,4 +13,9 @@
  <spob name="Warden's End">
   <tech_add>Activity Scanner</tech_add>
  </spob>
+ <spob name="Darkshed">
+  <tech_add>Distress Beacon</tech_add>
+  <tech_add>Activity Scanner</tech_add>
+  <tech_add>Message Buoy</tech_add>
+ </spob>
 </unidiff>

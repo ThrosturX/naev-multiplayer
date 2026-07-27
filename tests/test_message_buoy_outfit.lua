@@ -54,6 +54,10 @@ package.loaded.format={}
 package.loaded["multiplayer.client"]={}
 package.loaded["multiplayer.server"]={}
 package.loaded["multiplayer.p2p.session"]={}
+package.loaded["multiplayer.p2p.space_objects"]={
+   start=function() end,stop=function() end,pump=function() end,
+   update=function() end,
+}
 package.loaded.luatk={}
 package.loaded.vn={}
 naev={cache=function() return cache end}
