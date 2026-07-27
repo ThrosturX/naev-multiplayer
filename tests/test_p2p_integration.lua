@@ -6,7 +6,7 @@ local network={hosts={},next_port=63000}
 local peer_mt={}
 peer_mt.__index=peer_mt
 function peer_mt:send ( data, _channel, _flag )
-   if self.closed then return end
+   if self.closed or self.drop_outgoing then return end
    local kind=data:match("^MP2P/1 ([%w_]+)")
    if kind and self.host.sent_types then
       self.host.sent_types[kind]=(self.host.sent_types[kind] or 0)+1
@@ -106,11 +106,17 @@ local function new_world ( player_name )
       return list
    end
    function pilot_methods:actives () return self.active_outfits end
-   function pilot_methods:pos () return self.position end
+   function pilot_methods:pos ()
+      self.position_reads=(self.position_reads or 0)+1
+      return self.position
+   end
    function pilot_methods:vel () return self.velocity end
    function pilot_methods:dir () return self.direction end
    function pilot_methods:target () return self.target_pilot end
-   function pilot_methods:health () return self.armour,self.shield,self.stress end
+   function pilot_methods:health ()
+      self.health_reads=(self.health_reads or 0)+1
+      return self.armour,self.shield,self.stress
+   end
    function pilot_methods:energy () return self.energy_value end
    function pilot_methods:disabled () return self.is_disabled==true end
    function pilot_methods:radius () return 50 end
@@ -439,6 +445,9 @@ local target_npc=host:add_pilot("Llama","Empire","Target NPC",false)
 npc.ai_name="empire"
 npc:setTarget(target_npc)
 npc:pushtask("attack",target_npc)
+local loiter_npc=host:add_pilot("Hyena","Pirate","Loiter NPC",false)
+loiter_npc.ai_name="pirate"
+loiter_npc:pushtask("loiter",vector(1000,1000))
 local escort=host:add_pilot("Hyena","Player","Host Escort",true,"escort")
 escort.pilot_id=777
 escort:setLeader(host.local_pilot)
@@ -608,7 +617,24 @@ local target_npc_replica=find(guest,"Target NPC","Empire")
 assert(target_npc_replica and npc_replica:ainame()=="empire"
       and npc_replica:taskname()=="attack"
       and npc_replica:taskdata()==target_npc_replica,
-   "guest NPC did not receive the host AI profile and current goal")
+   "guest NPC did not receive the host AI profile and current goal: "
+      ..tostring(target_npc_replica).."/"..tostring(npc_replica:ainame())
+      .."/"..tostring(npc_replica:taskname()).."/"
+      ..tostring(npc_replica:taskdata()))
+local loiter_replica=find(guest,"Loiter NPC","Pirate")
+assert(loiter_replica and loiter_replica:ainame()=="pirate"
+      and loiter_replica:taskname()~="loiter",
+   "private loiter task data was replicated as malformed loiter(nil)")
+-- Naev can retain an invalid target handle briefly after the target pilot is
+-- removed. State publication must treat it as no target instead of throwing
+-- from the per-frame update hook and flooding the log with backtraces.
+local npc_states_before_invalid_target=host.session.host.sent_types.npc_state or 0
+target_npc:rm()
+advance({host,guest},0.35,8)
+assert((host.session.host.sent_types.npc_state or 0)>npc_states_before_invalid_target,
+   "invalid authoritative target interrupted NPC state publication")
+npc:setTarget(host.local_pilot)
+advance({host,guest},0.35,8)
 assert((host.session.host.sent_types.npc_manifest or 0)>0,
    "full NPC synchronization did not use a batched manifest")
 assert((host.session.host.sent_types.npc_control or 0)>0,
@@ -635,6 +661,38 @@ local disable_sets=npc_replica.disable_sets or 0
 advance({host,guest},0.35,8)
 assert((npc_replica.disable_sets or 0)==disable_sets,
    "unchanged disabled state repeatedly called setDisable")
+
+-- Ambient discovery is a one-second cached sweep. Nearby NPCs retain the
+-- normal 3 Hz state cadence, while a distant NPC receives one staggered cold
+-- refresh per fifteen state ticks instead of being sampled on every tick.
+local far_npc=host:add_pilot("Rhino","Empire","Far NPC",false)
+far_npc.position=vector(50000,0)
+advance({host,guest},1.1,12)
+local far_replica=find(guest,"Far NPC","Empire")
+assert(far_replica,"cached inventory sweep did not publish a distant NPC addition")
+far_npc.health_reads=0
+npc.health_reads=0
+host.c_calls={}
+for _tick=1,15 do advance({host,guest},0.35,8) end
+assert((npc.health_reads or 0)>=14,
+   "nearby NPC did not retain the full state cadence")
+assert((far_npc.health_reads or 0)>=1 and (far_npc.health_reads or 0)<=2,
+   "distant NPC was not staggered through the cold round robin: "
+      ..tostring(far_npc.health_reads))
+assert((host.c_calls.pilot_get or 0)<=6,
+   "ambient and craft publication did not share the one-second inventory cache")
+far_npc:setTarget(host.local_pilot)
+advance({host,guest},1.1,8)
+far_npc.health_reads=0
+for _tick=1,3 do advance({host,guest},0.35,8) end
+assert((far_npc.health_reads or 0)>=3,
+   "NPC targeting a participant did not return to the full state cadence: "
+      ..tostring(far_npc.health_reads))
+far_npc:rm()
+advance({host,guest},1.1,12)
+assert(not far_replica:exists(),
+   "cached inventory sweep did not publish a distant NPC removal")
+
 assert(not escort_replica:withPlayer(),"remote host craft became guest-owned")
 assert(escort_replica:ainame()=="escort" and escort_replica:leader()==host_proxy,
    "remote host craft did not retain escort AI and its network owner's leader")
@@ -872,10 +930,14 @@ advance({host,guest,third},0.35,8)
 assert(npc_replica.armour==42 and npc_replica.shield==17 and npc_replica.stress==3 and npc_replica.energy_value==51)
 
 local removed_npc=host:add_pilot("Rhino","Empire","Removed NPC",false)
-advance({host,guest,third},0.35,8)
+advance({host,guest,third},1.1,8)
 local removed_replica=find(guest,"Removed NPC","Empire")
 assert(removed_replica,"guest did not receive incremental NPC addition")
-removed_npc:rm(); advance({host,guest,third},0.35,8)
+removed_npc:rm()
+advance({host,guest,third},0.35,8)
+assert(removed_replica:exists(),
+   "cached inventory inferred removal before its discovery sweep")
+advance({host,guest,third},0.75,8)
 assert(not removed_replica:exists(),"guest ignored authoritative NPC removal")
 
 host.local_pilot:setPos(vector(500,0))
@@ -1031,6 +1093,16 @@ assert(not stale_host.session.players["39"]
       and stale_host.session.departures["39"].pilot==stale_proxy
       and stale_proxy:disabled(),
    "silent participant timeout left a one-sided player ghost")
+for _peer,meta in pairs(stale_host.session.peer_meta) do
+   assert(meta.node~="39",
+      "silent participant timeout retained a dead gameplay transport")
+end
+update({stale_host,stale_guest},8)
+advance({stale_host,stale_guest},6,32)
+assert(stale_host.session.machine.state=="host"
+      and stale_guest.session.machine.state=="guest"
+      and stale_guest.session.machine.host=="38",
+   "liveness timeout did not permit the dead UDP path to rendezvous again")
 stale_guest.session.stop()
 stale_host.session.stop()
 
@@ -1135,6 +1207,31 @@ assert(reconnect_guest.session.start{enabled=true,node_id="70",listen_port=0,
    directory="127.0.0.1:61201",bootstrap={},recent={}})
 assert(reconnect_guest.session.enter("Arandon")); update({reconnect_host,reconnect_guest},16)
 assert(reconnect_guest.session.machine.state=="guest")
+-- Landing can leave an ENet peer looking connected even though one UDP path is
+-- already dead. A new system visit must replace that gameplay transport before
+-- discovery, or the returning guest will independently claim the system.
+local half_open
+for peer,meta in pairs(reconnect_guest.session.peer_meta) do
+   if meta.verified and meta.cap=="player" then half_open=peer; break end
+end
+assert(half_open)
+half_open.drop_outgoing=true
+reconnect_guest.session.leave()
+assert(reconnect_guest.session.enter("Arandon"))
+update({reconnect_host,reconnect_guest},24)
+advance({reconnect_host,reconnect_guest},2,16)
+assert(reconnect_host.session.machine.state=="host"
+      and reconnect_guest.session.machine.state=="guest"
+      and reconnect_guest.session.machine.host=="60",
+   "returning guest reused a half-open path and claimed a second host")
+local reconnect_player_peers=0
+for _peer,meta in pairs(reconnect_guest.session.peer_meta) do
+   if meta.verified and meta.cap=="player" then
+      reconnect_player_peers=reconnect_player_peers+1
+   end
+end
+assert(reconnect_player_peers==1,
+   "landing lifecycle retained duplicate gameplay transports")
 local severed
 for peer in pairs(reconnect_guest.session.peers) do severed=peer; break end
 assert(severed); severed:disconnect_now(); update({reconnect_host,reconnect_guest},12)
@@ -1212,6 +1309,47 @@ update({punch_guest},4)
 assert(punch_guest.cache.multiplayer_p2p_objects==true,
    "object-capable directory was not advertised to the outfit")
 
+-- A reliable ENet peer can remain locally "verified" after becoming half-open.
+-- Periodic subscription refresh must notice the unanswered query, invalidate
+-- that transport, reconnect, and restore the current-system subscription.
+local stale_object_peer=object_directory_peer
+stale_object_peer.remote_peer.drop_outgoing=true
+advance({punch_guest},31,8)
+advance({punch_guest},5,8)
+directory_event=fake_directory:service(0)
+while directory_event do
+   if directory_event.type=="connect"
+         and directory_event.peer~=directory_peer
+         and directory_event.peer~=stale_object_peer then
+      object_directory_peer=directory_event.peer
+   end
+   directory_event=fake_directory:service(0)
+end
+assert(object_directory_peer~=stale_object_peer
+      and not object_directory_peer.closed,
+   "unanswered object query did not replace its half-open transport")
+object_directory_peer:send(assert(wire_codec.encode{
+   type="hello",node="d1",cap="directory",features="activity,objects",
+}),0,"reliable")
+update({punch_guest},4)
+local recovered_query
+directory_event=fake_directory:service(0)
+while directory_event do
+   if directory_event.type=="receive" then
+      local message=assert(wire_codec.decode(directory_event.data))
+      if message.type=="object_query" then recovered_query=message end
+   end
+   directory_event=fake_directory:service(0)
+end
+assert(recovered_query and recovered_query.system=="Gamma Polaris",
+   "reconnected object transport did not restore its system subscription")
+object_directory_peer:send(assert(wire_codec.encode{
+   type="object_done",node="d1",system="Gamma Polaris",
+   request=recovered_query.request,count=0}),0,"reliable")
+update({punch_guest},4)
+assert(punch_guest.cache.multiplayer_p2p_objects==true,
+   "recovered object transport was not advertised to the outfit")
+
 local buoy_slot=select(2,punch_guest.local_pilot:outfitAddSlot(
    resource("Message Buoy"),4))
 buoy_slot=buoy_slot or 4
@@ -1238,11 +1376,27 @@ advance({punch_guest},11,8)
 local reconcile_query
 directory_event=fake_directory:service(0)
 while directory_event do
-   if directory_event.type=="receive" then
+   if directory_event.type=="connect" then
+      object_directory_peer=directory_event.peer
+   elseif directory_event.type=="receive" then
       local message=assert(wire_codec.decode(directory_event.data))
       if message.type=="object_query" then reconcile_query=message end
    end
    directory_event=fake_directory:service(0)
+end
+if not reconcile_query then
+   object_directory_peer:send(assert(wire_codec.encode{
+      type="hello",node="d1",cap="directory",features="activity,objects",
+   }),0,"reliable")
+   update({punch_guest},4)
+   directory_event=fake_directory:service(0)
+   while directory_event do
+      if directory_event.type=="receive" then
+         local message=assert(wire_codec.decode(directory_event.data))
+         if message.type=="object_query" then reconcile_query=message end
+      end
+      directory_event=fake_directory:service(0)
+   end
 end
 assert(reconcile_query,"creation timeout did not trigger reconciliation")
 object_directory_peer:send(assert(wire_codec.encode{
@@ -1331,6 +1485,9 @@ punch_guest.session.leave()
 assert(replacement_buoy.removed,
    "docking did not remove the local persistent-object representation")
 assert(punch_guest.session.enter("Gamma Polaris"))
+replacement_buoy=find(punch_guest,"Message Buoy","P2P Message Buoys")
+assert(replacement_buoy,
+   "takeoff did not recreate the last confirmed local object snapshot")
 local takeoff_query
 directory_event=fake_directory:service(0)
 while directory_event do
@@ -1352,8 +1509,88 @@ object_directory_peer:send(assert(wire_codec.encode{
 }),0,"reliable")
 for _round=1,4 do punch_guest.session.update_object_client() end
 replacement_buoy=find(punch_guest,"Message Buoy","P2P Message Buoys")
-assert(replacement_buoy,
-   "persisted message buoy was not recreated after docking and takeoff")
+assert(replacement_buoy and not replacement_buoy.exploded,
+   "directory confirmation replaced or destroyed the remembered buoy")
+-- A later authoritative empty snapshot must remove the optimistic copy with
+-- an explosion, but must not report that reconciliation as local destruction.
+punch_guest.session.leave()
+assert(punch_guest.session.enter("Gamma Polaris"))
+local stale_buoy=find(punch_guest,"Message Buoy","P2P Message Buoys")
+assert(stale_buoy,"remembered buoy was not rendered before reconciliation")
+local empty_query
+directory_event=fake_directory:service(0)
+while directory_event do
+   if directory_event.type=="receive" then
+      local message=assert(wire_codec.decode(directory_event.data))
+      if message.type=="object_query" then empty_query=message end
+   end
+   directory_event=fake_directory:service(0)
+end
+assert(empty_query,"second takeoff did not query persistent objects")
+-- Lose the entire transition query. The desired subscription remains
+-- unconfirmed and must issue another query after the request timeout while
+-- retaining the optimistic local snapshot.
+advance({punch_guest},11,8)
+local retried_empty_query
+directory_event=fake_directory:service(0)
+while directory_event do
+   if directory_event.type=="connect" then
+      object_directory_peer=directory_event.peer
+   elseif directory_event.type=="receive" then
+      local message=assert(wire_codec.decode(directory_event.data))
+      if message.type=="object_query"
+            and message.request~=empty_query.request then
+         retried_empty_query=message
+      end
+   end
+   directory_event=fake_directory:service(0)
+end
+if not retried_empty_query then
+   object_directory_peer:send(assert(wire_codec.encode{
+      type="hello",node="d1",cap="directory",features="activity,objects",
+   }),0,"reliable")
+   update({punch_guest},4)
+   directory_event=fake_directory:service(0)
+   while directory_event do
+      if directory_event.type=="receive" then
+         local message=assert(wire_codec.decode(directory_event.data))
+         if message.type=="object_query"
+               and message.request~=empty_query.request then
+            retried_empty_query=message
+         end
+      end
+      directory_event=fake_directory:service(0)
+   end
+end
+assert(retried_empty_query and not stale_buoy.exploded,
+   "lost transition query was not retried with its cached buoy intact")
+object_directory_peer:send(assert(wire_codec.encode{
+   type="object_done",node="d1",system="Gamma Polaris",
+   request=retried_empty_query.request,count=0,
+}),0,"reliable")
+for _round=1,4 do punch_guest.session.update_object_client() end
+assert(stale_buoy.exploded,
+   "directory removal did not explode the optimistic local buoy")
+local reconciliation_delete
+directory_event=fake_directory:service(0)
+while directory_event do
+   if directory_event.type=="receive" then
+      local message=assert(wire_codec.decode(directory_event.data))
+      if message.type=="object_delete" then reconciliation_delete=message end
+   end
+   directory_event=fake_directory:service(0)
+end
+assert(not reconciliation_delete,
+   "authoritative reconciliation falsely reported local destruction")
+-- Restore the directory fixture through the subscribed live-add path for the
+-- destruction and reconnect tests below.
+object_directory_peer:send(assert(wire_codec.encode{
+   type="object_entry",node="d1",request=0,
+   object=replacement_create.object,
+}),0,"reliable")
+for _round=1,4 do punch_guest.session.update_object_client() end
+replacement_buoy=find(punch_guest,"Message Buoy","P2P Message Buoys")
+assert(replacement_buoy,"live object addition did not restore the local buoy")
 -- Naev can remove system pilots before the landing lifecycle callback. A
 -- missing local representation must never be inferred to be destruction.
 replacement_buoy.removed=true

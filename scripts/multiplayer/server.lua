@@ -527,7 +527,7 @@ end
 MESSAGE_HANDLERS[common.ACTIVATE_OUTFIT] = function ( peer, data )
     local plid = REGISTERED[peer:index()]
     if not plid then
-        print("Peer registration not found for peer #" .. tostring(peer:index()))
+        print("Peer registration not found for peer index " .. tostring(peer:index()))
         for pk, pv in pairs(REGISTERED) do
             print(fmt.f("{pk}: {pv}", {pk=pk, pv=pv}))
         end
@@ -538,7 +538,7 @@ end
 MESSAGE_HANDLERS[common.DEACTIVATE_OUTFIT] = function ( peer, data )
     local plid = REGISTERED[peer:index()]
     if not plid then
-        print("Peer registration not found for peer #" .. tostring(peer:index()))
+        print("Peer registration not found for peer index " .. tostring(peer:index()))
         for pk, pv in pairs(REGISTERED) do
             print(fmt.f("{pk}: {pv}", {pk=pk, pv=pv}))
         end

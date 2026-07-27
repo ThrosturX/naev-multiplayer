@@ -87,6 +87,18 @@ function ObjectClient:disconnect ()
    if was_connected then self.on_disconnect() end
 end
 
+-- ENet can retain a half-open peer for substantially longer than the object
+-- protocol can tolerate. An unanswered reliable request is application-level
+-- proof that this transport is no longer useful, even if no disconnect event
+-- has arrived yet.
+function ObjectClient:invalidate ()
+   local peer=self.peer
+   self:disconnect()
+   if peer then peer:disconnect_now() end
+   self.last_connect=self.now()-RECONNECT_INTERVAL
+   return self:connect()
+end
+
 function ObjectClient:update ()
    if not self.host then return false end
    local processed=0
