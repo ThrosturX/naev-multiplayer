@@ -11,13 +11,18 @@ local function valid_name ( name )
       and not name:find("[%z\1-\31\127]")
 end
 
+local function safe_display ( name )
+   return name:gsub("#","＃")
+end
+
 function identity.new ( local_node, local_name )
    assert(type(local_node)=="string" and local_node~="")
    assert(valid_name(local_name))
+   local display=safe_display(local_name)
    return setmetatable({
       local_node=local_node,
-      by_node={[local_node]={raw=local_name,display=local_name}},
-      by_display={[local_name]=local_node},
+      by_node={[local_node]={raw=local_name,display=display}},
+      by_display={[display]=local_node},
    },identity)
 end
 
@@ -30,10 +35,10 @@ function identity:add ( node, name )
       if old.raw==name then return old.display end
       return nil,"node changed player name"
    end
-   local display=name
+   local display=safe_display(name)
    local suffix=2
    while self.by_display[display] do
-      display=name.." #"..suffix
+      display=safe_display(name).." ("..suffix..")"
       suffix=suffix+1
    end
    self.by_node[node]={raw=name,display=display}
@@ -51,10 +56,10 @@ function identity:update ( node, name )
    if not old then return self:add(node,name) end
    if old.raw==name then return old.display end
    self.by_display[old.display]=nil
-   local display=name
+   local display=safe_display(name)
    local suffix=2
    while self.by_display[display] do
-      display=name.." #"..suffix
+      display=safe_display(name).." ("..suffix..")"
       suffix=suffix+1
    end
    old.raw=name; old.display=display

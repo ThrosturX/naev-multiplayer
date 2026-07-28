@@ -1,8 +1,9 @@
 -- Optional persistent-space-object directory transport.
 --
--- This deliberately does not share the gameplay ENet host. Gameplay is
--- serviced by hook.update, which Naev suspends while paused; this client is
--- serviced by a recurring safe hook and therefore remains live for solo hosts.
+-- This deliberately does not share the gameplay ENet host. Its adapter pumps
+-- the independent socket at a bounded cadence, including while an object
+-- request is pending during a local pause, so the system authority cannot
+-- block object requests.
 local codec = require "multiplayer.p2p.codec"
 local enet = require "enet"
 
@@ -11,6 +12,7 @@ ObjectClient.__index = ObjectClient
 
 local MAX_EVENTS = 24
 local RECONNECT_INTERVAL = 5
+local HANDSHAKE_TIMEOUT = 10
 
 local function supports_objects ( message )
    return type(message.features)=="string"
@@ -129,6 +131,10 @@ function ObjectClient:update ()
       end
       if processed>=MAX_EVENTS then break end
       event=self.host:service(0)
+   end
+   if self.peer and not self.verified
+         and self.now()-self.last_connect>=HANDSHAKE_TIMEOUT then
+      self:invalidate()
    end
    if not self.peer and self.now()-self.last_connect>=RECONNECT_INTERVAL then
       self:connect()

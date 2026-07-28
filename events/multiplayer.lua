@@ -19,7 +19,7 @@ local p2psession    = require "multiplayer.p2p.session"
 local space_objects = require "multiplayer.p2p.space_objects"
 local luatk         = require "luatk"
 local vn = require "vn"
--- luacheck: globals load startMultiplayerServer P2P_SESSION_UPDATE P2P_OBJECT_UPDATE P2P_SESSION_INPUT P2P_SESSION_HAIL P2P_SESSION_ENTER P2P_SESSION_LEAVE P2P_BUOY_CONSUME P2P_OBJECT_DESTROYED (Hook functions passed by name)
+-- luacheck: globals load startMultiplayerServer P2P_SESSION_UPDATE P2P_OBJECT_UPDATE P2P_SESSION_INPUT P2P_SESSION_HAIL P2P_SESSION_ENTER P2P_SESSION_LEAVE P2P_SESSION_PILOT_DEATH P2P_BUOY_CONSUME P2P_OBJECT_DESTROYED (Hook functions passed by name)
 
 local function pick_one ( ipair )
     return ipair[ rnd.rnd( 1, #ipair ) ]
@@ -36,8 +36,21 @@ end
 local mpbtn
 
 local p2p_hooks = {}
+local p2p_pilot_hooks = {}
 local p2p_hail_pressed
 local p2p_hail_vn_run
+
+local function p2p_clear_pilot_hooks ()
+    for _index, h in ipairs(p2p_pilot_hooks) do hook.rm(h) end
+    p2p_pilot_hooks = {}
+end
+
+local function p2p_install_pilot_hooks ()
+    p2p_clear_pilot_hooks()
+    p2p_pilot_hooks = {
+        hook.pilot(nil, "death", "P2P_SESSION_PILOT_DEATH"),
+    }
+end
 
 local function p2p_publish_config ()
     local settings = mem.multiplayer and mem.multiplayer.p2p or {}
@@ -57,6 +70,12 @@ local function p2p_restore_hail_vn ()
     p2p_hail_vn_run = nil
 end
 
+local function p2p_pump ( dt, modal )
+    if modal then p2psession.keep_simulation_live() end
+    p2psession.update(dt or 0)
+    space_objects.pump()
+end
+
 local function p2p_keep_hail_live ()
     if p2p_hail_vn_run then return end
     local vn_run = vn.run
@@ -66,7 +85,7 @@ local function p2p_keep_hail_live ()
         p2p_hail_vn_run = nil
         local vn_update = vn.update
         vn.update = function(dt)
-            p2psession.keep_simulation_live()
+            p2p_pump(dt, true)
             vn_update(dt)
         end
         local ok, err = pcall(vn_run, ...)
@@ -91,8 +110,7 @@ local function p2p_keep_chat_live ( chat_state )
     local widget_update = chat_state._update
     local chat_update
     chat_update = function(self, dt)
-        p2psession.keep_simulation_live()
-        space_objects.pump()
+        p2p_pump(dt, true)
         widget_update(self, dt)
         -- LuaTK replaces its one-shot focus initializer with its steady-state
         -- updater. Keep wrapping whichever updater it installs.
@@ -152,6 +170,7 @@ end
 
 local function p2p_stop ()
     p2p_restore_hail_vn()
+    p2p_clear_pilot_hooks()
     space_objects.stop()
     p2psession.stop()
     p2p_hail_pressed = nil
@@ -173,7 +192,10 @@ local function p2p_start ()
         hook.takeoff("P2P_SESSION_ENTER"),
         hook.jumpout("P2P_SESSION_LEAVE"),
     }
-    if not player.isLanded() then p2psession.enter(system.cur():nameRaw()) end
+    if not player.isLanded() then
+        p2psession.enter(system.cur():nameRaw())
+        p2p_install_pilot_hooks()
+    end
     space_objects.start(p2psession)
     p2p_publish_config()
 end
@@ -193,11 +215,7 @@ local function p2p_run_buoy_prompt ( request )
 end
 
 function P2P_SESSION_UPDATE ( dt )
-    p2psession.update(dt)
-    -- The regular update loop is authoritative whenever simulation is live.
-    -- The separate safe hook keeps the same bounded object client moving only
-    -- through periods where Naev suspends updates, such as a paused solo host.
-    space_objects.pump()
+    p2p_pump(dt)
     local cache = naev.cache()
     local request = cache.multiplayer_buoy_prompt
     if request then
@@ -218,6 +236,9 @@ function P2P_BUOY_CONSUME ( slot, _object_id )
 end
 function P2P_OBJECT_DESTROYED ( p, _attacker, object_id )
     p2psession.message_buoy_destroyed(object_id, p)
+end
+function P2P_SESSION_PILOT_DEATH ( p, _attacker )
+    p2psession.pilot_departed(p, "death")
 end
 function P2P_SESSION_HAIL () p2p_keep_hail_live() end
 function P2P_SESSION_INPUT ( input_name, input_pressed )
@@ -241,8 +262,15 @@ function P2P_SESSION_INPUT ( input_name, input_pressed )
     p2p_keep_chat_live(chat_state)
     p2p_run_chat()
 end
-function P2P_SESSION_ENTER () p2psession.enter(system.cur():nameRaw()) end
-function P2P_SESSION_LEAVE () p2p_hail_pressed=nil; p2psession.leave() end
+function P2P_SESSION_ENTER ()
+    p2psession.enter(system.cur():nameRaw())
+    p2p_install_pilot_hooks()
+end
+function P2P_SESSION_LEAVE ()
+    p2p_hail_pressed=nil
+    p2p_clear_pilot_hooks()
+    p2psession.leave()
+end
 
 function startMultiplayerServer( hostport )
     local fail = mplayerserver.start( hostport )

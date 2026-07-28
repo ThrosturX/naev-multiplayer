@@ -6,7 +6,7 @@ local reconcile=require "multiplayer.p2p.reconcile"
 local owned=require "multiplayer.p2p.owned"
 local core=require "multiplayer.p2p.core"
 local identity=require "multiplayer.p2p.identity"
-local status=require "multiplayer.p2p.status"
+local mesh=require "multiplayer.p2p.mesh"
 
 local tests={}
 local function test(name, fn) tests[#tests+1]={name,fn} end
@@ -72,12 +72,33 @@ test("protocol escaping and validation", function()
       scope="craft",owner="not-a-node"})
 end)
 
+test("bounded flood-once routing", function()
+   local now=0
+   local a=mesh.new("a1",function() return now end)
+   local b=mesh.new("b2",function() return now end)
+   local message={type="player_control",node="a1",system="X",entity="a1",
+      seq=1,target="-",primary=1,secondary=0,x=0,y=0,vx=0,vy=0,dir=0}
+   a:origin(message,"aa")
+   eq(message.via,"a1"); eq(message.hops,0)
+   assert(b:accept(message,"a1"))
+   assert(not b:accept(message,"a1"))
+   local forwarded=assert(b:forward(message))
+   eq(forwarded.via,"b2"); eq(forwarded.hops,1)
+   assert(not b:accept(forwarded,"a1"))
+   assert(not b:accept({
+      type="player_control",node="a1",visit="aa",route_seq=2,hops=9,via="a1",
+   },"a1"))
+   now=31
+   a:prune(now)
+   assert(a:mark(message))
+end)
+
 test("local-only player name aliases", function()
    local ids=identity.new("a1","John")
    eq(ids:add("b2","Jane"),"Jane")
    eq(ids:add("b2","Jane"),"Jane")
-   eq(ids:add("c3","John"),"John #2")
-   eq(ids:add("d4","John"),"John #3")
+   eq(ids:add("c3","John"),"John (2)")
+   eq(ids:add("d4","John"),"John (3)")
    assert(not ids:add("b2","Janet"))
    eq(ids:update("b2","Janet"),"Janet")
    eq(ids:raw_name("b2"),"Janet")
@@ -103,7 +124,7 @@ test("stale hints and peer-to-peer forwarding", function()
    local a=topology.new("a",function() return now end)
    local b=topology.new("b",function() return now end)
    assert(a:remember_hint("X","1","host:9","c",160))
-   local hint=a:answer("X"); assert(hint)
+   local hint=a:hint("X"); assert(hint)
    assert(b:remember_hint("X",hint.host,hint.endpoint,hint.claim,hint.expires))
    eq(b:hint("X").endpoint,"host:9")
    assert(b:remember_hint("X","2","new-host:10","d",160))
@@ -123,44 +144,19 @@ test("session transitions and host loss", function()
    assert(s:accept_claim{system="X",node="30",claim="incumbent"})
    eq(s.state,"guest"); eq(s.host,"30")
    s:leave(); assert(s:enter("X")); eq(s.state,"discovering")
-   now=1.6; eq(s:tick(),"claim"); eq(s.state,"host")
+   now=2.1; eq(s:tick(),"claim"); eq(s.state,"host")
    assert(not s:accept_claim{system="X",node="20",claim="reflected"}); eq(s.state,"host")
    s:accept_claim{system="X",node="10",claim="c"}; eq(s.state,"guest"); eq(s.host,"10")
-   s.members["30"]=true; eq(s:host_lost(),"20"); eq(s.state,"host")
+   s.members["30"]=true; s:host_lost(); eq(s.state,"recovering")
+   now=4.2; eq(s:tick(),"claim"); eq(s.state,"host")
    s:leave(); eq(s.state,"idle"); s:stop(); eq(s.state,"stopped")
-end)
-
-test("local transition countdowns", function()
-   local effects,removed={},{}
-   local p={
-      effectAdd=function(_self,name,duration) effects[name]=duration end,
-      effectRm=function(_self,name) effects[name]=nil; removed[name]=(removed[name] or 0)+1 end,
-   }
-   local indicators=status.new(function() return p end)
-   indicators:host_alone(10,2)
-   eq(effects["Multiplayer: Autonav Pending"],8)
-   indicators:host_alone(10,10)
-   eq(effects["Multiplayer: Autonav Pending"],nil)
-
-   indicators:mark_aggression(30,10)
-   eq(effects["Multiplayer: Aggression"],20)
-   indicators:mark_aggression(30.5,10.5)
-   eq(effects["Multiplayer: Aggression"],20)
-   indicators:reconcile_aggression(25,11)
-   eq(effects["Multiplayer: Aggression"],14)
-   assert((removed["Multiplayer: Aggression"] or 0)>0,
-      "shorter aggregate aggression deadline did not replace the effect")
-   indicators:reconcile_aggression(nil,25)
-   eq(effects["Multiplayer: Aggression"],nil)
 end)
 
 test("sequence rejection", function()
    local seen={}; assert(reconcile.accept(seen,"npc",2)); assert(not reconcile.accept(seen,"npc",2)); assert(not reconcile.accept(seen,"npc",1)); assert(reconcile.accept(seen,"npc",3))
 end)
 
-test("capped reconciliation and local health", function()
-   local m=reconcile.motion({x=0,y=0,vx=0,vy=0},{x=100,y=-100,vx=9,vy=-9,dir=2},10,2)
-   eq(m.x,10); eq(m.y,-10); eq(m.vx,2); eq(m.vy,-2)
+test("capped reconciliation", function()
    local smooth=reconcile.steer({x=0,y=0,vx=0,vy=0,dir=2*math.pi-0.1},
       {x=10000,y=-10000,vx=1000,vy=-1000,dir=0.1},1/60,0,
       {correction_speed=600,acceleration=600})
@@ -173,23 +169,13 @@ test("capped reconciliation and local health", function()
    local turned=math.abs((turn.dir+math.pi)%(2*math.pi)-math.pi)
    assert(math.abs(turned-0.15)<1e-9,
       "direction correction exceeded its angular speed cap")
-   local health=0
-   local placed=0
-   local adapter={soft_motion=function() end,set_motion=function() placed=placed+1 end,
-      set_health=function(_e,a,s,t) health=a+s+t end,set_energy=function() end}
-   assert(not reconcile.apply_player(adapter,{}, {},true)); eq(health,0)
-   reconcile.apply_npc(adapter,{}, {armour=4,shield=5,stress=6,energy=7},true)
-   eq(placed,1); eq(health,15)
    local replicas={a={native_ai=true}}; reconcile.host_lost(replicas)
    assert(replicas.a.native_ai and replicas.a.authoritative)
 end)
 
-test("owned craft nesting, authority, relay, cleanup", function()
+test("owned craft nesting and cleanup", function()
    local ids=owned.classify({"escort"},{escort={"fighter"},fighter={"drone"}})
    assert(ids.escort and ids.fighter and ids.drone)
-   local got=0; local host={members={owner=function() end,guest=function(msg,reliable) got=got+1; assert(not reliable) end}}
-   assert(owned.relay(host,"owner",{type="craft_state",owner="owner"})); eq(got,1)
-   assert(not owned.relay(host,"owner",{type="craft_state",owner="liar"}))
    local removed=false
    local replicas={a={owner="owner"},b={owner="guest"}}; owned.cleanup(replicas,"owner",function() removed=true end)
    assert(removed)

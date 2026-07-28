@@ -1,13 +1,15 @@
--- Event-facing lifecycle adapter for optional persistent space objects.
+-- Event-facing service adapter for optional persistent space objects.
 --
--- Safe hooks keep the dedicated object client alive while Naev suspends
--- gameplay update hooks for a paused solo host.
+-- The object transport is independent from gameplay peers. Normal and modal
+-- multiplayer updates service it at a bounded real-time cadence. A safe hook
+-- remains armed only while an acknowledgement, initial subscription, delete,
+-- or reconnect is pending, so paused requests remain live without permanent
+-- per-frame hook churn.
 local space_objects = {}
 
 local SERVICE_INTERVAL = 1
 local generation = 0
 local scheduled = false
-local checked_since_safe = false
 local last_service = -math.huge
 local runtime
 
@@ -19,8 +21,13 @@ local function dispatch_consumption ()
    hook.safe("P2P_BUOY_CONSUME",consume.slot,consume.object_id)
 end
 
-local function schedule ()
-   if scheduled or not runtime then return end
+local function service_pending ()
+   return runtime and runtime.object_service_pending
+      and runtime.object_service_pending()
+end
+
+local function schedule_if_pending ()
+   if scheduled or not service_pending() then return end
    scheduled=true
    hook.safe("P2P_OBJECT_UPDATE",generation)
 end
@@ -28,16 +35,14 @@ end
 function space_objects.start ( session )
    generation=generation+1
    scheduled=false
-   checked_since_safe=false
    last_service=-math.huge
    runtime=session
-   schedule()
+   schedule_if_pending()
 end
 
 function space_objects.stop ()
    generation=generation+1
    scheduled=false
-   checked_since_safe=false
    last_service=-math.huge
    runtime=nil
 end
@@ -53,19 +58,15 @@ local function service_if_due ()
 end
 
 function space_objects.update ( expected_generation )
-   if expected_generation and expected_generation~=generation then return end
+   if expected_generation~=generation then return end
    scheduled=false
-   if checked_since_safe then
-      checked_since_safe=false
-      schedule()
-   elseif service_if_due() then
-      schedule()
-   end
+   service_if_due()
+   schedule_if_pending()
 end
 
 function space_objects.pump ()
    service_if_due()
-   checked_since_safe=true
+   schedule_if_pending()
 end
 
 return space_objects

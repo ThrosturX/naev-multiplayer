@@ -8,23 +8,6 @@ function reconcile.accept ( sequences, stream, sequence )
    return true
 end
 
-local function capped ( current, wanted, cap )
-   local delta=wanted-current
-   if delta > cap then return current+cap end
-   if delta < -cap then return current-cap end
-   return wanted
-end
-
-function reconcile.motion ( current, wanted, position_cap, velocity_cap )
-   return {
-      x=capped(current.x, wanted.x, position_cap),
-      y=capped(current.y, wanted.y, position_cap),
-      vx=capped(current.vx, wanted.vx, velocity_cap),
-      vy=capped(current.vy, wanted.vy, velocity_cap),
-      dir=wanted.dir,
-   }
-end
-
 local function smooth_value ( current, wanted, rate, speed, dt )
    local delta=wanted-current
    local step=delta*(1-math.exp(-rate*dt))
@@ -72,18 +55,6 @@ function reconcile.steer ( current, wanted, dt, age, limits )
       vy=smooth_value(current.vy,wanted_vy,velocity_rate,acceleration,dt),
       dir=(current.dir+direction_step)%(2*math.pi),
    }
-end
-
-function reconcile.apply_npc ( adapter, entity, state, initial )
-   if initial then adapter.set_motion(entity, state) else adapter.soft_motion(entity, state) end
-   adapter.set_health(entity, state.armour, state.shield, state.stress)
-   if state.energy then adapter.set_energy(entity, state.energy) end
-end
-
-function reconcile.apply_player ( adapter, entity, state, is_local )
-   if is_local then return false end -- in particular, never write local health
-   adapter.soft_motion(entity, state)
-   return true
 end
 
 function reconcile.host_lost ( replicas )

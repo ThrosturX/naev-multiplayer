@@ -48,8 +48,6 @@ function topology:hint ( system_name )
    self.hints[system_name]=nil
 end
 
-function topology.answer ( self, system_name ) return self:hint(system_name) end
-
 function topology.elect ( members )
    local winner
    for _index, node in ipairs(members or {}) do

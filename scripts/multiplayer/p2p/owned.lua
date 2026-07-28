@@ -15,14 +15,6 @@ function owned.classify ( roots, relationships )
    return result
 end
 
-function owned.relay ( host, owner, message )
-   if message.owner ~= owner then return nil, "owner mismatch" end
-   for node, send in pairs(host.members or {}) do
-      if node ~= owner then send(message, message.type ~= "craft_state") end
-   end
-   return true
-end
-
 function owned.cleanup ( replicas, owner, remove )
    for id, craft in pairs(replicas) do
       if craft.owner == owner then

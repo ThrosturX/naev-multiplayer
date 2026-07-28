@@ -124,7 +124,9 @@ and re-enable it when leaving or stopping.
 
 Persistent space objects use a separate ENet client from gameplay. Naev stops
 `hook.update` while a solo host is paused, so `space_objects.lua` services the
-bounded object client through recurring safe hooks. Do not move object
+bounded object client through safe hooks while object work is pending, and
+stops arming them once the current subscription is confirmed and the request
+queues are empty. Do not move object
 acknowledgements, retries, subscriptions, or reconnects back onto the gameplay
 host; buoy deployment and deletion must remain live without simulation ticks.
 
@@ -132,6 +134,10 @@ Player health is never imported. Remote player proxies are invincible locally,
 but their locally simulated weapons may damage the real player. NPC and owned
 craft existence/health are authoritative at the host/owner respectively;
 motion uses capped correction after spawn and native NPC AI remains active.
+When a guest becomes system authority, its inherited snapshot remains the
+authoritative population and ambient spawning stays disabled for that system
+visit. Snapshot-created pilots do not consume Naev scheduler presence, so
+re-enabling it would create a second full population.
 
 ## Validation
 
