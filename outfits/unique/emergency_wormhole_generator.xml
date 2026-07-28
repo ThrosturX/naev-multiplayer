@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<outfit name="Emergency Wormhole Generator">
+ <general>
+  <rarity>4</rarity>
+  <unique/>
+  <typename>Multiplayer Utility</typename>
+  <slot>utility</slot>
+  <size>medium</size>
+  <mass>60</mass>
+  <price>4000000</price>
+  <description>Opens a one-way wormhole to a random nearby system. The wormhole naturally collapses after two minutes.</description>
+  <desc_extra>Consumes all remaining fuel and 600 GJ of energy per activation.</desc_extra>
+  <gfx_store>wormhole_projector.avif</gfx_store>
+  <limit>multiplayer_wormhole_generator</limit>
+ </general>
+ <specific type="modification">
+  <lua>outfits/unique/emergency_wormhole_generator.lua</lua>
+ </specific>
+</outfit>

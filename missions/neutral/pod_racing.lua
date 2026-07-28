@@ -567,6 +567,10 @@ function return_to_terminal ()
 end
 
 function race_landed ()
+   local emergency_generator=outfit.get("Emergency Wormhole Generator")
+   local award_generator=mem.player_won
+      and player.outfitNum(emergency_generator,true)<1
+
    vn.clear()
    vn.scene()
    vn.transition()
@@ -575,6 +579,13 @@ function race_landed ()
          reward=fmt.credits(mem.reward),
       }))
       vn.func(function() player.pay(mem.reward) end)
+      if award_generator then
+         vn.na(_("The Death Race terminal flashes: “CHAMPION CONFIRMED.” As an additional prize, it awards you an Emergency Wormhole Generator."))
+         vn.func(function()
+            player.outfitAdd(emergency_generator)
+         end)
+         vn.na(fmt.reward(emergency_generator))
+      end
    else
       vn.na(_("Another racer crossed the finish first. The terminal records your loss without ceremony."))
    end

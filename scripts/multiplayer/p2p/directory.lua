@@ -92,6 +92,7 @@ function directory:reject ( peer )
 end
 
 function directory:prune ()
+   self.objects:prune()
    -- Claims are deliberately retained while bounded by MAX_HOSTS. A stale
    -- hint costs one failed direct connection before normal local claiming,
    -- while forgetting a reachable host can create a needless split brain.

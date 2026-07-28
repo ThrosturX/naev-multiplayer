@@ -8,7 +8,9 @@
   <nebula volatility="0.100000" hue="000.000000">0.000000</nebula>
  </general>
  <pos x="-618.859840" y="-97.691840"/>
- <spobs/>
+ <spobs>
+ <spob>multiplayer_wormhole</spob>
+</spobs>
  <jumps/>
  <tags>
      <tag>noderelicts</tag>

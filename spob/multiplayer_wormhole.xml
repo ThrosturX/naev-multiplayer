@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<spob name="multiplayer_wormhole">
+ <display>Unstable Wormhole</display>
+ <feature>Unstable Wormhole</feature>
+ <lua>multiplayer_wormhole.lua</lua>
+ <marker>spobmarker_wormhole</marker>
+ <pos x="0" y="0"/>
+ <GFX/>
+ <general>
+  <class>Wormhole</class>
+  <population>0</population>
+  <hide>1</hide>
+  <services><uninhabited/></services>
+ </general>
+ <tags>
+  <tag>wormhole</tag>
+  <tag>restricted</tag>
+ </tags>
+</spob>

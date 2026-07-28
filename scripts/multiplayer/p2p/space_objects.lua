@@ -3,6 +3,8 @@
 -- The object transport is independent from gameplay peers. A one-second timer
 -- maintains subscriptions; a safe hook remains armed only while an
 -- acknowledgement, delete, or reconnect is pending so paused requests live.
+require "multiplayer.p2p.wormhole_extension"
+
 local space_objects = {}
 
 local SERVICE_INTERVAL = 1

@@ -1,6 +1,8 @@
 -- Persistent-object portion of the directory service. Transport and disk I/O
 -- are injected by the parent directory process.
 local Object = require "multiplayer.p2p.objects"
+local Expiry = require "multiplayer.p2p.object_expiry"
+local Wormholes = require "multiplayer.p2p.wormhole_objects"
 
 local service = {}
 service.__index = service
@@ -59,7 +61,26 @@ function service:push_delete ( object )
    end
 end
 
+function service:prune ()
+   local stamp=math.floor(self.now())
+   local expired={}
+   for id,object in pairs(self.values) do
+      if Expiry.expired(object,stamp) then
+         expired[#expired+1]={id=id,object=object}
+      end
+   end
+   table.sort(expired,function(a,b) return a.id<b.id end)
+   if #expired==0 then return 0 end
+   for _index,entry in ipairs(expired) do
+      self.values[entry.id]=nil
+      self:push_delete(entry.object)
+   end
+   self.dirty()
+   return #expired
+end
+
 function service:query ( peer, message )
+   self:prune()
    self.subscriptions[peer]=message.system
    local matches={}
    for _id,object in pairs(self.values) do
@@ -75,6 +96,7 @@ function service:query ( peer, message )
 end
 
 function service:create ( peer, node, message )
+   self:prune()
    if count(self.values)>=Object.MAX_OBJECTS then
       return self:result(peer,message.request,"create",false,"capacity",
          message.object_id or "-",1)
@@ -95,8 +117,17 @@ function service:create ( peer, node, message )
       return self:result(peer,message.request,"create",false,code,
          message.object_id,1)
    end
+   if Wormholes.is_wormhole(object) and Wormholes.any(self.values) then
+      return self:result(peer,message.request,"create",false,"occupied",
+         object.id,object.revision)
+   end
    if object.kind=="message_buoy"
          and self.subscriptions[peer]~=object.endpoints[1].system then
+      return self:result(peer,message.request,"create",false,"forbidden",
+         object.id,object.revision)
+   end
+   if Wormholes.is_wormhole(object)
+         and not Wormholes.visible_in(object,self.subscriptions[peer]) then
       return self:result(peer,message.request,"create",false,"forbidden",
          object.id,object.revision)
    end

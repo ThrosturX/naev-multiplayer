@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<outfit name="Unstable Wormhole Generator">
+ <general>
+  <rarity>4</rarity>
+  <typename>Multiplayer Utility</typename>
+  <slot>utility</slot>
+  <size>large</size>
+  <mass>80</mass>
+  <price>5000000</price>
+  <description>Opens a wormhole pair to a random nearby system. The pair naturally collapses after five minutes.</description>
+  <desc_extra>Consumes at least 600 units of fuel and 2000 GJ of energy per activation.</desc_extra>
+  <gfx_store>wormhole_projector.avif</gfx_store>
+  <limit>multiplayer_wormhole_generator</limit>
+ </general>
+ <specific type="modification">
+  <lua>outfits/unique/unstable_wormhole_generator.lua</lua>
+ </specific>
+</outfit>
