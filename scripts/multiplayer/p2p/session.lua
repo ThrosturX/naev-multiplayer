@@ -594,6 +594,7 @@ end
 
 local function local_id ( p )
    if exists(p) then return tostring(p:id()) end
+   return nil
 end
 
 local function new_entity_id ( owner, p, kind )
@@ -1693,10 +1694,13 @@ end
 local function ordered_population_scan ()
    local ordered={}
    for _index,p in ipairs(pilot.get()) do
-      ordered[#ordered+1]={
-         pilot=p,depth=pilot_leader_depth(p),
-         id=tonumber(local_id(p)) or math.huge,
-      }
+      if exists(p) then
+         local id=local_id(p)
+         ordered[#ordered+1]={
+            pilot=p,depth=pilot_leader_depth(p),
+            id=tonumber(id) or math.huge,
+         }
+      end
    end
    table.sort(ordered,function ( a,b )
       if a.depth~=b.depth then return a.depth<b.depth end
