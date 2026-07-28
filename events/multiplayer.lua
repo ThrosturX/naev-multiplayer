@@ -25,6 +25,8 @@ local vn = require "vn"
 -- luacheck: globals P2P_SESSION_PILOT_CREATION
 -- luacheck: globals P2P_SESSION_PILOT_DEFERRED P2P_SESSION_PILOT_DEATH
 -- luacheck: globals P2P_SESSION_PILOT_JUMP P2P_SESSION_PILOT_LAND
+-- luacheck: globals P2P_SESSION_PILOT_ATTACKED
+-- luacheck: globals P2P_SESSION_PLAYER_DEATH
 -- luacheck: globals P2P_OBJECT_UPDATE P2P_OBJECT_TIMER
 -- luacheck: globals P2P_BUOY_CONSUME P2P_OBJECT_DESTROYED
 
@@ -56,6 +58,9 @@ local function p2p_install_pilot_hooks ()
     p2p_clear_pilot_hooks()
     p2p_pilot_hooks = {
         hook.pilot(nil, "creation", "P2P_SESSION_PILOT_CREATION"),
+        hook.pilot(nil, "attacked", "P2P_SESSION_PILOT_ATTACKED"),
+        hook.pilot(player.pilot(), "disable", "P2P_SESSION_PLAYER_DEATH"),
+        hook.pilot(player.pilot(), "exploded", "P2P_SESSION_PLAYER_DEATH"),
     }
 end
 
@@ -262,6 +267,12 @@ function P2P_SESSION_PILOT_JUMP ( p, _jump, entity )
 end
 function P2P_SESSION_PILOT_LAND ( p, _spob, entity )
     p2psession.pilot_departed(p, "land", entity)
+end
+function P2P_SESSION_PILOT_ATTACKED ( victim, attacker, _damage )
+    p2psession.pilot_attacked(victim, attacker)
+end
+function P2P_SESSION_PLAYER_DEATH ( p, _attacker )
+    p2psession.player_died(p)
 end
 function P2P_SESSION_HAIL () p2p_keep_hail_live() end
 function P2P_SESSION_INPUT ( input_name, input_pressed )

@@ -42,6 +42,9 @@ function attacked ( _attacker )
 end
 
 function create ()
+   -- Match the real player's combat policy. Engine-created followers inherit
+   -- this and finish their attack task when a target becomes disabled.
+   mem.atk_kill=false
    mem.p2p_accel=0
    mem.p2p_turn=0
    mem.p2p_reverse=false

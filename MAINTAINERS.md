@@ -44,14 +44,24 @@ Each player owns their real ship's movement and health. Network health is
 applied only to disposable player proxies; it must never be written to
 `player.pilot()`.
 
-The host owns ambient NPC identity, lifecycle, health, and launched fighters.
-Guests disable ambient spawning immediately and remove speculative ambient
-pilots once they accept a host. A guest NPC runs the AI named in the host's
-creation description, so local physics produces thrust, trails, targeting, and
-combat between bounded host records. Fresh host records correct its motion,
-health, energy, and target. Replica outfit installation excludes fighter bays,
-so running the manifest AI cannot create a second speculative fighter
-population.
+The host owns naturally spawned ambient NPC identity, lifecycle, health, and
+launched fighters. Guests disable ambient spawning immediately and remove
+speculative ambient pilots once they accept a host. An NPC replica runs the AI
+named in its owner's creation description, so local physics produces thrust,
+trails, targeting, and combat between bounded owner records. Fresh records
+correct its motion, health, energy, and target. Replica outfit installation
+excludes fighter bays, so running the described AI cannot create a second
+speculative fighter population.
+
+An NPC created locally on a guest after joining remains guest-authoritative,
+including NPCs spawned by local faction consequences and their nested
+fighters. The guest assigns the entity ID, keeps normal AI and lethal health,
+and sends its description reliably to the host. The host creates only a
+no-death replica, broadcasts an immediate complete NPC announcement, and then
+relays the guest's bounded state through the ordinary NPC scheduler. The guest
+never proposes authority transfer and the host never creates an authoritative
+replacement. This version deliberately trusts valid owner-matching
+descriptions, state, and lifecycle messages from a connected guest.
 
 Non-owning player, craft, and NPC replicas remain damageable. They use
 no-death only to prevent local combat from deciding lifecycle before a fresh
@@ -59,10 +69,18 @@ authoritative record arrives; do not make them invincible. Persistent objects
 are the exception to no-death: they are peer-trusted, fully killable on every
 participant, and directory deletion converges their lifecycle.
 
-Player-owned craft and their nested fighters remain owner-authoritative. A
-guest sends at most one owned-craft record per 15 Hz tick. The host applies it
-to the owner's host-side proxy and includes craft through the canonical bounded
-world scheduler.
+Player-owned craft, guest-owned NPCs, and their nested fighters remain
+owner-authoritative. A guest sends at most one owned-entity record per 15 Hz
+tick. The host applies it to the owner's host-side replica and includes it
+through the canonical bounded world scheduler. Remote player proxy AI must
+retain the normal player policy `mem.atk_kill=false`, and every owned-craft
+replica receives that policy directly because its network leader may be bound
+after AI creation. Owned escorts then stop their existing attack task when its
+target becomes disabled, without requiring a new network order. Non-owner
+craft replicas also set `mem.aggressive=false`: they may attack through a
+replicated reliable `e_attack` order, but cannot invent a local attack merely
+because their replica leader selected a target or local faction relationships
+differ.
 
 ## Population lifecycle
 
@@ -72,7 +90,9 @@ Population discovery is event driven:
 2. The global creation hook stores new pilot handles in a runtime-only queue.
    Since `hook.safe` supports one custom argument, it passes only the visit
    generation to one deferred callback, which drains the queue after outfits
-   and leaders are complete.
+   and leaders are complete. The host registers an unowned NPC directly; a
+   guest registers a locally created NPC as guest-owned and sends its
+   description to the host.
 3. Each authoritative pilot receives explicit death, jump, and land hooks.
 4. A scheduled invalid-handle audit checks one cached authority entry at a
    time.
@@ -80,6 +100,18 @@ Population discovery is event driven:
 Do not introduce a periodic population scan. All authority hooks are removed
 when the pilot departs, authority changes, the system visit ends, or the
 session stops.
+
+Targeting closes any creation-hook admission gap without a scan. Before any
+participant publishes its own target, a valid local pilot with no object,
+replica, or authority identity is registered immediately. Target serialization
+and the priority scheduler therefore cannot hide that pilot behind an unknown
+ID. A global attacked hook admits both the victim and attacker, so untargeted
+fire also discovers a missed pilot. On a guest, a newly discovered native NPC
+becomes guest-owned and is described reliably to the host; on the host it
+becomes host-owned. Existing replicas and persistent objects retain their
+current identities. Naev exposes no generic hook for an unknown NPC merely
+selecting a participant as its target, so targeting, creation, and the first
+local damage event are the event-driven repair boundaries.
 
 World publication never waits for a population acknowledgement. NPCs have no
 separate manifest lifecycle: every selected round-robin NPC announcement
@@ -89,13 +121,27 @@ a guest that already knows it applies the fresh state. Newly created NPCs and
 explicit `entity_query` requests are placed in the next bounded announcement
 slots, and the answer is broadcast to every guest.
 
-Player and owner-controlled craft descriptions remain reliable because those
-records enter through their owners rather than the host NPC ring. Unknown
-player/craft dynamic state is held only as one latest bounded record while its
-description is requested. If an ID does not exist, the host returns targeted
-reliable `entity_absent` and the requester explodes any stale replica.
-Reliable incremental removals remain the immediate lifecycle path. There are
-no snapshot boundaries, ready acknowledgements, or parallel repair protocol.
+Player, owner-controlled craft, and guest-owned NPC descriptions enter the
+host reliably through their owners. The host republishes craft descriptions
+reliably; guest-owned NPCs join the same complete round-robin announcement
+format as ambient NPCs. Unknown dynamic state is held only as one latest
+bounded record while its description is requested. If an ID does not exist,
+the host returns targeted reliable `entity_absent` and the requester explodes
+any stale replica. Reliable incremental removals remain the immediate
+lifecycle path. There are no snapshot boundaries, ready acknowledgements, or
+parallel repair protocol.
+
+All player descriptions are refreshed with the latest cached dynamic record
+before reliable broadcast. A newly joined peer therefore creates existing
+player proxies at their current coordinates; later records use ordinary
+packet-arrival reconciliation, including the bounded large-error catch-up
+described below.
+
+An owner may name a dynamic faction that does not exist on another peer. NPC
+replicas use the named faction when available and otherwise synthesize a
+local-only neutral relationship container while preserving the owner-provided
+AI, identity, target, and state. Missing local faction registration must not
+silently prevent a trusted guest-owned NPC from entering the host broadcast.
 
 ## World publication and reconciliation
 
@@ -103,7 +149,7 @@ Players publish at 15 Hz. A host world frame contains cached player records plus
 only bounded entity records:
 
 - one priority NPC, newly announced NPC, or ambient ring NPC every tick;
-- at most one additional ambient NPC every third tick;
+- at most one additional ambient NPC every tick;
 - at most one craft record;
 - at most one persistent-object dynamic record.
 
@@ -118,7 +164,7 @@ Receivers reject stale records per entity so separately replaceable datagrams
 remain safe when lost or reordered. Never rebuild a monolithic world packet;
 ENet rejects an oversized unreliable packet instead of fragmenting it.
 
-This limits host NPC dynamic collection to 20 records per second regardless of
+This limits host NPC dynamic collection to 30 records per second regardless of
 population. Ambient selection inspects at most four ring candidates and skips
 pilots undetectable by the local player and the bounded participant-proxy
 check. Participant attackers, participant targets, and owned-craft engagements
@@ -130,16 +176,34 @@ motion, health, energy, target, weapon set, and control fields are sampled only
 for the selected records. Never rebuild static NPC data on a world tick.
 
 Reconciliation runs only when a fresh record arrives. Initial `pilot.add`
-chooses position; subsequent updates never call `setPos`. Position error
-becomes capped velocity bias, and direction changes use a capped angular step
-based on elapsed record time. Health, energy, target, weapon set, and controls
-avoid redundant setters. Because replicas are damageable,
-health and energy compare the live pilot value on each fresh bounded record;
+chooses position. Subsequent records normally turn position error into capped
+velocity bias, but an error over 2,000 units moves the replica halfway toward
+the authoritative coordinates before applying that bias. The threshold uses
+squared distance, and the partial correction occurs only on packet arrival;
+there is no per-frame position setter or full snap. Direction changes use a
+capped angular step based on elapsed record time. Health, energy, target,
+weapon set, and controls avoid redundant setters. Because replicas are
+damageable, health and energy compare the live pilot value on each fresh record;
 otherwise unchanged authoritative values could not repair unrelated local
 damage. NPCs, player-owned craft, and persistent objects all integrate through
 local physics between records and receive the same packet-arrival motion
 correction; players remain authoritative for their own real ship. There is no
 population-wide smoothing update.
+
+NPC and craft replicas smoothly steer velocity toward a fresh authoritative
+record plus a prediction of half the observed record interval, capped at 0.125
+seconds. This lets local physics integrate continuously instead of exposing the
+round-robin cadence as a velocity pulse; a modest trailing offset is acceptable.
+Their packet-arrival direction correction uses the player-proxy angular rate
+and accounts for up to 0.25 seconds between sparse records, but remains capped
+and never snaps directly to the authoritative angle.
+Fresh authoritative targets also repair stale native AI attack tasks. Only
+`attack`, `attack_forced`, and `attack_forced_kill` are touched: a mismatched
+task is retargeted while an authoritative absent target clears it. Other tasks,
+including fleeing, landing, returning, and inspection, remain local AI state.
+For a guest-owned entity, the host relays its proxy's current motion instead of
+rebroadcasting the coordinates cached at owner-packet receipt; health, target,
+controls, and lifecycle remain owner-authoritative.
 
 Players still publish ordinary unreliable state at 15 Hz while idle. Guest
 state uses the motion channel and the host immediately rebroadcasts each
@@ -150,6 +214,27 @@ a fresh record is applied directly; when its ordinary `vx` and `vy` are zero,
 residual replica drift is zero as well. This is not a separate stopped state or
 edge.
 
+Player death is an owner-authoritative reliable lifecycle event. The local
+player's lethal disable transition is checked for zero armour and immediately
+sends the existing `entity_remove` message with `kind=player` and
+`reason=death`; the final explosion and sampled zero-armour state are
+idempotent fallbacks. The host validates ownership and broadcasts the removal.
+Every non-owner clears no-death protection and receives zero health, allowing
+Naev's normal multi-frame death sequence to run; `pilot:explode()` is not used
+because that API deletes the pilot immediately. A per-visit tombstone
+suppresses delayed state and manifest repair so a dead proxy cannot reappear or
+retain its old velocity. A zero-armour state received before the reliable
+removal is treated as the same idempotent death event.
+
+Naev's Lua API does not expose the player's actual `player_acc` throttle used
+by autonav. Manual acceleration remains exact from input state. During autonav,
+the runtime infers the existing binary acceleration field from forward
+velocity gain and from sustained forward speed above the ship's no-thrust
+drift speed. Only changes in that inferred field publish reliable control; the
+15 Hz state stream carries its current value normally. This is deliberately a
+visual/physics approximation for remote engine trails, not a new stopped or
+autonav protocol state.
+
 Guest steering, acceleration, reverse, target/fire/weapon edges, and outfit
 activate/deactivate edges are reliable. Active-outfit inventories are never
 included in periodic state or control records. The host applies edges to the
@@ -157,6 +242,12 @@ guest's `p2p_remote_control` player proxy, so weapons physically interact with
 host NPCs, craft, player proxies, and persistent-object pilots. The host
 broadcasts each canonical action to every gameplay peer; guests apply it only
 for their accepted host/epoch and ignore self-owned echoes.
+
+The green entered/orange left notifications remain the lifecycle notices.
+Once per join, reliable chat also restores the original identification
+exchange: the host announces its captain and ship and asks the guest to
+identify itself; the guest announces its own captain and ship without issuing
+the same demand.
 
 ## Host recovery
 
@@ -166,9 +257,12 @@ without a live incumbent, node ID resolves the winner.
 
 When a guest is elected:
 
-- every existing NPC replica becomes authoritative immediately;
-- its already-running manifest AI is reinitialized for authority;
-- replica tasks are cleared and no-death is removed;
+- every existing ambient host-owned NPC replica becomes authoritative
+  immediately;
+- its already-running described AI is reinitialized for authority;
+- its replica tasks are cleared and no-death is removed;
+- NPCs owned by still-connected guests remain guest-authoritative and the new
+  host continues relaying their records;
 - ambient spawning remains disabled for the rest of that system visit;
 - entities receive the new authority generation and epoch;
 - other peers discard the departed host's population and rebuild it from the

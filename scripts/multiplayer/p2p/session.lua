@@ -29,6 +29,8 @@ local ACTIVITY_QUERY_INTERVAL = 30
 local ACTIVITY_RETENTION = 15*60
 local AMBIENT_INSPECTION_CAP = 4
 local PARTICIPANT_VISIBILITY_CAP = 8
+local RECONCILE_DISTANCE = 2000
+local RECONCILE_POSITION_BIAS = 0.5
 -- ENet's default MTU is 1392 bytes and Naev's Lua binding does not expose
 -- unreliable fragmentation. Leave room for protocol and path overhead.
 local WORLD_PACKET_BUDGET = 1200
@@ -43,8 +45,11 @@ local session = {
    craft={},
    player_manifests={},
    player_states={},
+   dead_players={},
    outfit_messages={},
    present_players={},
+   host_welcomed={},
+   greeted_hosts={},
    authority={},
    authority_by_local={},
    origins={},
@@ -60,9 +65,10 @@ local session = {
    npc_announcement_queue={},
    npc_announcement_seen={},
    npc_order={},
+   npc_order_seen={},
    npc_cursor=1,
-   craft_order={},
-   craft_cursor=1,
+   owned_order={},
+   owned_cursor=1,
    priority_queues={{},{},{}},
    priority_seen={{},{},{}},
    priority_cursor={1,1,1},
@@ -73,6 +79,12 @@ local session = {
    activity={},
    activity_received=0,
    encode_errors={},
+   npc_factions={},
+   npc_faction_counter=0,
+   player_state_keys={
+      "x","y","vx","vy","dir","armour","shield","stress","energy",
+      "target","weapset","accel","turn","reverse","primary","secondary",
+   },
    last_activity_query=0,
    directory_probe_deadline=nil,
    indicators=status.new(function () return player.pilot() end),
@@ -619,7 +631,46 @@ local function entity_pilot ( entity )
    return session.objects and session.objects:pilot_for_id(entity) or nil
 end
 
-local function state_record ( p, entity, include_controls, _stamp )
+function session._local_accel_control ( p, manual, stamp, vx, vy )
+   stamp=stamp or now()
+   local speed=math.sqrt(vx*vx+vy*vy)
+   if manual then
+      session.local_motion_sample={
+         stamp=stamp,vx=vx,vy=vy,speed=speed,inferred=false,
+      }
+      return 1
+   end
+   local sample=session.local_motion_sample
+   if sample and stamp-sample.stamp<1/120 then
+      return sample.inferred and 1 or 0
+   end
+   local inferred=false
+   local autonav=player.autonav()
+   if autonav then
+      local dir=p:dir()
+      local forward_x,forward_y=math.cos(dir),math.sin(dir)
+      local forward_speed=vx*forward_x+vy*forward_y
+      local drift_speed=p:speed()
+      if sample then
+         local elapsed=math.max(1/120,math.min(0.25,stamp-sample.stamp))
+         local forward_accel=((vx-sample.vx)*forward_x
+            +(vy-sample.vy)*forward_y)/elapsed
+         local accel_threshold=math.max(1,p:accel()*0.05)
+         inferred=forward_accel>accel_threshold
+            or (speed>drift_speed+1
+               and forward_speed>speed*0.25
+               and speed>=sample.speed-math.max(1,p:accel()*elapsed*0.05))
+      else
+         inferred=speed>drift_speed+1 and forward_speed>speed*0.25
+      end
+   end
+   session.local_motion_sample={
+      stamp=stamp,vx=vx,vy=vy,speed=speed,inferred=inferred,
+   }
+   return inferred and 1 or 0
+end
+
+local function state_record ( p, entity, include_controls, stamp )
    local x,y=p:pos():get()
    local vx,vy=p:vel():get()
    local armour,shield,stress=p:health()
@@ -633,7 +684,8 @@ local function state_record ( p, entity, include_controls, _stamp )
    if include_controls then
       local cache=naev.cache()
       record.weapset=session.local_weapset or 1
-      record.accel=(cache.accel and cache.accel~=0) and 1 or 0
+      record.accel=session._local_accel_control(
+         p,cache.accel and cache.accel~=0,stamp,vx,vy)
       record.turn=((cache.right and cache.right~=0) and 1 or 0)
          -((cache.left and cache.left~=0) and 1 or 0)
       record.reverse=(cache.reverse and cache.reverse~=0) and 1 or 0
@@ -742,11 +794,13 @@ end
 local function player_manifest ()
    local p=player.pilot()
    if not exists(p) then return nil end
-   local record=state_record(p,local_entity(),true)
+   local entity=local_entity()
+   if session.dead_players[entity] then return nil end
+   local record=state_record(p,entity,true)
    local current_ship=p:ship()
    local message=gameplay_base("player_manifest")
    message.owner=session.settings.node_id
-   message.entity=local_entity()
+   message.entity=entity
    message.origin=session.settings.node_id.."."..session.visit..".player"
    message.ship=current_ship:nameRaw()
    message.ship_fallbacks=ship_fallback_names(current_ship)
@@ -868,13 +922,13 @@ local player_limits={
 }
 local npc_limits={
    position_gain=1.5,correction_speed=250,velocity_rate=8,
-   acceleration=600,direction_rate=10,direction_speed=2,
-   max_prediction=0,
+   acceleration=600,direction_rate=30,direction_speed=8,
+   max_dt=0.25,max_prediction=0.125,prediction_fraction=0.5,
 }
 local craft_limits={
    position_gain=2,correction_speed=400,velocity_rate=10,
-   acceleration=1200,direction_rate=12,direction_speed=2.5,
-   max_prediction=0,
+   acceleration=1200,direction_rate=30,direction_speed=8,
+   max_dt=0.25,max_prediction=0.125,prediction_fraction=0.5,
 }
 
 local function reconcile_arrival ( entry, record, limits, stamp )
@@ -884,14 +938,25 @@ local function reconcile_arrival ( entry, record, limits, stamp )
    local elapsed=math.max(1/60,
       math.min(0.25,stamp-(entry.last_record_at or stamp-1/15)))
    entry.last_record_at=stamp
+   local prediction_age=math.min(
+      limits.max_prediction or 0,
+      elapsed*(limits.prediction_fraction or 0))
    local x,y=p:pos():get()
    local vx,vy=p:vel():get()
    local dir=p:dir()
    local wanted={
       x=record.x,y=record.y,vx=record.vx,vy=record.vy,dir=record.dir,
    }
+   local catchup_x,catchup_y,catchup=
+      reconcile.catchup_position(x,y,wanted.x,wanted.y,
+         RECONCILE_DISTANCE,RECONCILE_POSITION_BIAS)
+   if catchup then
+      p:setPos(vec2.new(catchup_x,catchup_y))
+      x,y=catchup_x,catchup_y
+   end
    local corrected_vx,corrected_vy,corrected_dir=
-      reconcile.steer_values(x,y,vx,vy,dir,wanted,elapsed,0,limits)
+      reconcile.steer_values(
+         x,y,vx,vy,dir,wanted,elapsed,prediction_age,limits)
    local exact_rest=corrected_vx==0 and corrected_vy==0
       and (vx~=0 or vy~=0)
    if exact_rest or math.abs(corrected_vx-vx)>0.01
@@ -937,12 +1002,31 @@ local function mark_player_aggression ( owner )
    end
 end
 
+local attack_tasks={
+   attack=true,
+   attack_forced=true,
+   attack_forced_kill=true,
+}
+
+function session._sync_replica_attack_task ( entry, target )
+   if not entry or entry.kind~="npc" or not exists(entry.pilot) then
+      return false
+   end
+   local p=entry.pilot
+   local task=p:taskname()
+   if not attack_tasks[task] or p:taskdata()==target then return false end
+   p:taskClear()
+   if target then p:pushtask(task,target) end
+   return true
+end
+
 local function apply_target ( entry, entity )
    local target=entity_pilot(entity)
    if entity~="-" and not target then return nil,false end
    local current=entry.pilot:target()
    if current and not exists(current) then current=nil end
    if current~=target then entry.pilot:setTarget(target) end
+   session._sync_replica_attack_task(entry,target)
    entry.applied=entry.applied or {}
    entry.applied.target=entity
    return target,true
@@ -978,6 +1062,7 @@ end
 
 local function apply_player_record ( record, stamp, world_sequence )
    if record.entity==local_entity() then return true end
+   if session.dead_players[record.entity] then return true end
    local entry=session.players[record.entity]
    if not entry or not exists(entry.pilot) then return false end
    if world_sequence
@@ -1040,7 +1125,7 @@ local function apply_object_state ( record, stamp, world_sequence )
    return true
 end
 
-local function remove_replica ( entity, explode )
+local function remove_replica ( entity, removal )
    local entry=session.players[entity] or session.npcs[entity]
       or session.craft[entity]
    if not entry then return false end
@@ -1055,8 +1140,36 @@ local function remove_replica ( entity, explode )
    session.craft[entity]=nil
    session.manifest_cache[entity]=nil
    if exists(entry.pilot) then
-      if explode then entry.pilot:explode() else entry.pilot:rm() end
+      if removal=="death" then
+         -- pilot:explode() deletes immediately. Let Naev enter pilot_dead on
+         -- its next update so all peers show the normal death animation.
+         entry.pilot:setNoDeath(false)
+         entry.pilot:setHealth(0,0,0)
+      elseif removal then
+         entry.pilot:explode()
+      else
+         entry.pilot:rm()
+      end
    end
+   return true
+end
+
+function session._mark_player_dead ( owner, entity )
+   if type(owner)~="string" or type(entity)~="string"
+         or session.dead_players[entity] then return false end
+   session.dead_players[entity]=true
+   session.player_states[owner]=nil
+   session.outfit_messages[owner]=nil
+   session.manifest_cache[entity]=nil
+   session.manifest_queries[entity]=nil
+   if session.pending_states[entity] then
+      session.pending_states[entity]=nil
+      session.pending_state_count=math.max(
+         0,session.pending_state_count-1)
+   end
+   local local_player_entity=session.settings and session.visit
+      and local_entity() or nil
+   if entity~=local_player_entity then remove_replica(entity,"death") end
    return true
 end
 
@@ -1075,6 +1188,24 @@ local function owner_craft_faction ( owner )
          {ai="escort",clear_allies=true,clear_enemies=true})
    end
    craft_factions[owner]=fac
+   return fac
+end
+
+function session._replica_npc_faction ( message )
+   local fac=resource_get(faction.get,message.faction)
+   if fac then return fac end
+   local key=message.owner.."\0"..message.faction
+   fac=session.npc_factions[key]
+   if fac then return fac end
+   session.npc_faction_counter=session.npc_faction_counter+1
+   local raw="P2P NPC "..message.owner.." "
+      ..tostring(session.npc_faction_counter)
+   fac=faction.dynAdd(nil,raw,display_text(message.faction),{
+      ai="dummy",clear_allies=true,clear_enemies=true,
+   })
+   session.npc_factions[key]=fac
+   print("P2P: using a local replica faction for "
+      ..display_text(message.faction))
    return fac
 end
 
@@ -1110,8 +1241,17 @@ local function announce_player_leave ( owner )
    print("P2P: "..name.." left the system")
 end
 
+local function introduction_text ( identify )
+   local text="This is "
+   if not identify then text="I am " end
+   text=text..player.name()..", captain of "..local_player_name()
+   if identify then return text..". Identify yourself." end
+   return text.."!"
+end
+
 local function spawn_player_manifest ( message )
    if message.owner==session.settings.node_id then return true end
+   if session.dead_players[message.entity] then return true end
    replace_origin_generation(message)
    local existing=session.players[message.entity]
    if existing and exists(existing.pilot) then
@@ -1178,6 +1318,36 @@ local function bind_leader ( entry, leader_id )
    session.waiting_leaders[leader_id]=waiting
 end
 
+local function add_npc_order ( entity )
+   if session.npc_order_seen[entity] then return end
+   session.npc_order_seen[entity]=true
+   session.npc_order[#session.npc_order+1]=entity
+end
+
+function session._apply_owned_craft_ai_policy ( p )
+   -- Replicas are created before their network leader is bound, so set the
+   -- lifecycle policy directly instead of relying on inheritance. Autonomous
+   -- aggression is disabled on non-owner simulations; reliable e_attack
+   -- orders still push their explicit forced-attack task.
+   local memory=p:memory()
+   memory.atk_kill=false
+   memory.aggressive=false
+end
+
+function session._log_replica_failure ( message )
+   local signature=table.concat({
+      "replica",message.kind or "-",message.ship or "-",
+      message.faction or "-",message.ai or "-",
+   },":")
+   if session.encode_errors[signature] then return end
+   session.encode_errors[signature]=true
+   print("P2P: unable to create "..tostring(message.kind)
+      .." replica "..display_text(message.name or message.entity)
+      .." (ship "..display_text(message.ship)
+      ..", faction "..display_text(message.faction or "-")
+      ..", AI "..display_text(message.ai or "-")..")")
+end
+
 local function spawn_entity_manifest ( message )
    if message.owner==session.settings.node_id then return true end
    replace_origin_generation(message)
@@ -1186,8 +1356,11 @@ local function spawn_entity_manifest ( message )
    if existing and exists(existing.pilot) then
       if message.kind=="npc" then
          existing.description=message
+         existing.cached_state=message
+         existing.peer_owned=message.owner~=session.machine.host
       else
          existing.manifest=message
+         session._apply_owned_craft_ai_policy(existing.pilot)
       end
       return true
    end
@@ -1195,7 +1368,7 @@ local function spawn_entity_manifest ( message )
    if not resource_get(ship.get,message.ship) then return false end
    local fac
    if message.kind=="npc" then
-      fac=resource_get(faction.get,message.faction)
+      fac=session._replica_npc_faction(message)
    else
       fac=owner_craft_faction(message.owner)
    end
@@ -1210,6 +1383,7 @@ local function spawn_entity_manifest ( message )
    if message.vx and message.vy then p:setVel(vec2.new(message.vx,message.vy)) end
    if message.dir then p:setDir(message.dir) end
    ai_setup.setup(p)
+   if message.kind=="craft" then session._apply_owned_craft_ai_policy(p) end
    local entry={
       kind=message.kind,owner=message.owner,entity=message.entity,
       origin=message.origin,pilot=p,
@@ -1217,6 +1391,9 @@ local function spawn_entity_manifest ( message )
    }
    if message.kind=="npc" then
       entry.description=message
+      entry.cached_state=message
+      entry.peer_owned=message.owner~=session.machine.host
+      add_npc_order(message.entity)
    else
       entry.manifest=message
    end
@@ -1248,6 +1425,11 @@ end
 local function cache_manifest ( message )
    if not message or (message.type~="player_manifest"
          and message.type~="entity_manifest") then return false end
+   if message.type=="player_manifest"
+         and session.dead_players[message.entity] then return false end
+   if message.type=="entity_manifest" and message.kind~="craft" then
+      return false
+   end
    local packet=encode_packet(gameplay_codec,message)
    if not packet then return false end
    if not session.manifest_cache[message.entity] then
@@ -1264,8 +1446,39 @@ local function broadcast_manifest ( cached )
    return true
 end
 
+function session._refresh_player_manifest_state ( stored )
+   if not stored then return nil end
+   local message=canonical_copy(stored)
+   local record=session.player_states[message.owner]
+   if message.owner==session.settings.node_id then
+      local p=player.pilot()
+      if exists(p) then
+         record=state_record(p,local_entity(),true)
+      end
+   end
+   if record then
+      for _index,key in ipairs(session.player_state_keys) do
+         message[key]=record[key]
+      end
+   end
+   return message
+end
+
 local function host_reliable ( message )
    return broadcast_gameplay(message,true)
+end
+
+local function publish_player_death ( owner, entity )
+   if not session._mark_player_dead(owner,entity) then return false end
+   session.sequence=session.sequence+1
+   local message=gameplay_base("entity_remove")
+   message.kind="player"
+   message.owner=owner
+   message.entity=entity
+   message.seq=session.sequence
+   message.reason="death"
+   if is_host() then return host_reliable(message) end
+   return send_host(message,true)
 end
 
 local function publish_entity_manifest ( entry )
@@ -1273,16 +1486,17 @@ local function publish_entity_manifest ( entry )
    if not message then return false end
    if entry.kind=="npc" then
       entry.description=message
-      return true
+   else
+      entry.manifest=message
    end
-   entry.manifest=message
    if is_host() then
+      if entry.kind=="npc" then return true end
       return broadcast_manifest(cache_manifest(message))
    end
    return send_host(message,true)
 end
 
-local function register_authority ( p, kind, owner, origin, entity )
+local function register_authority ( p, kind, owner, origin, entity, peer_owned )
    if not exists(p) or p==player.pilot() then return nil end
    local id=local_id(p)
    if session.authority_by_local[id] or session.replica_by_local[id]
@@ -1294,21 +1508,22 @@ local function register_authority ( p, kind, owner, origin, entity )
    local entry={
       kind=kind,owner=owner,origin=origin,entity=entity,pilot=p,
       local_id=id,ai=p:ainame() or "dummy",hooks={},
+      peer_owned=kind=="npc" and peer_owned==true,
    }
    session.authority[entity]=entry
    session.authority_by_local[id]=entity
    session.origins[origin]=entity
    if kind=="npc" then
-      session.npc_order[#session.npc_order+1]=entity
+      add_npc_order(entity)
       if not session.npc_announcement_seen[entity] then
          session.npc_announcement_seen[entity]=true
          session.npc_announcement_queue[
             #session.npc_announcement_queue+1]=entity
       end
    else
-      session.craft_order[#session.craft_order+1]=entity
       session.world_craft_order[#session.world_craft_order+1]=entity
    end
+   session.owned_order[#session.owned_order+1]=entity
    session.audit_order[#session.audit_order+1]=entity
    entry.hooks={
       hook.pilot(p,"death","P2P_SESSION_PILOT_DEATH",entity),
@@ -1319,13 +1534,58 @@ local function register_authority ( p, kind, owner, origin, entity )
    return entry
 end
 
-local function remove_unowned_guest_pilot ( p )
+function session._admit_local_pilot ( p )
    if not exists(p) or p==player.pilot() then return end
    local id=local_id(p)
-   if session.replica_by_local[id]
-         or (session.objects and session.objects:entity_for_pilot(p))
-         or pilot_owned(p) then return end
-   p:rm()
+   if not id or session.authority_by_local[id]
+         or session.replica_by_local[id]
+         or (session.objects and session.objects:entity_for_pilot(p)) then
+      return
+   end
+   if pilot_owned(p) then
+      return register_authority(p,"craft",session.settings.node_id)
+   end
+   if is_host() then
+      return register_authority(p,"npc",session.settings.node_id)
+   end
+   if session.machine.state=="guest"
+         or session.machine.state=="recovering" then
+      return register_authority(
+         p,"npc",session.settings.node_id,nil,nil,true)
+   end
+end
+
+function session._admit_player_target ( p )
+   if not exists(p) then return false end
+   return session._admit_local_pilot(p:target())~=nil
+end
+
+local function broadcast_npc_announcement ( entry )
+   if not entry or not exists(entry.pilot) or not entry.description then
+      return false
+   end
+   local record=entry.cached_state
+      or state_record(entry.pilot,entry.entity,false)
+   local line=session._pack_npc_announcement(entry,record)
+   if not line then return false end
+   session.sequence=session.sequence+1
+   local world=gameplay_base("world")
+   world.seq=session.sequence
+   local batches,err,oversized=gameplay_codec.encode_world_batches(world,{
+      players={},entities={line},objects={},
+   },WORLD_PACKET_BUDGET)
+   if not batches then return false,err end
+   for _index,batch in ipairs(batches) do
+      host_reliable(batch.message)
+   end
+   for _index,packed in ipairs(oversized or {}) do
+      local fallback=canonical_copy(world)
+      fallback.players="-"
+      fallback.entities=packed
+      fallback.objects="-"
+      host_reliable(fallback)
+   end
+   return true
 end
 
 function session.pilot_created ( p )
@@ -1338,6 +1598,24 @@ function session.pilot_created ( p )
    -- hook.safe accepts one custom argument. Keep pilots in a runtime-only
    -- queue and pass only the visit generation to the deferred callback.
    hook.safe("P2P_SESSION_PILOT_DEFERRED",session.lifecycle_generation)
+end
+
+function session.pilot_attacked ( victim, attacker )
+   if not session.running or not current_system() then return false end
+   local admitted=session._admit_local_pilot(victim)~=nil
+   if attacker~=victim and session._admit_local_pilot(attacker) then
+      admitted=true
+   end
+   return admitted
+end
+
+function session.player_died ( p )
+   if not session.running or not current_system()
+         or not exists(p) or p~=player.pilot() then return false end
+   local armour=p:health()
+   if armour>0 then return false end
+   return publish_player_death(
+      session.settings.node_id,local_entity())
 end
 
 function session.pilot_created_deferred ( generation )
@@ -1364,7 +1642,10 @@ function session.pilot_created_deferred ( generation )
             end
          elseif session.machine.state=="guest"
                or session.machine.state=="recovering" then
-            remove_unowned_guest_pilot(p)
+            if register_authority(
+                  p,"npc",session.settings.node_id,nil,nil,true) then
+               registered_npcs=registered_npcs+1
+            end
          end
       end
    end
@@ -1464,7 +1745,8 @@ local function refresh_host_manifest_cache ()
    local host_manifest=player_manifest()
    if host_manifest then cache_manifest(host_manifest) end
    for owner,manifest in pairs(session.player_manifests) do
-      if owner~=session.settings.node_id then
+      if owner~=session.settings.node_id
+            and not session.dead_players[manifest.entity] then
          cache_manifest(canonical_copy(manifest))
       end
    end
@@ -1485,17 +1767,14 @@ end
 
 local function publish_participant_manifests ()
    if not is_host() then return end
-   local host_cached=session.manifest_cache[local_entity()]
-   if not host_cached then
-      local host_manifest=player_manifest()
-      if host_manifest then host_cached=cache_manifest(host_manifest) end
-   end
-   broadcast_manifest(host_cached)
-   for _entity,cached in pairs(session.manifest_cache) do
-      local manifest=cached.message
-      if manifest.type=="player_manifest"
-            and manifest.owner~=session.settings.node_id then
-         broadcast_manifest(cached)
+   local host_manifest=player_manifest()
+   if host_manifest then broadcast_manifest(cache_manifest(host_manifest)) end
+   for owner,stored in pairs(session.player_manifests) do
+      if owner~=session.settings.node_id
+            and not session.dead_players[stored.entity] then
+         local manifest=session._refresh_player_manifest_state(stored)
+         session.player_manifests[owner]=manifest
+         broadcast_manifest(cache_manifest(manifest))
       end
    end
    for _owner,states in pairs(session.outfit_messages) do
@@ -1518,6 +1797,10 @@ local function publish_manifest_tick ()
       inspected=inspected+1
       local cached=session.manifest_cache[entity]
       if cached then
+         if cached.message.type=="player_manifest" then
+            cached=cache_manifest(
+               session._refresh_player_manifest_state(cached.message))
+         end
          broadcast_manifest(cached)
          return true
       end
@@ -1525,9 +1808,14 @@ local function publish_manifest_tick ()
    return false
 end
 
+local function npc_entry ( entity )
+   local entry=session.authority[entity] or session.npcs[entity]
+   if entry and entry.kind=="npc" then return entry end
+end
+
 local function remember_priority ( entity, class )
-   local entry=session.authority[entity]
-   if not entry or entry.kind~="npc" then return end
+   local entry=npc_entry(entity)
+   if not entry then return end
    if entry.priority_class==class then return end
    entry.priority_class=class
    if not session.priority_seen[class][entity] then
@@ -1565,9 +1853,8 @@ local function select_priority_class ( class )
       if at>count then at=1 end
       local entity=queue[at]
       at=at+1
-      local entry=session.authority[entity]
-      if entry and entry.kind=="npc"
-            and entry.priority_class==class and exists(entry.pilot) then
+      local entry=npc_entry(entity)
+      if entry and entry.priority_class==class and exists(entry.pilot) then
          session.priority_cursor[class]=at
          return entry
       end
@@ -1587,8 +1874,8 @@ local function select_interest_npc ( stamp )
       at=at+1
       local interest=session.target_interests[node]
       if interest and stamp<interest.expires then
-         local entry=session.authority[interest.entity]
-         if entry and entry.kind=="npc" and exists(entry.pilot) then
+         local entry=npc_entry(interest.entity)
+         if entry and exists(entry.pilot) then
             session.interest_cursor=at
             return entry
          end
@@ -1604,8 +1891,8 @@ local function select_priority_npc ( stamp, include_priority )
    while #queue>0 do
       local entity=table.remove(queue,1)
       session.npc_announcement_seen[entity]=nil
-      local entry=session.authority[entity]
-      if entry and entry.kind=="npc" and exists(entry.pilot) then
+      local entry=npc_entry(entity)
+      if entry and exists(entry.pilot) then
          return entry
       end
    end
@@ -1638,12 +1925,38 @@ local function select_ambient_npc ( skip )
       local entity=session.npc_order[session.npc_cursor]
       session.npc_cursor=session.npc_cursor+1
       inspected=inspected+1
-      local entry=session.authority[entity]
-      if entry and entry.kind=="npc" and entry~=skip
+      local entry=npc_entry(entity)
+      if entry and entry~=skip
             and exists(entry.pilot) and detectable_by_participant(entry.pilot) then
          return entry
       end
    end
+end
+
+local function selected_npc_record ( entry )
+   if session.authority[entry.entity]==entry then
+      return state_record(entry.pilot,entry.entity,false)
+   end
+   if not exists(entry.pilot) then return entry.cached_state end
+   local record=state_record(entry.pilot,entry.entity,false)
+   local cached=entry.cached_state
+   if cached then
+      -- Relay the host proxy's current motion rather than coordinates cached
+      -- when the owner's packet arrived. Lifecycle and combat state remain
+      -- owner authoritative.
+      record.armour=cached.armour
+      record.shield=cached.shield
+      record.stress=cached.stress
+      record.energy=cached.energy
+      record.target=cached.target
+      record.weapset=cached.weapset
+      record.accel=cached.accel
+      record.turn=cached.turn
+      record.reverse=cached.reverse
+      record.primary=cached.primary
+      record.secondary=cached.secondary
+   end
+   return record
 end
 
 local function select_world_craft ()
@@ -1661,7 +1974,9 @@ local function select_world_craft ()
          return state_record(authority.pilot,entity,false)
       end
       local replica=session.craft[entity]
-      if replica and replica.cached_state then return replica.cached_state end
+      if replica and replica.cached_state then
+         return selected_npc_record(replica)
+      end
    end
 end
 
@@ -1684,6 +1999,7 @@ end
 
 local function publish_local_control ( force, record )
    if not current_system() then return false end
+   if session.dead_players[local_entity()] then return false end
    record=record or state_record(player.pilot(),local_entity(),true)
    local signature=table.concat({
       record.target,record.weapset,record.accel,
@@ -1764,39 +2080,42 @@ function session._publish_outfit_edges ()
    return changed
 end
 
-local function publish_owned_craft_tick ()
-   local order=session.craft_order
+local function publish_owned_entity_tick ()
+   if is_host() then return false end
+   local order=session.owned_order
    local count=#order
-   if count==0 then return end
+   if count==0 then return false end
    local inspected=0
-   while inspected<count do
-      if session.local_craft_cursor>count then session.local_craft_cursor=1 end
-      local entity=order[session.local_craft_cursor]
-      session.local_craft_cursor=session.local_craft_cursor+1
+   while inspected<math.min(count,8) do
+      if session.owned_cursor>count then session.owned_cursor=1 end
+      local entity=order[session.owned_cursor]
+      session.owned_cursor=session.owned_cursor+1
       inspected=inspected+1
       local entry=session.authority[entity]
-      if entry and entry.kind=="craft"
-            and entry.owner==session.settings.node_id and exists(entry.pilot) then
+      if entry and entry.owner==session.settings.node_id
+            and exists(entry.pilot) then
          local record=state_record(entry.pilot,entity,false)
          entry.cached_state=record
-         if not is_host() then
-            session.sequence=session.sequence+1
-            local message=gameplay_base("craft_state")
-            message.owner=session.settings.node_id
-            message.entity=entity
-            message.seq=session.sequence
-            message.state=pack_state(record)
-            send_host(message,false)
-         end
-         return
+         session.sequence=session.sequence+1
+         local message=gameplay_base("entity_state")
+         message.kind=entry.kind
+         message.owner=session.settings.node_id
+         message.entity=entity
+         message.seq=session.sequence
+         message.state=pack_state(record)
+         return session._send_game_state(
+            peer_for_node(session.machine.host),message)
       end
    end
+   return false
 end
 
 local function collect_player_lines ()
    local ordered={}
    for owner,record in pairs(session.player_states) do
-      ordered[#ordered+1]={owner=owner,record=record}
+      if not session.dead_players[record.entity] then
+         ordered[#ordered+1]={owner=owner,record=record}
+      end
    end
    table.sort(ordered,function ( a,b ) return a.owner<b.owner end)
    local lines={}
@@ -1811,12 +2130,18 @@ local publish_target_interest
 local function host_world_tick ( stamp )
    local p=player.pilot()
    if not exists(p) then return end
+   if session.dead_players[local_entity()] then return end
+   session._admit_player_target(p)
    local local_record=state_record(p,local_entity(),true,stamp)
+   if local_record.armour<=0 then
+      publish_player_death(session.settings.node_id,local_entity())
+      return
+   end
    session.player_states[session.settings.node_id]=local_record
    publish_target_interest(local_record,stamp)
    publish_local_control(false,local_record)
    session._publish_outfit_edges()
-   publish_owned_craft_tick()
+   publish_owned_entity_tick()
 
    session.world_tick=(session.world_tick or 0)+1
    local entity_lines={}
@@ -1826,15 +2151,17 @@ local function host_world_tick ( stamp )
    local first=select_priority_npc(stamp,session.world_tick%3~=0)
    if not first then first=select_ambient_npc() end
    if first then
-      local record=state_record(first.pilot,first.entity,false)
-      classify_npc_record(first,record)
-      local packed=session._pack_npc_announcement(first,record)
-      if packed then entity_lines[#entity_lines+1]=packed end
+      local record=selected_npc_record(first)
+      if record then
+         classify_npc_record(first,record)
+         local packed=session._pack_npc_announcement(first,record)
+         if packed then entity_lines[#entity_lines+1]=packed end
+      end
    end
-   if session.world_tick%3==0 then
-      local ambient=select_ambient_npc(first)
-      if ambient then
-         local record=state_record(ambient.pilot,ambient.entity,false)
+   local ambient=select_ambient_npc(first)
+   if ambient then
+      local record=selected_npc_record(ambient)
+      if record then
          classify_npc_record(ambient,record)
          local packed=session._pack_npc_announcement(ambient,record)
          if packed then entity_lines[#entity_lines+1]=packed end
@@ -1883,14 +2210,20 @@ local function guest_world_tick ( stamp )
    end
    local p=player.pilot()
    if not exists(p) then return end
+   if session.dead_players[local_entity()] then return end
+   session._admit_player_target(p)
    local record=state_record(p,local_entity(),true,stamp)
+   if record.armour<=0 then
+      publish_player_death(session.settings.node_id,local_entity())
+      return
+   end
    session.player_states[session.settings.node_id]=record
    publish_target_interest(record,stamp)
    publish_local_control(false,record)
    session._publish_outfit_edges()
    local peer=peer_for_node(session.machine.host)
    if peer then session._send_game_state(peer,player_state_message(record)) end
-   publish_owned_craft_tick()
+   publish_owned_entity_tick()
 end
 
 function session._broadcast_player_state ( record )
@@ -1978,7 +2311,6 @@ function session._parse_world_entities ( packed, stamp, sequence )
       if line:sub(1,2)=="n," then
          local record,description=session._unpack_npc_announcement(line)
          if record and description
-               and description.owner==session.machine.host
                and record.entity~=local_entity() then
             local known=session.npcs[record.entity]
             if known or spawn_entity_manifest(description) then
@@ -1987,6 +2319,8 @@ function session._parse_world_entities ( packed, stamp, sequence )
                   session.incremental_replica_logged=true
                   print("P2P: receiving complete round-robin NPC announcements")
                end
+            else
+               session._log_replica_failure(description)
             end
          end
       else
@@ -2092,17 +2426,11 @@ end
 local function promote_guest_population ()
    local promoted={}
    for old_entity,entry in pairs(session.npcs) do
-      if session.replica_by_local[entry.local_id]==old_entity then
-         session.replica_by_local[entry.local_id]=nil
-      end
-      if session.origins[entry.origin]==old_entity then
-         session.origins[entry.origin]=nil
-      end
-      if exists(entry.pilot) then
+      if not entry.peer_owned and exists(entry.pilot) then
          local entity=new_entity_id(
             session.settings.node_id,entry.pilot,"npc")
          promoted[#promoted+1]={
-            pilot=entry.pilot,kind="npc",entity=entity,
+            old_entity=old_entity,pilot=entry.pilot,kind="npc",entity=entity,
             origin=entry.origin,
             ai=entry.description.ai,
             depth=pilot_leader_depth(entry.pilot),
@@ -2114,15 +2442,22 @@ local function promote_guest_population ()
       if a.depth~=b.depth then return a.depth<b.depth end
       return a.id<b.id
    end)
-   session.npcs={}
    for _index,item in ipairs(promoted) do
+      local old=session.npcs[item.old_entity]
+      session.npcs[item.old_entity]=nil
+      if old and session.replica_by_local[old.local_id]==item.old_entity then
+         session.replica_by_local[old.local_id]=nil
+      end
+      if session.origins[item.origin]==item.old_entity then
+         session.origins[item.origin]=nil
+      end
       item.pilot:taskClear()
       item.pilot:changeAI(item.ai)
       ai_setup.setup(item.pilot)
       item.pilot:taskClear()
       item.pilot:setNoDeath(false)
-      register_authority(item.pilot,item.kind,session.settings.node_id,
-         item.origin,item.entity)
+      register_authority(item.pilot,item.kind,
+         session.settings.node_id,item.origin,item.entity)
    end
    session.promoted_visit=true
    set_ambient_spawning(false)
@@ -2131,7 +2466,7 @@ end
 local function demote_host_population ()
    local demoted={}
    for entity,entry in pairs(session.authority) do
-      if entry.kind=="npc" and exists(entry.pilot) then
+      if entry.kind=="npc" and not entry.peer_owned and exists(entry.pilot) then
          remove_authority_hooks(entry)
          entry.pilot:setNoDeath(true)
          demoted[#demoted+1]=entry
@@ -2174,13 +2509,22 @@ local function become_host ( failover )
    reset_delivery_state()
    if failover then
       promote_guest_population()
-   elseif not session.host_inventory_scanned then
+   end
+   if not failover and not session.host_inventory_scanned then
       session.host_inventory_scanned=true
       set_ambient_spawning(true)
       scan_initial_host_population()
    end
    for entity,entry in pairs(session.authority) do
       if entry.kind=="npc" and exists(entry.pilot)
+            and not session.npc_announcement_seen[entity] then
+         session.npc_announcement_seen[entity]=true
+         session.npc_announcement_queue[
+            #session.npc_announcement_queue+1]=entity
+      end
+   end
+   for entity,entry in pairs(session.npcs) do
+      if entry.peer_owned and exists(entry.pilot)
             and not session.npc_announcement_seen[entity] then
          session.npc_announcement_seen[entity]=true
          session.npc_announcement_queue[
@@ -2218,10 +2562,19 @@ local function join_host ( old_state )
    local manifest=player_manifest()
    if manifest then send_host(manifest,true) end
    for _entity,entry in pairs(session.authority) do
-      if entry.kind=="craft" and entry.owner==session.settings.node_id then
-         local craft_manifest=authority_manifest(entry)
-         if craft_manifest then send_host(craft_manifest,true) end
+      if entry.owner==session.settings.node_id
+            and (entry.kind=="craft" or entry.peer_owned) then
+         local entity_manifest=authority_manifest(entry)
+         if entity_manifest then send_host(entity_manifest,true) end
       end
+   end
+   if not session.greeted_hosts[host] then
+      session.sequence=session.sequence+1
+      local greeting=gameplay_base("chat")
+      greeting.owner=session.settings.node_id
+      greeting.seq=session.sequence
+      greeting.text=introduction_text(false)
+      if send_host(greeting,true) then session.greeted_hosts[host]=true end
    end
 end
 
@@ -2454,10 +2807,17 @@ remove_owner_population = function ( owner, explode )
    for entity,entry in pairs(session.craft) do
       if entry.owner==owner then entities[#entities+1]=entity end
    end
+   for entity,entry in pairs(session.npcs) do
+      if entry.peer_owned and entry.owner==owner then
+         entities[#entities+1]=entity
+      end
+   end
    for _index,entity in ipairs(entities) do remove_replica(entity,explode) end
    session.player_manifests[owner]=nil
    session.player_states[owner]=nil
    session.outfit_messages[owner]=nil
+   session.host_welcomed[owner]=nil
+   session.greeted_hosts[owner]=nil
    clear_interest(owner)
 end
 
@@ -2484,6 +2844,7 @@ local function handle_host_player_manifest ( peer, meta, message )
    if message.owner~=meta.node or message.node~=meta.node
          or message.epoch~=session.machine.claim
          or not message.origin:match("^"..meta.node.."%.") then return end
+   if session.dead_players[message.entity] then return end
    local known=session.identities:raw_name(message.owner)
    if known~=message.name then return end
    local canonical=canonical_player_manifest(message)
@@ -2493,26 +2854,76 @@ local function handle_host_player_manifest ( peer, meta, message )
       return
    end
    broadcast_manifest(cache_manifest(canonical))
+   if not session.host_welcomed[message.owner] then
+      session.sequence=session.sequence+1
+      local welcome=gameplay_base("chat")
+      welcome.owner=session.settings.node_id
+      welcome.seq=session.sequence
+      welcome.text=introduction_text(true)
+      if send_game(peer,welcome,true) then
+         session.host_welcomed[message.owner]=true
+      end
+   end
 end
 
 local function handle_host_entity_manifest ( peer, meta, message )
-   if message.kind~="craft" or message.owner~=meta.node
+   if (message.kind~="craft" and message.kind~="npc")
+         or message.owner~=meta.node
          or message.epoch~=session.machine.claim then return end
    if not message.entity:match("^"..message.owner.."%.")
          or not message.origin:match("^"..message.owner.."%.") then return end
    if spawn_entity_manifest(message) then
-      session.world_craft_order[#session.world_craft_order+1]=message.entity
       local canonical=canonical_copy(message)
-      local entry=session.craft[message.entity]
-      if entry then entry.manifest=canonical end
-      broadcast_manifest(cache_manifest(canonical))
+      if message.kind=="npc" then
+         local entry=session.npcs[message.entity]
+         if not entry then return end
+         entry.description=canonical
+         entry.cached_state=message
+         entry.peer_owned=true
+         add_npc_order(message.entity)
+         if not session.npc_announcement_seen[message.entity] then
+            session.npc_announcement_seen[message.entity]=true
+            session.npc_announcement_queue[
+               #session.npc_announcement_queue+1]=message.entity
+         end
+         classify_npc_record(entry,message)
+         broadcast_npc_announcement(entry)
+         if not session.guest_owned_npc_logged then
+            session.guest_owned_npc_logged=true
+            print("P2P: relaying guest-owned NPC population")
+         end
+      else
+         session.world_craft_order[
+            #session.world_craft_order+1]=message.entity
+         local entry=session.craft[message.entity]
+         if entry then entry.manifest=canonical end
+         broadcast_manifest(cache_manifest(canonical))
+      end
+   elseif message.kind=="npc" then
+      session._log_replica_failure(message)
    end
 end
 
 local function handle_entity_remove ( peer, meta, message )
+   if message.kind=="player" then
+      if message.reason~="death" then return end
+      if is_host() then
+         if message.owner~=meta.node then return end
+         local manifest=session.player_manifests[message.owner]
+         if not manifest or manifest.entity~=message.entity then return end
+         if session._mark_player_dead(message.owner,message.entity) then
+            host_reliable(canonical_copy(message))
+         end
+      elseif meta.node==session.machine.host then
+         session._mark_player_dead(message.owner,message.entity)
+      end
+      return
+   end
    if is_host() then
-      if message.owner~=meta.node or message.kind~="craft" then return end
-      local entry=session.craft[message.entity]
+      if message.owner~=meta.node
+            or (message.kind~="craft" and message.kind~="npc") then return end
+      local container=message.kind=="npc" and session.npcs or session.craft
+      local entry=container[message.entity]
       if entry and entry.owner==message.owner then
          remove_replica(message.entity,
             message.reason=="death" or message.reason=="exploded")
@@ -2590,15 +3001,19 @@ local function handle_gameplay_message ( peer, message )
       if message.type=="join" then
          publish_participant_manifests()
       elseif message.type=="entity_query" then
-         local npc=session.authority[message.entity]
+         local npc=npc_entry(message.entity)
          local cached=session.manifest_cache[message.entity]
-         if npc and npc.kind=="npc" and exists(npc.pilot) then
+         if npc and exists(npc.pilot) then
             if not session.npc_announcement_seen[message.entity] then
                session.npc_announcement_seen[message.entity]=true
                session.npc_announcement_queue[
                   #session.npc_announcement_queue+1]=message.entity
             end
          elseif cached then
+            if cached.message.type=="player_manifest" then
+               cached=cache_manifest(
+                  session._refresh_player_manifest_state(cached.message))
+            end
             broadcast_manifest(cached)
          else
             entity_absent(peer,message.entity)
@@ -2612,7 +3027,10 @@ local function handle_gameplay_message ( peer, message )
       elseif message.type=="player_state" then
          local manifest=session.player_manifests[meta.node]
          local entry=manifest and session.players[manifest.entity]
-         if manifest and manifest.entity==message.entity and entry
+         if manifest and manifest.entity==message.entity
+               and message.armour<=0 then
+            publish_player_death(meta.node,message.entity)
+         elseif manifest and manifest.entity==message.entity and entry
                and message.seq>(entry.state_sequence or -1) then
             entry.state_sequence=message.seq
             session.player_states[meta.node]=message
@@ -2639,9 +3057,10 @@ local function handle_gameplay_message ( peer, message )
          elseif ok==false and not session.players[message.entity] then
             entity_absent(peer,message.entity)
          end
-      elseif message.type=="craft_state" then
+      elseif message.type=="entity_state" then
          if message.owner~=meta.node then return end
-         local entry=session.craft[message.entity]
+         local container=message.kind=="npc" and session.npcs or session.craft
+         local entry=container[message.entity]
          local record=unpack_state(message.state)
          if entry and entry.owner==meta.node and record
                and record.entity==message.entity
@@ -2649,6 +3068,9 @@ local function handle_gameplay_message ( peer, message )
             entry.state_sequence=message.seq
             entry.cached_state=record
             apply_entity_record(record,now())
+            if message.kind=="npc" then classify_npc_record(entry,record) end
+         elseif not entry then
+            entity_absent(peer,message.entity)
          end
       elseif message.type=="craft_order" then
          if message.owner~=meta.node then return end
@@ -2678,6 +3100,7 @@ local function handle_gameplay_message ( peer, message )
    if session.machine.state~="guest" or meta.node~=session.machine.host
          or message.epoch~=session.machine.claim then return end
    if message.type=="player_manifest" then
+      if session.dead_players[message.entity] then return end
       session.player_manifests[message.owner]=message
       session.manifest_queries[message.entity]=nil
       if message.owner~=session.settings.node_id then
@@ -2694,6 +3117,7 @@ local function handle_gameplay_message ( peer, message )
          end
       end
    elseif message.type=="entity_manifest" then
+      if message.kind~="craft" then return end
       session.manifest_queries[message.entity]=nil
       if not spawn_entity_manifest(message) then
          reject_peer(peer,"unable to create remote "
@@ -2946,8 +3370,11 @@ local function reset_runtime_tables ()
    session.craft={}
    session.player_manifests={}
    session.player_states={}
+   session.dead_players={}
    session.outfit_messages={}
    session.present_players={}
+   session.host_welcomed={}
+   session.greeted_hosts={}
    session.authority={}
    session.authority_by_local={}
    session.origins={}
@@ -2961,10 +3388,10 @@ local function reset_runtime_tables ()
    session.npc_announcement_queue={}
    session.npc_announcement_seen={}
    session.npc_order={}
+   session.npc_order_seen={}
    session.npc_cursor=1
-   session.craft_order={}
-   session.craft_cursor=1
-   session.local_craft_cursor=1
+   session.owned_order={}
+   session.owned_cursor=1
    session.world_craft_order={}
    session.world_craft_cursor=1
    session.audit_order={}
@@ -2982,11 +3409,13 @@ local function reset_runtime_tables ()
    session.creation_safe_pending=nil
    session.incremental_creation_logged=nil
    session.incremental_replica_logged=nil
+   session.guest_owned_npc_logged=nil
    session.world_tx_logged=nil
    session.world_rx_logged=nil
    session.needs_host_join=nil
    session.local_control_signature=nil
    session.local_outfit_states=nil
+   session.local_motion_sample=nil
    session.control_sequence=0
    session.outfit_sequence=0
    session.heartbeat_sequence=0
@@ -2998,6 +3427,8 @@ local function reset_runtime_tables ()
    session.promoted_visit=nil
    session.encode_errors={}
    craft_factions={}
+   session.npc_factions={}
+   session.npc_faction_counter=0
 end
 
 local function clear_authority_hooks ()

@@ -1,6 +1,8 @@
 No agent may edit this file.
 This file documents the architect's vision.
-Developement may drift, but the vision is the ultimate goal.
+Developement may drift, but the vision is the ultimate guiding light.
+
+If you are an agent, and you are doing something differently, you have to let me know to make sure that I am aware of divergence/drift.
 
 # p2p world sharing:
 
@@ -12,6 +14,7 @@ Developement may drift, but the vision is the ultimate goal.
 - the host doesn't distinguish between peers, anyone in "this system" is a peer, and any message about "this system" is broadcast() to the network <- USE ENET FOR WHAT IT IS MEANT FOR
 - if the host disconnects, some other peer takes over, inheriting whatever they already have locally as their own
 - if naev has claimed a system, we yield to the single-player storyline aspect of the game and refuse to guest (this means that we host even if there is another host; it does not matter which host other players join if they are guest eligible and there are multiple hosts)
+- world sharing is "best effort", so don't invent hacks or bandaids when the client can reasonably assume some outcome and keep playing undisturbed
 
 ### protocol simplicity
 - Ideally, it's as simple as possible. Something like this:

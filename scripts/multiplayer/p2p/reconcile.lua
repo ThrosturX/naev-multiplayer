@@ -23,10 +23,27 @@ local function angle_delta ( current, wanted )
 end
 
 local function capped_vector ( x, y, cap )
-   local length=math.sqrt(x*x+y*y)
-   if length<=cap or length==0 then return x,y end
-   local scale=cap/length
-   return x*scale,y*scale
+   local length_squared = x * x + y * y
+
+   if length_squared <= cap * cap then
+      return x, y
+   end
+
+   local scale = cap / math.sqrt(length_squared)
+   return x * scale, y * scale
+end
+
+-- Returns a partial authoritative position correction only when the squared
+-- error exceeds the configured threshold. This keeps the common path free of
+-- square roots and leaves smaller errors to velocity reconciliation.
+function reconcile.catchup_position ( x, y, wanted_x, wanted_y,
+      distance, bias )
+   distance=math.max(0,tonumber(distance) or 2000)
+   bias=math.max(0,math.min(1,tonumber(bias) or 0.5))
+   local dx=wanted_x-x
+   local dy=wanted_y-y
+   if dx*dx+dy*dy<=distance*distance then return x,y,false end
+   return x+dx*bias,y+dy*bias,true
 end
 
 -- Allocation-free production path. Steers a replica toward an extrapolated
@@ -49,13 +66,14 @@ function reconcile.steer_values ( x, y, vx, vy, dir, wanted, dt, age, limits )
    local direction_rate=limits.direction_rate or 14
    local corrected_vx,corrected_vy
    if limits.follow_velocity then
-      -- Player records are frequent declarations from the player who owns the
-      -- motion. Apply that ordinary velocity directly. Position bias is useful
-      -- while moving, but must not make a replica keep drifting after the
-      -- owner reports zero velocity.
+      -- Frequent authoritative records can apply their ordinary velocity
+      -- directly. Callers that require an exact stationary declaration opt in
+      -- with rest_source_speed; otherwise position bias still closes an offset
+      -- when the authoritative velocity happens to be zero.
       local source_speed=wanted.vx*wanted.vx+wanted.vy*wanted.vy
-      local rest_speed=limits.rest_source_speed or 0
-      if source_speed<=rest_speed*rest_speed then
+      local rest_speed=limits.rest_source_speed
+      if rest_speed
+            and source_speed<=rest_speed*rest_speed then
          corrected_vx=0
          corrected_vy=0
       else

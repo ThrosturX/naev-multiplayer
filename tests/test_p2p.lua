@@ -101,7 +101,7 @@ test("gameplay control carries bounded held control state", function()
    })
 end)
 
-test("gameplay entity queries request unknown descriptions", function()
+test("gameplay entity queries and guest-owned NPC state", function()
    local packet=assert(gameplay.encode{
       type="entity_query",node="b2",system="X",visit="b2",
       epoch="a1:a1:1",entity="a1.a1.n.2.9",seq=3,
@@ -109,13 +109,125 @@ test("gameplay entity queries request unknown descriptions", function()
    local message=assert(gameplay.decode(packet))
    eq(message.entity,"a1.a1.n.2.9")
    eq(message.seq,3)
+   local manifest=assert(gameplay.encode{
+      type="entity_manifest",node="b2",system="X",visit="b2",
+      epoch="a1:a1:1",kind="npc",owner="b2",
+      entity="b2.b2.n.2.9",origin="b2.b2.npc.9",
+      ship="Lancelot",name="Raider",faction="Pirate",ai="pirate",
+      outfits="-",slots="-",leader="-",x=1,y=2,vx=3,vy=4,dir=0,
+      armour=100,shield=100,stress=0,energy=100,target="b2.b2.player",
+      weapset=1,accel=0,turn=0,reverse=0,primary=0,secondary=0,
+   })
+   local description=assert(gameplay.decode(manifest))
+   eq(description.kind,"npc")
+   eq(description.owner,"b2")
+   local state=assert(gameplay.encode{
+      type="entity_state",node="b2",system="X",visit="b2",
+      epoch="a1:a1:1",kind="npc",owner="b2",
+      entity="b2.b2.n.2.9",seq=4,
+      state="b2.b2.n.2.9,1,2,3,4,0,100,100,0,100,-,1,0,0,0,0,0,-",
+   })
+   eq(assert(gameplay.decode(state)).kind,"npc")
    assert(not gameplay.encode{
-      type="entity_manifest",node="a1",system="X",visit="a1",
-      epoch="a1:a1:1",kind="npc",owner="a1",
-      entity="a1.a1.n.2.9",origin="a1.a1.npc.9",
+      type="entity_state",node="b2",system="X",visit="b2",
+      epoch="a1:a1:1",kind="npc",owner="c3",
+      entity="c3.b2.n.2.9",seq=4,state="-",
+   })
+   assert(not gameplay.encode{
+      type="entity_manifest",node="b2",system="X",visit="b2",
+      epoch="a1:a1:1",kind="npc",owner="b2",
+      entity="b2.b2.n.2.9",origin="c3.b2.npc.9",
       ship="Lancelot",name="Raider",faction="Pirate",ai="pirate",
       outfits="-",slots="-",
    })
+   local death=assert(gameplay.encode{
+      type="entity_remove",node="b2",system="X",visit="b2",
+      epoch="a1:a1:1",kind="player",owner="b2",
+      entity="b2.b2.player",seq=5,reason="death",
+   })
+   eq(assert(gameplay.decode(death)).kind,"player")
+   assert(not gameplay.encode{
+      type="entity_remove",node="b2",system="X",visit="b2",
+      epoch="a1:a1:1",kind="player",owner="b2",
+      entity="b2.b2.player",seq=6,reason="removed",
+   })
+end)
+
+test("player descriptions refresh current spawn coordinates", function()
+   local old_settings,old_machine,old_visit=
+      session.settings,session.machine,session.visit
+   local old_states=session.player_states
+   session.settings={node_id="a1"}
+   session.machine={system="X",claim="a1:a1:1"}
+   session.visit="a1"
+   session.player_states={b2={
+      x=900,y=-400,vx=12,vy=34,dir=1,
+      armour=80,shield=70,stress=0,energy=60,target="-",
+      weapset=1,accel=0,turn=0,reverse=0,primary=0,secondary=0,
+   }}
+   local refreshed=session._refresh_player_manifest_state{
+      type="player_manifest",node="a1",system="X",visit="a1",
+      epoch="a1:a1:1",owner="b2",entity="b2.b2.player",
+      x=1,y=2,
+   }
+   eq(refreshed.x,900); eq(refreshed.y,-400)
+   session.settings,session.machine,session.visit=
+      old_settings,old_machine,old_visit
+   session.player_states=old_states
+end)
+
+test("target and combat interactions admit both local pilots", function()
+   local old_running,old_machine=session.running,session.machine
+   local old_admit=session._admit_local_pilot
+   local admitted={}
+   session.running=true
+   session.machine={system="X"}
+   session._admit_local_pilot=function ( p )
+      if not p then return end
+      admitted[#admitted+1]=p
+      return {}
+   end
+   local target={}
+   local participant={exists=function () return true end,
+      target=function () return target end}
+   assert(session._admit_player_target(participant))
+   assert(session.pilot_attacked("victim","attacker"))
+   eq(admitted[1],target)
+   eq(admitted[2],"victim")
+   eq(admitted[3],"attacker")
+   session._admit_local_pilot=old_admit
+   session.running,session.machine=old_running,old_machine
+end)
+
+test("player death tombstones clear replaceable state", function()
+   local old_settings,old_visit=session.settings,session.visit
+   local old_dead,old_states=session.dead_players,session.player_states
+   local old_outfits,old_cache=session.outfit_messages,session.manifest_cache
+   local old_queries,old_pending=session.manifest_queries,session.pending_states
+   local old_pending_count=session.pending_state_count
+   session.settings={node_id="a1"}
+   session.visit="a1"
+   session.dead_players={}
+   session.player_states={b2={entity="b2.b2.player"}}
+   session.outfit_messages={b2={}}
+   session.manifest_cache={["b2.b2.player"]={}}
+   session.manifest_queries={["b2.b2.player"]=1}
+   session.pending_states={["b2.b2.player"]={}}
+   session.pending_state_count=1
+   assert(session._mark_player_dead("b2","b2.b2.player"))
+   assert(session.dead_players["b2.b2.player"])
+   eq(session.player_states.b2,nil)
+   eq(session.outfit_messages.b2,nil)
+   eq(session.manifest_cache["b2.b2.player"],nil)
+   eq(session.manifest_queries["b2.b2.player"],nil)
+   eq(session.pending_states["b2.b2.player"],nil)
+   eq(session.pending_state_count,0)
+   assert(not session._mark_player_dead("b2","b2.b2.player"))
+   session.settings,session.visit=old_settings,old_visit
+   session.dead_players,session.player_states=old_dead,old_states
+   session.outfit_messages,session.manifest_cache=old_outfits,old_cache
+   session.manifest_queries,session.pending_states=old_queries,old_pending
+   session.pending_state_count=old_pending_count
 end)
 
 test("gameplay world batches stay below unreliable ENet budget", function()
@@ -291,6 +403,12 @@ test("sequence rejection", function()
 end)
 
 test("capped reconciliation", function()
+   local near_x,near_y,near_moved=reconcile.catchup_position(
+      0,0,1999,0,2000,0.5)
+   eq(near_x,0); eq(near_y,0); eq(near_moved,false)
+   local far_x,far_y,far_moved=reconcile.catchup_position(
+      0,0,6000,-2000,2000,0.5)
+   eq(far_x,3000); eq(far_y,-1000); eq(far_moved,true)
    local smooth=reconcile.steer({x=0,y=0,vx=0,vy=0,dir=2*math.pi-0.1},
       {x=10000,y=-10000,vx=1000,vy=-1000,dir=0.1},1/60,0,
       {correction_speed=600,acceleration=600})
@@ -303,6 +421,32 @@ test("capped reconciliation", function()
    local turned=math.abs((turn.dir+math.pi)%(2*math.pi)-math.pi)
    assert(math.abs(turned-0.15)<1e-9,
       "direction correction exceeded its angular speed cap")
+   local sparse_turn=reconcile.steer(
+      {x=0,y=0,vx=0,vy=0,dir=0},
+      {x=0,y=0,vx=0,vy=0,dir=math.pi},0.25,0,
+      {
+         direction_rate=30,direction_speed=8,max_dt=0.25,
+      })
+   local sparse_turned=math.abs(
+      (sparse_turn.dir+math.pi)%(2*math.pi)-math.pi)
+   assert(math.abs(sparse_turned-2)<1e-9,
+      "sparse direction correction ignored its elapsed-time cap")
+   local unpredicted=reconcile.steer(
+      {x=0,y=0,vx=0,vy=0,dir=0},
+      {x=0,y=0,vx=100,vy=0,dir=0},0.1,0,
+      {
+         position_gain=1.5,correction_speed=250,
+         velocity_rate=8,acceleration=600,max_prediction=0.125,
+      })
+   local predicted=reconcile.steer(
+      {x=0,y=0,vx=0,vy=0,dir=0},
+      {x=0,y=0,vx=100,vy=0,dir=0},0.1,0.05,
+      {
+         position_gain=1.5,correction_speed=250,
+         velocity_rate=8,acceleration=600,max_prediction=0.125,
+      })
+   assert(predicted.vx>unpredicted.vx,
+      "bounded prediction did not lead the received motion")
    local resting=reconcile.steer(
       {x=0.5,y=0,vx=0.5,vy=0,dir=0},
       {x=0,y=0,vx=0,vy=0,dir=0},1/15,0,
@@ -320,6 +464,31 @@ test("capped reconciliation", function()
          rest_source_speed=0.25,follow_velocity=true,
       })
    eq(declared_stop.vx,0); eq(declared_stop.vy,0)
+   local stationary_offset=reconcile.steer(
+      {x=0,y=0,vx=0,vy=0,dir=0},
+      {x=100,y=-50,vx=0,vy=0,dir=0},1/15,0,
+      {
+         position_gain=1.5,correction_speed=250,
+         follow_velocity=true,
+      })
+   eq(stationary_offset.vx,150); eq(stationary_offset.vy,-75)
+end)
+
+test("autonav thrust is inferred beyond keyboard state", function()
+   local previous_player=_G.player
+   _G.player={autonav=function () return true end}
+   local p={
+      dir=function () return 0 end,
+      speed=function () return 100 end,
+      accel=function () return 50 end,
+   }
+   session.local_motion_sample=nil
+   eq(session._local_accel_control(p,false,1,120,0),1)
+   session.local_motion_sample=nil
+   eq(session._local_accel_control(p,false,2,50,0),0)
+   eq(session._local_accel_control(p,false,2.1,60,0),1)
+   eq(session._local_accel_control(p,true,2.2,60,0),1)
+   _G.player=previous_player
 end)
 
 test("owned craft nesting and cleanup", function()
@@ -329,6 +498,64 @@ test("owned craft nesting and cleanup", function()
    local replicas={a={owner="owner"},b={owner="guest"}}; owned.cleanup(replicas,"owner",function() removed=true end)
    assert(removed)
    eq(replicas.a,nil); assert(replicas.b)
+end)
+
+test("authoritative NPC targets repair only stale attack tasks", function()
+   local old_target,new_target={},{}
+   local function npc ( task, target )
+      local state={task=task,target=target,cleared=0}
+      local p={
+         exists=function () return true end,
+         taskname=function () return state.task end,
+         taskdata=function () return state.target end,
+         taskClear=function ()
+            state.cleared=state.cleared+1
+            state.task=nil
+            state.target=nil
+         end,
+         pushtask=function ( _self, name, data )
+            state.task=name
+            state.target=data
+         end,
+      }
+      return {kind="npc",pilot=p},state
+   end
+   local entry,state=npc("attack",old_target)
+   assert(session._sync_replica_attack_task(entry,new_target))
+   eq(state.cleared,1); eq(state.task,"attack"); eq(state.target,new_target)
+   assert(session._sync_replica_attack_task(entry,nil))
+   eq(state.cleared,2); eq(state.task,nil)
+   local fleeing,flee_state=npc("runaway",old_target)
+   assert(not session._sync_replica_attack_task(fleeing,new_target))
+   eq(flee_state.cleared,0); eq(flee_state.task,"runaway")
+end)
+
+test("remote owned craft require explicit attack orders", function()
+   local memory={aggressive=true,atk_kill=true}
+   session._apply_owned_craft_ai_policy{
+      memory=function () return memory end,
+   }
+   eq(memory.aggressive,false)
+   eq(memory.atk_kill,false)
+end)
+
+test("remote player AI gives owned craft the normal no-kill policy", function()
+   local chunk=assert(loadfile("ai/core/control/p2p_remote_control.lua"))
+   local env={
+      mem={},
+      ai={},
+      require=function ( name )
+         if name=="ai.core.attack.util" then
+            return {primary=function () end,secondary=function () end}
+         end
+         return require(name)
+      end,
+   }
+   setmetatable(env,{__index=_G})
+   setfenv(chunk,env)
+   chunk()
+   env.create()
+   eq(env.mem.atk_kill,false)
 end)
 
 local failed=0

@@ -52,7 +52,7 @@ local required = {
       "secondary","turn","reverse"},
    outfit_toggle={"node","system","visit","epoch","owner","entity","seq",
       "slot","on"},
-   craft_state={"node","system","visit","epoch","owner","entity","seq",
+   entity_state={"node","system","visit","epoch","kind","owner","entity","seq",
       "state"},
    craft_order={"node","system","visit","epoch","owner","seq","order",
       "target"},
@@ -132,12 +132,15 @@ local function validate ( message )
          return nil,"invalid "..key
       end
    end
-   if message.kind and message.kind~="npc"
-         and message.kind~="craft" then
+   if message.kind and message.kind~="npc" and message.kind~="craft"
+         and not (message.type=="entity_remove"
+            and message.kind=="player") then
       return nil,"invalid entity kind"
    end
-   if message.type=="entity_manifest" and message.kind~="craft" then
-      return nil,"entity manifests are only used for player-owned craft"
+   if message.type=="entity_remove" and message.kind=="player"
+         and (message.reason~="death"
+            or not message.entity:match("^"..message.owner.."%.")) then
+      return nil,"invalid player removal"
    end
    if message.reason and message.reason~="absent"
          and message.reason~="death" and message.reason~="exploded"
@@ -210,8 +213,19 @@ local function validate ( message )
          and not message.entity:match("^"..message.node.."%.") then
       return nil,"player entity does not match node"
    end
-   if message.type=="craft_state" and message.owner~=message.node then
-      return nil,"craft owner does not match sender"
+   if message.type=="entity_manifest" then
+      if not message.entity:match("^"..message.owner.."%.")
+            or not message.origin:match("^"..message.owner.."%.") then
+         return nil,"entity identity does not match owner"
+      end
+   end
+   if message.type=="entity_state" then
+      if message.owner~=message.node then
+         return nil,"entity owner does not match sender"
+      end
+      if not message.entity:match("^"..message.owner.."%.") then
+         return nil,"entity does not match owner"
+      end
    end
    return message
 end
