@@ -26,7 +26,7 @@
  <characteristics>
   <cpu>0</cpu>
   <crew>1</crew>
-  <mass>10</mass>
+  <mass>450</mass>
   <fuel>0</fuel>
   <fuel_consumption>1</fuel_consumption>
   <cargo>0</cargo>
