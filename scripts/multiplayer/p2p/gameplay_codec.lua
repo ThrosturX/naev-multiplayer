@@ -46,10 +46,12 @@ local required = {
    entity_query={"node","system","visit","epoch","entity","seq"},
    player_state={"node","system","visit","epoch","entity","seq","x","y",
       "vx","vy","dir","armour","shield","stress","energy","target",
-      "weapset","accel","turn","reverse","primary","secondary","active"},
+      "weapset","accel","turn","reverse","primary","secondary"},
    player_control={"node","system","visit","epoch","owner","entity","seq","x","y",
       "vx","vy","dir","energy","target","weapset","accel","primary",
-      "secondary","turn","reverse","active"},
+      "secondary","turn","reverse"},
+   outfit_toggle={"node","system","visit","epoch","owner","entity","seq",
+      "slot","on"},
    craft_state={"node","system","visit","epoch","owner","entity","seq",
       "state"},
    craft_order={"node","system","visit","epoch","owner","seq","order",
@@ -68,7 +70,7 @@ local numeric = {
    dir={-1e6,1e6},
    armour={0,1e9},shield={0,1e9},stress={0,1e9},energy={0,1e9},
    weapset={1,10},accel={0,1},primary={0,1},secondary={0,1},
-   turn={-1,1},reverse={0,1},
+   turn={-1,1},reverse={0,1},slot={1,512},on={0,1},
 }
 
 local function plain ( value, maximum )
@@ -89,6 +91,9 @@ end
 local function validate ( message )
    if type(message)~="table" or not required[message.type] then
       return nil,"unknown type"
+   end
+   if message.active~=nil then
+      return nil,"active outfit snapshots are unsupported"
    end
    for _index,key in ipairs(required[message.type]) do
       if message[key]==nil or message[key]=="" then
@@ -180,10 +185,6 @@ local function validate ( message )
          or message.weapsets:find("[^%d:;%.]")) then
       return nil,"invalid weapon sets"
    end
-   if message.active and (#message.active>4096
-         or message.active:find("[%z\1-\31\127]")) then
-      return nil,"invalid active outfits"
-   end
    for _index,key in ipairs({"players","entities","objects","state"}) do
       local value=message[key]
       if value and (#value>12000 or value:find("[%z\1-\31\127]")) then
@@ -200,7 +201,8 @@ local function validate ( message )
          message[key]=value
       end
    end
-   if message.type=="player_manifest" or message.type=="player_control" then
+   if message.type=="player_manifest" or message.type=="player_control"
+         or message.type=="outfit_toggle" then
       if not message.entity:match("^"..message.owner.."%.") then
          return nil,"player entity does not match node"
       end

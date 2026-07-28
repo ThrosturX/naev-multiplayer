@@ -44,13 +44,14 @@ Each player owns their real ship's movement and health. Network health is
 applied only to disposable player proxies; it must never be written to
 `player.pilot()`.
 
-The host owns ambient NPC identity, AI, lifecycle, health, and launched
-fighters. Guests disable ambient spawning immediately and remove speculative
-ambient pilots once they accept a host. Guest NPCs use
-`p2p_replica_passive`; it performs no movement, targeting, task, firing, or
-spawning work. At most eight replicas may be promoted to
-`p2p_replica_active`, whose only job is to reproduce the host-selected target,
-weapon set, and inferred firing intent.
+The host owns ambient NPC identity, lifecycle, health, and launched fighters.
+Guests disable ambient spawning immediately and remove speculative ambient
+pilots once they accept a host. A guest NPC runs the AI named in the host's
+creation description, so local physics produces thrust, trails, targeting, and
+combat between bounded host records. Fresh host records correct its motion,
+health, energy, and target. Replica outfit installation excludes fighter bays,
+so running the manifest AI cannot create a second speculative fighter
+population.
 
 Non-owning player, craft, and NPC replicas remain damageable. They use
 no-death only to prevent local combat from deciding lifecycle before a fresh
@@ -131,26 +132,31 @@ for the selected records. Never rebuild static NPC data on a world tick.
 Reconciliation runs only when a fresh record arrives. Initial `pilot.add`
 chooses position; subsequent updates never call `setPos`. Position error
 becomes capped velocity bias, and direction changes use a capped angular step
-based on elapsed record time. Health, energy, target, weapon set, controls, and
-active outfits avoid redundant setters. Because replicas are damageable,
+based on elapsed record time. Health, energy, target, weapon set, and controls
+avoid redundant setters. Because replicas are damageable,
 health and energy compare the live pilot value on each fresh bounded record;
 otherwise unchanged authoritative values could not repair unrelated local
-damage. There is no population-wide smoothing update.
+damage. NPCs, player-owned craft, and persistent objects all integrate through
+local physics between records and receive the same packet-arrival motion
+correction; players remain authoritative for their own real ship. There is no
+population-wide smoothing update.
 
 Players still publish ordinary unreliable state at 15 Hz while idle. Guest
 state uses the motion channel and the host immediately rebroadcasts each
 accepted fresh record, in addition to retaining it for the canonical world
-tick. Unchanged held controls receive a reliable one-second refresh so packet
-loss cannot leave an old acceleration state behind. Player velocity in a fresh
-record is applied directly; when its ordinary `vx` and `vy` are zero, residual
-replica drift is zero as well. This is not a separate stopped state or edge.
+tick. Reliable control messages are emitted only when held input changes;
+Naev key-repeat callbacks must never force another message. Player velocity in
+a fresh record is applied directly; when its ordinary `vx` and `vy` are zero,
+residual replica drift is zero as well. This is not a separate stopped state or
+edge.
 
-Guest steering, acceleration, reverse, target/fire/weapon edges, and active
-outfit state are reliable. The host applies them to the guest's
-`p2p_remote_control` player proxy, so weapons physically interact with host
-NPCs, craft, player proxies, and persistent-object pilots. The host broadcasts
-each canonical action to every gameplay peer; guests apply it only for their
-accepted host/epoch and ignore self-owned echoes.
+Guest steering, acceleration, reverse, target/fire/weapon edges, and outfit
+activate/deactivate edges are reliable. Active-outfit inventories are never
+included in periodic state or control records. The host applies edges to the
+guest's `p2p_remote_control` player proxy, so weapons physically interact with
+host NPCs, craft, player proxies, and persistent-object pilots. The host
+broadcasts each canonical action to every gameplay peer; guests apply it only
+for their accepted host/epoch and ignore self-owned echoes.
 
 ## Host recovery
 
@@ -161,8 +167,8 @@ without a live incumbent, node ID resolves the winner.
 When a guest is elected:
 
 - every existing NPC replica becomes authoritative immediately;
-- its cached original AI is restored with `changeAI`;
-- normal AI setup runs, replica tasks are cleared, and no-death is removed;
+- its already-running manifest AI is reinitialized for authority;
+- replica tasks are cleared and no-death is removed;
 - ambient spawning remains disabled for the rest of that system visit;
 - entities receive the new authority generation and epoch;
 - other peers discard the departed host's population and rebuild it from the
@@ -227,9 +233,9 @@ count, reproduction steps, disconnect/reconnect coverage, save restrictions,
 and whether time compression remained at 1x.
 
 The minimum three-instance manual matrix covers simultaneous undock, identical
-NPC identities, guest fire through host simulation, shared target priority,
-bounded NPC return fire, player/NPC fighters, guest destruction of a message
-buoy, dock/takeoff, jump/re-entry, reconnect, host pause/loss/return, authority
-promotion, and 1x autonav enforcement. Record host and guest FPS and visible
-spikes; acceptance is based on the structural workload bounds and observed
-playability, not a fixed numeric threshold.
+NPC identities, guest NPC motion/trails/combat, guest fire through host
+simulation, shared target priority, player/NPC fighters, guest destruction of
+a message buoy, dock/takeoff, jump/re-entry, reconnect, host pause/loss/return,
+authority promotion, and 1x autonav enforcement. Record host and guest FPS and
+visible spikes; acceptance is based on the structural workload bounds and
+observed playability, not a fixed numeric threshold.

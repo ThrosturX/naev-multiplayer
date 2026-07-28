@@ -18,7 +18,6 @@ local WORLD_INTERVAL = 1/15
 local WORLD_CHANNEL = 1
 local CANONICAL_CHANNEL = 2
 local HEARTBEAT_INTERVAL = 1
-local CONTROL_REFRESH_INTERVAL = 1
 local CLAIM_INTERVAL = 5
 local LIVENESS_INTERVAL = 1
 local REDIAL_INTERVAL = 2
@@ -28,8 +27,6 @@ local HOST_ALONE_GRACE = 6
 local AGGRESSION_GRACE = 20
 local ACTIVITY_QUERY_INTERVAL = 30
 local ACTIVITY_RETENTION = 15*60
-local ACTIVE_NPC_CAP = 8
-local ACTIVE_NPC_LEASE = 2
 local AMBIENT_INSPECTION_CAP = 4
 local PARTICIPANT_VISIBILITY_CAP = 8
 -- ENet's default MTU is 1392 bytes and Naev's Lua binding does not expose
@@ -46,6 +43,7 @@ local session = {
    craft={},
    player_manifests={},
    player_states={},
+   outfit_messages={},
    present_players={},
    authority={},
    authority_by_local={},
@@ -72,8 +70,6 @@ local session = {
    interest_entities={},
    interest_order={},
    interest_seen={},
-   active_npcs={},
-   active_order={},
    activity={},
    activity_received=0,
    encode_errors={},
@@ -165,6 +161,7 @@ local function clear_local_controls ()
    cache.reverse=0
    cache.primary=0
    cache.secondary=0
+   session.input_down={}
 end
 
 local function set_ambient_spawning ( enabled )
@@ -622,17 +619,7 @@ local function entity_pilot ( entity )
    return session.objects and session.objects:pilot_for_id(entity) or nil
 end
 
-local function active_names ( p )
-   local active={}
-   for _index,entry in ipairs(p:actives()) do
-      if entry.state=="on" or entry.state==true then
-         active[#active+1]=gameplay_codec.escape(entry.outfit:nameRaw())
-      end
-   end
-   return table.concat(active,",")
-end
-
-local function state_record ( p, entity, include_controls, stamp )
+local function state_record ( p, entity, include_controls, _stamp )
    local x,y=p:pos():get()
    local vx,vy=p:vel():get()
    local armour,shield,stress=p:health()
@@ -641,7 +628,7 @@ local function state_record ( p, entity, include_controls, stamp )
       entity=entity,x=x,y=y,vx=vx,vy=vy,dir=p:dir(),
       armour=armour,shield=shield,stress=stress,energy=p:energy(),
       target=target,weapset=1,accel=0,turn=0,reverse=0,
-      primary=0,secondary=0,active="",
+      primary=0,secondary=0,
    }
    if include_controls then
       local cache=naev.cache()
@@ -652,17 +639,6 @@ local function state_record ( p, entity, include_controls, stamp )
       record.reverse=(cache.reverse and cache.reverse~=0) and 1 or 0
       record.primary=(cache.primary and cache.primary~=0) and 1 or 0
       record.secondary=(cache.secondary and cache.secondary~=0) and 1 or 0
-      stamp=stamp or now()
-      if not session.local_active
-            or stamp-(session.local_active_at or -math.huge)>=0.2 then
-         session.local_active=active_names(p)
-         session.local_active_at=stamp
-      end
-      record.active=session.local_active
-   elseif target~="-" and p:flags("combat") then
-      -- Naev does not expose native trigger state. The bounded replica firing
-      -- controller mirrors combat intent without inventing movement/targets.
-      record.primary=1
    end
    return record
 end
@@ -674,14 +650,13 @@ local function pack_state ( record )
       record.target or "-",record.weapset or 1,record.accel or 0,
       record.turn or 0,record.reverse or 0,
       record.primary or 0,record.secondary or 0,
-      gameplay_codec.escape(record.active or ""),
    },",")
 end
 
 local function unpack_state ( packed )
    local fields={}
    for value in (packed..","):gmatch("(.-),") do fields[#fields+1]=value end
-   if #fields~=18 or not fields[1]:match("^[%w_%.%-]+$") then return nil end
+   if #fields~=17 or not fields[1]:match("^[%w_%.%-]+$") then return nil end
    local record={
       entity=fields[1],
       x=tonumber(fields[2]),y=tonumber(fields[3]),
@@ -692,7 +667,6 @@ local function unpack_state ( packed )
       weapset=tonumber(fields[12]),accel=tonumber(fields[13]),
       turn=tonumber(fields[14]),reverse=tonumber(fields[15]),
       primary=tonumber(fields[16]),secondary=tonumber(fields[17]),
-      active=gameplay_codec.unescape(fields[18]),
    }
    for _index,key in ipairs({
       "x","y","vx","vy","dir","armour","shield","stress","energy",
@@ -836,19 +810,19 @@ end
 function session._unpack_npc_announcement ( packed )
    local fields={}
    for value in (packed..","):gmatch("(.-),") do fields[#fields+1]=value end
-   if #fields~=28 or fields[1]~="n" then return nil end
+   if #fields~=27 or fields[1]~="n" then return nil end
    local dynamic={}
-   for index=2,19 do dynamic[#dynamic+1]=fields[index] end
+   for index=2,18 do dynamic[#dynamic+1]=fields[index] end
    local record=unpack_state(table.concat(dynamic,","))
    if not record then return nil end
    local decoded={}
-   for index=20,28 do
+   for index=19,27 do
       decoded[index]=gameplay_codec.unescape(fields[index])
       if not decoded[index] then return nil end
    end
    local owner,origin,ship_name,name,faction_name,ai_name,
-      outfits,slots,leader=decoded[20],decoded[21],decoded[22],
-      decoded[23],decoded[24],decoded[25],decoded[26],decoded[27],decoded[28]
+      outfits,slots,leader=decoded[19],decoded[20],decoded[21],
+      decoded[22],decoded[23],decoded[24],decoded[25],decoded[26],decoded[27]
    if #owner<1 or #owner>64 or not owner:match("^[%x]+$")
          or #origin<1 or #origin>255
          or not origin:match("^[%w_%.%-]+$")
@@ -874,7 +848,6 @@ function session._unpack_npc_announcement ( packed )
       energy=record.energy,target=record.target,weapset=record.weapset,
       accel=record.accel,turn=record.turn,reverse=record.reverse,
       primary=record.primary,secondary=record.secondary,
-      active=record.active,
    }
 end
 
@@ -950,35 +923,6 @@ local function apply_health_energy ( entry, record )
    applied.energy=record.energy
 end
 
-local function apply_active_outfits ( entry, packed )
-   packed=packed or ""
-   if packed=="-" then packed="" end
-   entry.applied=entry.applied or {}
-   if entry.applied.active==packed then return end
-   local wanted={}
-   for encoded in packed:gmatch("([^,]+)") do
-      local name=gameplay_codec.unescape(encoded)
-      if name then wanted[name]=true end
-   end
-   local slots={}
-   for _index,active in ipairs(entry.pilot:actives()) do
-      slots[active.outfit:nameRaw()]=active.slot
-   end
-   entry.active=entry.active or {}
-   for name in pairs(entry.active) do
-      if not wanted[name] and slots[name] then
-         entry.pilot:outfitToggle(slots[name],false)
-      end
-   end
-   for name in pairs(wanted) do
-      if not entry.active[name] and slots[name] then
-         entry.pilot:outfitToggle(slots[name],true)
-      end
-   end
-   entry.active=wanted
-   entry.applied.active=packed
-end
-
 local function mark_player_aggression ( owner )
    local manifest=session.player_manifests[owner]
    local entity=manifest and manifest.entity
@@ -993,16 +937,20 @@ local function mark_player_aggression ( owner )
    end
 end
 
+local function apply_target ( entry, entity )
+   local target=entity_pilot(entity)
+   if entity~="-" and not target then return nil,false end
+   local current=entry.pilot:target()
+   if current and not exists(current) then current=nil end
+   if current~=target then entry.pilot:setTarget(target) end
+   entry.applied=entry.applied or {}
+   entry.applied.target=entity
+   return target,true
+end
+
 local function apply_player_controls ( entry, record )
    local p=entry.pilot
-   local target=entity_pilot(record.target)
-   entry.applied=entry.applied or {}
-   if record.target=="-" or target then
-      if entry.applied.target~=record.target then
-         p:setTarget(target)
-         entry.applied.target=record.target
-      end
-   end
+   local target=apply_target(entry,record.target)
    local memory=p:memory()
    local old_primary=memory.p2p_primary==true
    local old_secondary=memory.p2p_secondary==true
@@ -1038,104 +986,27 @@ local function apply_player_record ( record, stamp, world_sequence )
    if not reconcile_arrival(entry,record,player_limits,stamp) then return false end
    apply_player_controls(entry,record)
    apply_health_energy(entry,record)
-   apply_active_outfits(entry,record.active)
    return true
 end
 
-local function deactivate_npc ( entity )
-   local entry=session.active_npcs[entity]
-   if not entry then return end
-   session.active_npcs[entity]=nil
-   if exists(entry.pilot) then
-      entry.pilot:taskClear()
-      entry.pilot:setTarget(nil)
-      entry.pilot:changeAI("p2p_replica_passive")
-      ai_setup.setup(entry.pilot)
-   end
-   entry.active_replica=nil
-end
-
-local function npc_active_priority ( record )
-   local target=record.target
-   if target~="-" and (target==local_entity() or session.players[target]) then
-      return 1
-   end
-   if (session.interest_entities[target] or 0)>0 then return 2 end
-   local craft=session.craft[target] or session.authority[target]
-   if craft and craft.kind=="craft" then return 3 end
-end
-
-local function activate_npc ( entry, record, stamp, priority )
-   local newly_active=false
-   if not entry.active_replica then
-      entry.pilot:taskClear()
-      entry.pilot:changeAI("p2p_replica_active")
-      ai_setup.setup(entry.pilot)
-      entry.active_replica=true
-      newly_active=true
-      session.active_npcs[entry.entity]=entry
-      session.active_order[#session.active_order+1]=entry.entity
-   end
-   entry.active_until=stamp+ACTIVE_NPC_LEASE
-   entry.active_priority=priority
-   local target=entity_pilot(record.target)
-   if newly_active and (record.target=="-" or target) then
-      entry.pilot:setTarget(target)
-   end
-   local memory=entry.pilot:memory()
-   memory.p2p_primary=record.primary==1
-   memory.p2p_secondary=record.secondary==1
-   memory.p2p_weapset=record.weapset
-end
-
-local function service_active_npcs ( candidate, record, stamp )
-   local live=0
-   local compact={}
-   for _index,entity in ipairs(session.active_order) do
-      local entry=session.active_npcs[entity]
-      if entry and exists(entry.pilot) then
-         if stamp>=(entry.active_until or 0) then
-            deactivate_npc(entity)
-         else
-            live=live+1
-            compact[#compact+1]=entity
-         end
+function session._apply_outfit_toggle ( message )
+   if message.owner==session.settings.node_id then return true end
+   local entry=session.players[message.entity]
+   if not entry or not exists(entry.pilot) then return false end
+   local slot=math.floor(message.slot)
+   entry.outfit_sequences=entry.outfit_sequences or {}
+   if message.seq<=(entry.outfit_sequences[slot] or -1) then return false end
+   local valid=false
+   for _index,active in ipairs(entry.pilot:actives()) do
+      if tonumber(active.slot)==slot then
+         valid=true
+         break
       end
    end
-   session.active_order=compact
-   if not candidate then return end
-   local firing=record.primary==1 or record.secondary==1
-   local priority=firing and npc_active_priority(record) or nil
-   if not priority then
-      if candidate.active_replica then deactivate_npc(candidate.entity) end
-      return
-   end
-   if candidate.active_replica then
-      activate_npc(candidate,record,stamp,priority)
-      return
-   end
-   if live>=ACTIVE_NPC_CAP then
-      local worst=-math.huge
-      for _index,entity in ipairs(session.active_order) do
-         local active=session.active_npcs[entity]
-         if active then worst=math.max(worst,active.active_priority or 4) end
-      end
-      if worst<priority then return end
-      local victim
-      for _index,entity in ipairs(session.active_order) do
-         local active=session.active_npcs[entity]
-         if active and (active.active_priority or 4)==worst then
-            victim=entity
-            break
-         end
-      end
-      if not victim then return end
-      deactivate_npc(victim)
-      for index,entity in ipairs(session.active_order) do
-         if entity==victim then table.remove(session.active_order,index); break end
-      end
-   end
-   activate_npc(candidate,record,stamp,priority)
+   if not valid then return nil,"invalid_slot" end
+   entry.pilot:outfitToggle(slot,message.on==1)
+   entry.outfit_sequences[slot]=message.seq
+   return true
 end
 
 local function apply_entity_record ( record, stamp, world_sequence )
@@ -1148,14 +1019,7 @@ local function apply_entity_record ( record, stamp, world_sequence )
    local limits=entry.kind=="npc" and npc_limits or craft_limits
    if not reconcile_arrival(entry,record,limits,stamp) then return false end
    apply_health_energy(entry,record)
-   entry.applied=entry.applied or {}
-   local target=entity_pilot(record.target)
-   if (record.target=="-" or target)
-         and entry.applied.target~=record.target then
-      entry.pilot:setTarget(target)
-      entry.applied.target=record.target
-   end
-   if entry.kind=="npc" then service_active_npcs(entry,record,stamp) end
+   apply_target(entry,record.target)
    return true
 end
 
@@ -1180,7 +1044,6 @@ local function remove_replica ( entity, explode )
    local entry=session.players[entity] or session.npcs[entity]
       or session.craft[entity]
    if not entry then return false end
-   deactivate_npc(entity)
    if entry.local_id and session.replica_by_local[entry.local_id]==entity then
       session.replica_by_local[entry.local_id]=nil
    end
@@ -1337,7 +1200,7 @@ local function spawn_entity_manifest ( message )
       fac=owner_craft_faction(message.owner)
    end
    if not fac then return false end
-   local ai=message.kind=="npc" and "p2p_replica_passive" or "escort"
+   local ai=message.kind=="npc" and message.ai or "escort"
    local p=pilot.add(message.ship,fac,
       vec2.new(message.x or 0,message.y or 0),message.name,
       {ai=ai,naked=true})
@@ -1635,6 +1498,11 @@ local function publish_participant_manifests ()
          broadcast_manifest(cached)
       end
    end
+   for _owner,states in pairs(session.outfit_messages) do
+      for _slot,message in pairs(states) do
+         if message.on==1 then host_reliable(message) end
+      end
+   end
 end
 
 local function publish_manifest_tick ()
@@ -1811,25 +1679,20 @@ local function player_state_message ( record )
    for key,value in pairs(record) do
       if key~="entity" then message[key]=value end
    end
-   if message.active=="" then message.active="-" end
    return message
 end
 
 local function publish_local_control ( force, record )
    if not current_system() then return false end
    record=record or state_record(player.pilot(),local_entity(),true)
-   local stamp=now()
    local signature=table.concat({
       record.target,record.weapset,record.accel,
-      record.turn,record.reverse,record.primary,record.secondary,record.active,
+      record.turn,record.reverse,record.primary,record.secondary,
    },":")
-   if not force and signature==session.local_control_signature
-         and stamp-(session.last_control_publish or -math.huge)
-            <CONTROL_REFRESH_INTERVAL then
+   if not force and signature==session.local_control_signature then
       return false
    end
    session.local_control_signature=signature
-   session.last_control_publish=stamp
    session.control_sequence=(session.control_sequence or 0)+1
    local message=gameplay_base("player_control")
    message.owner=session.settings.node_id
@@ -1848,11 +1711,57 @@ local function publish_local_control ( force, record )
    message.reverse=record.reverse
    message.primary=record.primary
    message.secondary=record.secondary
-   message.active=record.active~="" and record.active or "-"
    if is_host() then
       return host_reliable(message)
    end
    return send_host(message,true)
+end
+
+function session._publish_outfit_toggle ( slot, on )
+   session.outfit_sequence=(session.outfit_sequence or 0)+1
+   local message=gameplay_base("outfit_toggle")
+   message.owner=session.settings.node_id
+   message.entity=local_entity()
+   message.seq=session.outfit_sequence
+   message.slot=slot
+   message.on=on and 1 or 0
+   if is_host() then
+      local states=session.outfit_messages[message.owner] or {}
+      states[slot]=message
+      session.outfit_messages[message.owner]=states
+      return host_reliable(message)
+   end
+   return send_host(message,true)
+end
+
+function session._publish_outfit_edges ()
+   local p=player.pilot()
+   if not exists(p) or not current_system() then return false end
+   local previous=session.local_outfit_states or {}
+   local current={}
+   local changed=false
+   for _index,active in ipairs(p:actives()) do
+      local slot=tonumber(active.slot)
+      if slot and slot>=1 and slot<=512 then
+         local on=active.active==true
+         current[slot]=on
+         if previous[slot]~=nil and previous[slot]~=on then
+            session._publish_outfit_toggle(slot,on)
+            changed=true
+         elseif previous[slot]==nil and on then
+            session._publish_outfit_toggle(slot,true)
+            changed=true
+         end
+      end
+   end
+   for slot,on in pairs(previous) do
+      if on and current[slot]==nil then
+         session._publish_outfit_toggle(slot,false)
+         changed=true
+      end
+   end
+   session.local_outfit_states=current
+   return changed
 end
 
 local function publish_owned_craft_tick ()
@@ -1906,6 +1815,7 @@ local function host_world_tick ( stamp )
    session.player_states[session.settings.node_id]=local_record
    publish_target_interest(local_record,stamp)
    publish_local_control(false,local_record)
+   session._publish_outfit_edges()
    publish_owned_craft_tick()
 
    session.world_tick=(session.world_tick or 0)+1
@@ -1977,12 +1887,13 @@ local function guest_world_tick ( stamp )
    session.player_states[session.settings.node_id]=record
    publish_target_interest(record,stamp)
    publish_local_control(false,record)
+   session._publish_outfit_edges()
    local peer=peer_for_node(session.machine.host)
    if peer then session._send_game_state(peer,player_state_message(record)) end
    publish_owned_craft_tick()
 end
 
-function session._relay_player_state ( record )
+function session._broadcast_player_state ( record )
    session.sequence=session.sequence+1
    local world=gameplay_base("world")
    world.seq=session.sequence
@@ -1990,10 +1901,10 @@ function session._relay_player_state ( record )
       players={pack_state(record)},entities={},objects={},
    },WORLD_PACKET_BUDGET)
    if not batches then
-      local signature="player_relay:"..tostring(err)
+      local signature="player_broadcast:"..tostring(err)
       if not session.encode_errors[signature] then
          session.encode_errors[signature]=true
-         print("P2P: unable to relay player state: "..tostring(err))
+         print("P2P: unable to broadcast player state: "..tostring(err))
       end
       return false
    end
@@ -2117,7 +2028,6 @@ local function apply_player_control_message ( message )
    entry.control_sequence=message.seq
    reconcile_arrival(entry,message,player_limits,now())
    apply_player_controls(entry,message)
-   apply_active_outfits(entry,message.active)
    if entry.applied.energy~=message.energy then
       entry.pilot:setEnergy(message.energy)
       entry.applied.energy=message.energy
@@ -2182,7 +2092,6 @@ end
 local function promote_guest_population ()
    local promoted={}
    for old_entity,entry in pairs(session.npcs) do
-      deactivate_npc(old_entity)
       if session.replica_by_local[entry.local_id]==old_entity then
          session.replica_by_local[entry.local_id]=nil
       end
@@ -2206,8 +2115,6 @@ local function promote_guest_population ()
       return a.id<b.id
    end)
    session.npcs={}
-   session.active_npcs={}
-   session.active_order={}
    for _index,item in ipairs(promoted) do
       item.pilot:taskClear()
       item.pilot:changeAI(item.ai)
@@ -2226,9 +2133,6 @@ local function demote_host_population ()
    for entity,entry in pairs(session.authority) do
       if entry.kind=="npc" and exists(entry.pilot) then
          remove_authority_hooks(entry)
-         entry.pilot:taskClear()
-         entry.pilot:changeAI("p2p_replica_passive")
-         ai_setup.setup(entry.pilot)
          entry.pilot:setNoDeath(true)
          demoted[#demoted+1]=entry
          session.authority[entity]=nil
@@ -2244,11 +2148,6 @@ local function demote_host_population ()
 end
 
 local function reset_delivery_state ()
-   local active={}
-   for _index,entity in ipairs(session.active_order) do active[#active+1]=entity end
-   for _index,entity in ipairs(active) do deactivate_npc(entity) end
-   session.active_npcs={}
-   session.active_order={}
    session.world_sequence_received=-1
    session.manifest_cache={}
    session.manifest_order={}
@@ -2266,7 +2165,9 @@ local function reset_delivery_state ()
    session.local_interest=nil
    session.last_interest=nil
    session.local_control_signature=nil
-   session.last_control_publish=nil
+   session.input_down={}
+   session.local_outfit_states=nil
+   session.outfit_messages={}
 end
 
 local function become_host ( failover )
@@ -2556,6 +2457,7 @@ remove_owner_population = function ( owner, explode )
    for _index,entity in ipairs(entities) do remove_replica(entity,explode) end
    session.player_manifests[owner]=nil
    session.player_states[owner]=nil
+   session.outfit_messages[owner]=nil
    clear_interest(owner)
 end
 
@@ -2715,7 +2617,7 @@ local function handle_gameplay_message ( peer, message )
             entry.state_sequence=message.seq
             session.player_states[meta.node]=message
             apply_player_record(message,now())
-            session._relay_player_state(message)
+            session._broadcast_player_state(message)
          end
       elseif message.type=="player_control" then
          if message.owner~=meta.node then return end
@@ -2724,6 +2626,18 @@ local function handle_gameplay_message ( peer, message )
             entity_absent(peer,message.target)
          elseif ok then
             host_reliable(canonical_copy(message))
+         end
+      elseif message.type=="outfit_toggle" then
+         if message.owner~=meta.node then return end
+         local ok=session._apply_outfit_toggle(message)
+         if ok then
+            local canonical=canonical_copy(message)
+            local states=session.outfit_messages[message.owner] or {}
+            states[message.slot]=canonical
+            session.outfit_messages[message.owner]=states
+            host_reliable(canonical)
+         elseif ok==false and not session.players[message.entity] then
+            entity_absent(peer,message.entity)
          end
       elseif message.type=="craft_state" then
          if message.owner~=meta.node then return end
@@ -2801,6 +2715,8 @@ local function handle_gameplay_message ( peer, message )
       handle_entity_remove(peer,meta,message)
    elseif message.type=="player_control" then
       apply_player_control_message(message)
+   elseif message.type=="outfit_toggle" then
+      session._apply_outfit_toggle(message)
    elseif message.type=="craft_order"
          and message.owner~=session.settings.node_id then
       apply_craft_order(message)
@@ -3030,6 +2946,7 @@ local function reset_runtime_tables ()
    session.craft={}
    session.player_manifests={}
    session.player_states={}
+   session.outfit_messages={}
    session.present_players={}
    session.authority={}
    session.authority_by_local={}
@@ -3060,8 +2977,6 @@ local function reset_runtime_tables ()
    session.interest_order={}
    session.interest_seen={}
    session.interest_cursor=1
-   session.active_npcs={}
-   session.active_order={}
    session.waiting_leaders={}
    session.pending_creations={}
    session.creation_safe_pending=nil
@@ -3071,10 +2986,9 @@ local function reset_runtime_tables ()
    session.world_rx_logged=nil
    session.needs_host_join=nil
    session.local_control_signature=nil
-   session.last_control_publish=nil
-   session.local_active=nil
-   session.local_active_at=nil
+   session.local_outfit_states=nil
    session.control_sequence=0
+   session.outfit_sequence=0
    session.heartbeat_sequence=0
    session.world_tick=0
    session.world_sequence_received=-1
@@ -3338,17 +3252,23 @@ function session.input ( input_name, input_pressed )
       if session.autonav_locked then session.enforce_time_controls() end
       return
    end
+   local pressed=input_pressed==true
+   local was_pressed=session.input_down[input_name]==true
    local selected=input_name:match("^weapset([0-9])$")
    if selected then
-      if input_pressed then
+      session.input_down[input_name]=pressed or nil
+      if pressed and not was_pressed then
          session.local_weapset=tonumber(selected)
          if session.local_weapset==0 then session.local_weapset=10 end
          publish_local_control(true)
+         session._publish_outfit_edges()
       end
       return
    end
-   if input_pressed and (input_name=="e_attack" or input_name=="e_hold"
-         or input_name=="e_return" or input_name=="e_clear") then
+   if input_name=="e_attack" or input_name=="e_hold"
+         or input_name=="e_return" or input_name=="e_clear" then
+      session.input_down[input_name]=pressed or nil
+      if not pressed or was_pressed then return end
       local target=target_entity(player.pilot():target())
       if input_name=="e_attack" and target=="-" then return end
       session.sequence=session.sequence+1
@@ -3372,8 +3292,10 @@ function session.input ( input_name, input_pressed )
    elseif input_name=="primary" then key="primary"
    elseif input_name=="secondary" then key="secondary"
    else return end
-   naev.cache()[key]=input_pressed and 1 or 0
-   if (key=="primary" or key=="secondary") and input_pressed then
+   session.input_down[input_name]=pressed or nil
+   if pressed==was_pressed then return end
+   naev.cache()[key]=pressed and 1 or 0
+   if (key=="primary" or key=="secondary") and pressed then
       local target=player.pilot():target()
       for _entity,entry in pairs(session.players) do
          if entry.pilot==target then
@@ -3383,6 +3305,7 @@ function session.input ( input_name, input_pressed )
       end
    end
    publish_local_control(true)
+   session._publish_outfit_edges()
 end
 
 function session.enforce_time_controls ()

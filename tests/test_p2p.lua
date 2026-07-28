@@ -68,23 +68,36 @@ test("gameplay world carries bounded object state separately", function()
    })
 end)
 
-test("gameplay control carries complete held visual state", function()
+test("gameplay control carries bounded held control state", function()
    local packet=assert(gameplay.encode{
       type="player_control",node="a1",system="X",visit="a1",
       epoch="a1:a1:1",owner="b2",entity="b2.a1.player",seq=2,
       x=1,y=2,vx=3,vy=4,dir=5,energy=90,target="-",
       weapset=1,accel=1,turn=-1,reverse=0,
-      primary=0,secondary=0,active="-",
+      primary=0,secondary=0,
    })
    local message=assert(gameplay.decode(packet))
    eq(message.turn,-1)
    eq(message.reverse,0)
-   eq(message.active,"-")
    assert(not gameplay.encode{
       type="player_control",node="a1",system="X",visit="a1",
       epoch="a1:a1:1",owner="b2",entity="b2.a1.player",seq=2,
       x=1,y=2,vx=3,vy=4,dir=5,energy=90,target="-",
-      weapset=1,accel=1,primary=0,secondary=0,active="-",
+      weapset=1,accel=1,primary=0,secondary=0,
+   })
+   local toggle=assert(gameplay.encode{
+      type="outfit_toggle",node="a1",system="X",visit="a1",
+      epoch="a1:a1:1",owner="a1",entity="a1.a1.player",
+      seq=3,slot=4,on=1,
+   })
+   local decoded=assert(gameplay.decode(toggle))
+   eq(decoded.slot,4); eq(decoded.on,1)
+   assert(not gameplay.encode{
+      type="player_control",node="a1",system="X",visit="a1",
+      epoch="a1:a1:1",owner="a1",entity="a1.a1.player",seq=4,
+      x=1,y=2,vx=3,vy=4,dir=5,energy=90,target="-",
+      weapset=1,accel=1,turn=0,reverse=0,
+      primary=0,secondary=0,active="still-on",
    })
 end)
 
@@ -181,7 +194,7 @@ test("complete NPC announcements round trip packed state", function()
       entity="a1.b2.n.1.9",x=1,y=2,vx=0,vy=0,dir=1,
       armour=100,shield=50,stress=0,energy=90,target="-",
       weapset=1,accel=0,turn=0,reverse=0,
-      primary=0,secondary=0,active="",
+      primary=0,secondary=0,
    }
    local entry={description={
       owner="a1",origin="a1.b2.npc.9",ship="Lancelot",
