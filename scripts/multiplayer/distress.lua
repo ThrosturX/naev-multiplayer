@@ -1,5 +1,7 @@
--- Sender-only transient distress relay.
-local codec = require "multiplayer.p2p.codec"
+-- Sender-only transient distress bridge. Directory discovery is MP2P/1; the
+-- temporary beacon participant speaks the one current MP2G/2 gameplay format.
+local directory_codec = require "multiplayer.p2p.codec"
+local gameplay_codec = require "multiplayer.p2p.gameplay_codec"
 local enet = require "enet"
 local fmt = require "format"
 
@@ -18,8 +20,8 @@ local function now ()
    return naev.ticks()
 end
 
-local function send_packet ( peer, message )
-   local packet = codec.encode(message)
+local function send_packet ( peer, message, wire_codec )
+   local packet = (wire_codec or directory_codec).encode(message)
    if not packet or not peer then return false end
    peer:send(packet, 0, "reliable")
    return true
@@ -75,6 +77,8 @@ local function base_message ( kind )
       type = kind,
       node = job.node,
       system = job.target.system,
+      visit = job.visit,
+      epoch = job.epoch,
    }
 end
 
@@ -93,10 +97,20 @@ end
 local function queue_beacon ( peer )
    local x, y = gate_position(job.origin, job.target.system)
 
+   local join = base_message("join")
+   job.sequence = job.sequence+1
+   join.seq = job.sequence
+
+   local entity = job.node.."."..job.visit..".player"
    local manifest = base_message("player_manifest")
-   manifest.entity = job.node
+   manifest.owner = job.node
+   manifest.entity = entity
+   manifest.origin = job.node.."."..job.visit..".player"
    manifest.ship = BEACON_SHIP
    manifest.name = BEACON_NAME
+   manifest.outfits = "-"
+   manifest.slots = "-"
+   manifest.weapsets = "1:"
    manifest.x = x
    manifest.y = y
    manifest.vx = 0
@@ -108,6 +122,7 @@ local function queue_beacon ( peer )
 
    job.sequence = job.sequence+1
    local chat = base_message("chat")
+   chat.owner = job.node
    chat.seq = job.sequence
    chat.text = fmt.f(
       _("Automated distress signal: {ship} in {system} requests assistance."),
@@ -118,10 +133,12 @@ local function queue_beacon ( peer )
    )
 
    local leave = base_message("leave")
+   leave.owner = job.node
 
-   if not send_packet(peer, manifest)
-         or not send_packet(peer, chat)
-         or not send_packet(peer, leave) then
+   if not send_packet(peer, join, gameplay_codec)
+         or not send_packet(peer, manifest, gameplay_codec)
+         or not send_packet(peer, chat, gameplay_codec)
+         or not send_packet(peer, leave, gameplay_codec) then
       return false
    end
 
@@ -142,13 +159,17 @@ local function queue_beacon ( peer )
 end
 
 local function hello ( peer )
-   return send_packet(peer, {
-      type = "hello",
-      node = job.node,
-      cap = "player",
-      name = BEACON_NAME,
-      endpoint = job.endpoint,
-   })
+   local meta=job.peers[peer]
+   if meta and meta.role=="target" then
+      return send_packet(peer,{
+         type="hello",node=job.node,name=BEACON_NAME,
+         endpoint=job.endpoint,
+      },gameplay_codec)
+   end
+   return send_packet(peer,{
+      type="hello",node=job.node,cap="player",
+      name=BEACON_NAME,endpoint=job.endpoint,
+   },directory_codec)
 end
 
 local function connect_candidate ( endpoint, expected_node )
@@ -175,7 +196,7 @@ local function parse_activity ( entries )
    for line in entries:gmatch("([^;]+)") do
       local encoded, active = line:match("^([^,]+),([01]),%d+$")
       if active == "1" then
-         local system_name = codec.unescape(encoded)
+         local system_name = directory_codec.unescape(encoded)
          if system_name and system_name ~= "" then
             active_systems[#active_systems+1] = system_name
          end
@@ -234,6 +255,9 @@ start_next_target = function ()
 
    job.phase = "connecting"
    job.sequence = 0
+   job.visit = string.format("%x",math.max(0,math.floor(now()*1000)))
+      ..string.format("%08x",rnd.rnd(0,0x7fffffff))
+   job.epoch = nil
    job.deadline = now()+TARGET_TIMEOUT
 
    if not send_packet(directory, {
@@ -294,20 +318,27 @@ local function handle_directory ( peer, message, meta )
 end
 
 local function handle_target ( peer, message, meta )
-   if message.type ~= "hello" or message.cap ~= "player" then return end
-
-   local expected = meta.expected_node or job.expected_node
-   if expected and message.node ~= expected then
-      remove_peer(peer, true)
+   if message.type=="hello" then
+      local expected=meta.expected_node or job.expected_node
+      if expected and message.node~=expected then
+         remove_peer(peer,true)
+         return
+      end
+      meta.verified=true
+      meta.node=message.node
+      job.expected_node=job.expected_node or message.node
+      send_packet(peer,{
+         type="query",node=job.node,system=job.target.system,
+         visit=job.visit,
+      },gameplay_codec)
       return
    end
-
-   meta.verified = true
-   meta.node = message.node
-   job.expected_node = job.expected_node or message.node
-
-   if job.phase == "connecting" and not queue_beacon(peer) then
-      start_next_target()
+   if not meta.verified or message.node~=meta.node then return end
+   if message.type=="claim" and message.system==job.target.system then
+      job.epoch=message.epoch
+      if job.phase=="connecting" and not queue_beacon(peer) then
+         start_next_target()
+      end
    end
 end
 
@@ -315,7 +346,9 @@ local function handle_receive ( peer, packet )
    local meta = job.peers[peer]
    if not meta then return end
 
-   local message = codec.decode(packet)
+   local wire_codec=meta.role=="directory"
+      and directory_codec or gameplay_codec
+   local message = wire_codec.decode(packet)
    if not message then return end
 
    if meta.role == "directory" then

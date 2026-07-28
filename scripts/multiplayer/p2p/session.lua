@@ -1,138 +1,134 @@
--- Isolated P2P runtime. Arena multiplayer does not depend on this module.
-local codec = require "multiplayer.p2p.codec"
+-- MP2G/2 host-star gameplay runtime. Directory discovery stays on MP2P/1 and
+-- persistent objects stay on their independent ObjectRuntime transport.
+local directory_codec = require "multiplayer.p2p.codec"
+local gameplay_codec = require "multiplayer.p2p.gameplay_codec"
 local core = require "multiplayer.p2p.core"
-local Mesh = require "multiplayer.p2p.mesh"
 local reconcile = require "multiplayer.p2p.reconcile"
-local owned = require "multiplayer.p2p.owned"
 local identity = require "multiplayer.p2p.identity"
 local status = require "multiplayer.p2p.status"
-local Object = require "multiplayer.p2p.objects"
-local ObjectClient = require "multiplayer.p2p.object_client"
+local ObjectRuntime = require "multiplayer.p2p.object_runtime"
 local enet = require "enet"
-local fmt = require "format"
 local ai_setup = require "ai.core.setup"
 
-local MAX_EVENTS_PER_FRAME = 48
+local MAX_EVENTS_PER_FRAME = 40
 local HANDSHAKE_TIMEOUT = 10
-local DIRECTORY_RESPONSE_TIMEOUT = 10
 local TRANSPORT_IDLE_TIMEOUT = 7
-local NPC_STATE_INTERVAL = 1/3
-local INVENTORY_INTERVAL = 1
-local NPC_ROUND_ROBIN_PER_TICK = 4
-local NPC_TARGETS_PER_TICK = 4
-local NPC_INTERESTS_PER_TICK = 8
-local NPC_FOCUS_INTERVAL = 1/10
-local NPC_TARGET_INTEREST_REFRESH = 2
-local NPC_TARGET_INTEREST_LEASE = 5
-local NPC_SNAPSHOT_BATCH_INTERVAL = 0.1
-local NPC_SNAPSHOT_RECORDS_PER_BATCH = 8
-local NPC_SNAPSHOT_PRUNE_PER_FRAME = 8
-local ENTITY_REMOVALS_PER_FRAME = 8
+local DIRECTORY_RESPONSE_TIMEOUT = 10
+local WORLD_INTERVAL = 1/15
+local WORLD_CHANNEL = 1
+local CANONICAL_CHANNEL = 2
+local HEARTBEAT_INTERVAL = 1
+local CONTROL_REFRESH_INTERVAL = 1
+local CLAIM_INTERVAL = 5
+local LIVENESS_INTERVAL = 1
+local REDIAL_INTERVAL = 2
+local MANIFEST_INTERVAL = 0.1
+local MANIFEST_QUERY_COOLDOWN = 1
+local HOST_ALONE_GRACE = 6
+local AGGRESSION_GRACE = 20
 local ACTIVITY_QUERY_INTERVAL = 30
 local ACTIVITY_RETENTION = 15*60
-local HOST_ALONE_GRACE = 6 -- make "solo p2p" less punishing at gates by keeping this value low
-local AGGRESSION_GRACE = 20
--- The outer codec percent-escapes this packed field again. Keeping the raw
--- payload well below MAX_PACKET leaves room for worst-case expansion.
-local NPC_MANIFEST_BATCH_PAYLOAD = 4000
-local NPC_SNAPSHOT_TIMEOUT = 30
-local OBJECT_REQUEST_TIMEOUT = 10
-local OBJECT_QUERY_TIMEOUT = 4
-local OBJECT_RECONCILE_TIMEOUT = 30
-local OBJECT_SUBSCRIPTION_REFRESH = 30
-local BUOY_BROADCAST_INTERVAL = 30
-local VECTOR_METATABLE = getmetatable(vec2.new())
+local ACTIVE_NPC_CAP = 8
+local ACTIVE_NPC_LEASE = 2
+local AMBIENT_INSPECTION_CAP = 4
+local PARTICIPANT_VISIBILITY_CAP = 8
+-- ENet's default MTU is 1392 bytes and Naev's Lua binding does not expose
+-- unreliable fragmentation. Leave room for protocol and path overhead.
+local WORLD_PACKET_BUDGET = 1200
 
 local session = {
-   running=false, peers={}, endpoints={}, players={}, npcs={}, craft={}, departures={},
-   peer_meta={}, sequence=0, last_player=0, last_npc=0, last_npc_focus=0,
-   last_craft=0,
-   last_claim=0, last_claim_check=0, last_liveness=0,
-   host_inventory={}, owned_inventory={},
-   inventory_snapshot=nil, last_inventory=-math.huge,
-   npc_round_robin={}, npc_round_robin_at=1,
-   npc_target_interests={}, local_npc_interest_seq=0,
-   npc_target_interest_order={}, npc_target_interest_cursor=1,
-   npc_target_interest_enqueued={},
-   local_npc_interest_target=nil, last_npc_interest=-math.huge,
-   craft_factions={}, host_welcomed={}, pending_leader_owners={}, resync_sent={},
-   ownership_cache={}, initial_sync_until=0, pending_npc_manifests={},
-   pending_npc_manifest_order={}, pending_npc_manifest_cursor=1,
-   pending_npc_manifest_enqueued={},
-   last_npc_manifest_batch=-math.huge,
-   host_npc_controls={}, pending_npc_controls={},
-   pending_npc_control_entities={},
-   npc_lifecycle_sequences={}, craft_lifecycle_sequences={},
-   pending_fighter_bays={},
-   pending_entity_removals={},
-   host_npc_population=0,
-   guest_npc_population=nil, npc_population_events={},
-   replica_entity_ids={},
-   npc_replica_order={}, npc_replica_enqueued={},
-   local_objects={}, local_object_pilots={}, pending_object_requests={},
-   pending_object_deletes={}, object_request=0,
-   known_objects_by_system={},
-   object_subscription_system=nil, object_confirmed_system=nil,
-   object_confirmed_at=-math.huge,
-   object_client=nil,
-   activity={}, activity_received=0, last_activity_query=0,
+   running=false,
+   peers={},
+   endpoints={},
+   peer_meta={},
+   players={},
+   npcs={},
+   craft={},
+   player_manifests={},
+   player_states={},
+   present_players={},
+   authority={},
+   authority_by_local={},
+   origins={},
+   replica_by_local={},
+   generation=0,
+   sequence=0,
+   manifest_cache={},
+   manifest_order={},
+   manifest_cursor=1,
+   manifest_queries={},
+   pending_states={},
+   pending_state_count=0,
+   npc_announcement_queue={},
+   npc_announcement_seen={},
+   npc_order={},
+   npc_cursor=1,
+   craft_order={},
+   craft_cursor=1,
+   priority_queues={{},{},{}},
+   priority_seen={{},{},{}},
+   priority_cursor={1,1,1},
+   target_interests={},
+   interest_entities={},
+   interest_order={},
+   interest_seen={},
+   active_npcs={},
+   active_order={},
+   activity={},
+   activity_received=0,
+   encode_errors={},
+   last_activity_query=0,
    directory_probe_deadline=nil,
    indicators=status.new(function () return player.pilot() end),
-   player_features="mesh_control_v1,relay_links_v1",
-   player_peers={}, direct_links={}, direct_link_signatures={},
-   relay_targets={}, relay_topology_dirty=true,
 }
 
--- Networking, liveness, and publication rates are wall-clock concerns. Using
--- ticksGame here makes autonav time compression multiply connection retries
--- and state collection in real time.
-local function now () return naev.ticks() end
-
-local function trace ( event, fields )
-   local cache=naev.cache()
-   if cache.multiplayer_p2p_trace~=true then return end
-   local log=cache.multiplayer_p2p_trace_log
-   if type(log)~="table" then log={}; cache.multiplayer_p2p_trace_log=log end
-   local entry={at=now(),event=event}
-   for key,value in pairs(fields or {}) do
-      if type(value)=="string" or type(value)=="number"
-            or type(value)=="boolean" then entry[key]=value end
-   end
-   log[#log+1]=entry
-   while #log>256 do table.remove(log,1) end
+local function now ()
+   return naev.ticks()
 end
 
-local function locally_claimed ()
-   return not naev.claimTest(system.cur())
+local function exists ( p )
+   return p~=nil and p:exists()
+end
+
+local function local_player_name ()
+   local p=player.pilot()
+   local name=exists(p) and p:name() or nil
+   if type(name)=="string" and name~="" then return name end
+   return player.name()
+end
+
+local function display_text ( text )
+   return tostring(text):gsub("#","＃")
 end
 
 local function random_id ()
    local parts={}
-   for _i=1,4 do parts[#parts+1]=string.format("%08x",rnd.rnd(0,0x7fffffff)) end
+   for _index=1,4 do
+      parts[#parts+1]=string.format("%08x",rnd.rnd(0,0x7fffffff))
+   end
    return table.concat(parts)
 end
 
--- Naev's text input does not reliably accept a literal colon. Configuration
--- therefore accepts both "address port" (the UI form) and "address:port"
--- (the ENet/wire form), but stores and uses only the canonical latter form.
 local function normalize_endpoint ( endpoint )
-   if type(endpoint) ~= "string" then return nil end
+   if type(endpoint)~="string" then return nil end
    endpoint=endpoint:match("^%s*(.-)%s*$")
    if endpoint=="" then return "" end
    local host,port=endpoint:match("^([^%s:]+)%s*:%s*(%d+)$")
    if not host then host,port=endpoint:match("^(%S+)%s+(%d+)$") end
    port=tonumber(port)
    if not host or not port or port<1 or port>65535 then return nil end
-   return host .. ":" .. tostring(math.floor(port))
+   return host..":"..tostring(math.floor(port))
 end
 
-session.normalize_endpoint = normalize_endpoint
+session.normalize_endpoint=normalize_endpoint
 
 function session.defaults ( settings )
    settings=settings or {}
-   settings.enabled=settings.enabled == true
-   settings.listen_port=math.max(0,math.min(65535,tonumber(settings.listen_port) or 0))
-   local directory=settings.directory == nil and "79.76.110.205:60939" or settings.directory
+   settings.enabled=settings.enabled==true
+   settings.listen_port=math.max(0,
+      math.min(65535,tonumber(settings.listen_port) or 0))
+   local directory=settings.directory==nil
+      and "79.76.110.205:60939" or settings.directory
    settings.directory=normalize_endpoint(directory) or ""
    local bootstrap={}
    for _index,endpoint in ipairs(settings.bootstrap or {}) do
@@ -145,82 +141,30 @@ function session.defaults ( settings )
    return settings
 end
 
-function session.get_settings () return session.settings end
-
-local function exists ( p )
-   return p~=nil and p:exists()
+function session.get_settings ()
+   return session.settings
 end
 
-local function remove_pilot ( p )
-   if exists(p) then p:rm() end
+local function current_system ()
+   return session.machine and session.machine.system or nil
 end
 
-local function remove_npc_replica ( entity, explode )
-   local entry=session.npcs[entity]
-   if not entry then return false end
-   if exists(entry.pilot) then
-      if explode then entry.pilot:explode()
-      else entry.pilot:rm() end
-   end
-   if entry.local_id
-         and session.replica_entity_ids[entry.local_id]==entity then
-      session.replica_entity_ids[entry.local_id]=nil
-   end
-   session.npcs[entity]=nil
-   session.pending_npc_controls[entity]=nil
-   session.pending_npc_control_entities[entity]=nil
-   return true
+local function is_host ()
+   return session.machine and session.machine.state=="host"
 end
 
-function session.pilot_departed ( p, reason )
-   if not session.running or not p or p==player.pilot() then return end
-   local local_id=tostring(p:id())
-   if session.replica_entity_ids[local_id]
-         or session.local_object_pilots[local_id] then return end
-   local ambient=session.inventory_snapshot and session.inventory_snapshot.ambient
-   local craft=session.inventory_snapshot and session.inventory_snapshot.craft
-   local entity=session.authoritative_entities
-      and session.authoritative_entities[local_id]
-      or session.settings.node_id..":"..local_id
-   local kind
-   if (ambient and ambient[entity]==p) or session.host_inventory[entity]==p then
-      kind="npc"
-      if ambient then ambient[entity]=nil end
-      session.host_inventory[entity]=nil
-      session.host_npc_controls[entity]=nil
-      session.authoritative_pilots[entity]=nil
-      for _recipient,pending in pairs(session.pending_npc_manifests) do
-         if pending.records then pending.records[entity]=nil end
-         if pending.current and pending.current.id==entity then
-            pending.current=nil
-         end
-      end
-   else
-      local craft_entity=session.settings.node_id..":"..local_id
-      if (craft and craft[craft_entity]==p)
-            or session.owned_inventory[craft_entity]==p then
-         entity=craft_entity
-         kind="craft"
-         if craft then craft[entity]=nil end
-         session.owned_inventory[entity]=nil
-      end
-   end
-   if not kind then return end
-   if session.inventory_snapshot and session.inventory_snapshot.target_entities then
-      session.inventory_snapshot.target_entities[local_id]=nil
-   end
-   session.authoritative_entities[local_id]=nil
-   session.ownership_cache[local_id]=nil
-   session.pending_fighter_bays[entity]=nil
-   local removal_reason=reason
-   if removal_reason~="death" and removal_reason~="exploded"
-         and removal_reason~="jump" and removal_reason~="land" then
-      removal_reason="removed"
-   end
-   session.pending_entity_removals[entity]={
-      kind=kind,
-      reason=removal_reason,
-   }
+local function local_entity ()
+   return session.settings.node_id.."."..tostring(session.visit or "0")..".player"
+end
+
+local function clear_local_controls ()
+   local cache=naev.cache()
+   cache.accel=0
+   cache.left=0
+   cache.right=0
+   cache.reverse=0
+   cache.primary=0
+   cache.secondary=0
 end
 
 local function set_ambient_spawning ( enabled )
@@ -232,77 +176,54 @@ end
 
 local function lock_autonav ( locked )
    if locked then
-      if session.autonav_locked then return end
-      session.autonav_locked=true
+      if not session.autonav_locked then session.autonav_locked=true end
       naev.keyEnable("speed",false)
-      player.autonavSetSpeed(1)
-      session.locked_dt_mod=player.dt_mod()
+      session.enforce_time_controls()
    else
       if not session.autonav_locked then return end
       session.autonav_locked=nil
-      session.locked_dt_mod=nil
       naev.keyEnable("speed",true)
       player.autonavSetSpeed()
+      player.setSpeed()
    end
 end
 
-local function no_other_players_discovered ( current_system )
-   if session.machine then
-      for node in pairs(session.machine.members) do
-         if node~=session.settings.node_id then return false end
-      end
+local function has_remote_member ()
+   if not session.machine then return false end
+   for node in pairs(session.machine.members) do
+      if node~=session.settings.node_id then return true end
    end
-   for peer,meta in pairs(session.peer_meta) do
-      if meta.verified and meta.cap=="player" then return false end
+   return false
+end
+
+local function no_other_players_discovered ( current )
+   if has_remote_member() then return false end
+   for _peer,meta in pairs(session.peer_meta) do
+      if meta.verified and meta.protocol=="gameplay" then return false end
    end
    for _index,entry in ipairs(session.activity or {}) do
-      local self_generation=session.self_activity[entry.system]
-      local stale_self=self_generation
-         and self_generation>=session.activity_generation
-      if entry.active and entry.system~=current_system and not stale_self then
-         return false
-      end
+      if entry.active and entry.system~=current then return false end
    end
    return true
 end
 
 local function refresh_time_controls ( stamp )
-   if not session.machine or not session.machine.system then
-      session.solo_since=nil
-      session.realtime_clock_pinned=nil
-      session.indicators:clear_host_alone()
-      lock_autonav(false)
-      return
-   end
-   if session.machine.state=="discovering" and session.skip_host_grace
-         and not session.realtime_clock_pinned then
+   if not current_system() then
       session.solo_since=nil
       session.indicators:clear_host_alone()
       lock_autonav(false)
       return
    end
-   local remote_session=session.machine.state=="guest"
+   local unresolved=session.machine.state=="discovering"
       or session.machine.state=="recovering"
-   local solo=session.machine.state=="host"
-   if session.machine.state=="host" then
-      for node in pairs(session.machine.members) do
-         if node~=session.settings.node_id then
-            solo=false
-            remote_session=true
-            break
-         end
-      end
-   end
-   if remote_session then session.realtime_clock_pinned=true end
-   if session.realtime_clock_pinned then
-      session.skip_host_grace=nil
+   local remote=has_remote_member() or session.machine.state=="guest"
+   if unresolved or remote then
       session.solo_since=nil
       session.indicators:clear_host_alone()
       lock_autonav(true)
       return
    end
-   if not solo then
-      session.skip_host_grace=nil
+   if not is_host() then
       session.solo_since=nil
       session.indicators:clear_host_alone()
       lock_autonav(true)
@@ -310,7 +231,6 @@ local function refresh_time_controls ( stamp )
    end
    stamp=stamp or now()
    if session.skip_host_grace then
-      session.solo_since=nil
       session.indicators:clear_host_alone()
       lock_autonav(false)
       return
@@ -319,21 +239,6 @@ local function refresh_time_controls ( stamp )
    local deadline=session.solo_since+HOST_ALONE_GRACE
    session.indicators:host_alone(deadline,stamp)
    lock_autonav(stamp<deadline)
-end
-
-local function refresh_discovered_time_controls ( stamp )
-   if not session.skip_host_grace or not session.machine
-         or not session.machine.system
-         or no_other_players_discovered(session.machine.system) then return end
-   session.skip_host_grace=nil
-   refresh_time_controls(stamp)
-end
-
-local function clear_local_controls ()
-   local cache=naev.cache()
-   cache.accel=0
-   cache.primary=0
-   cache.secondary=0
 end
 
 local function endpoint_valid ( endpoint )
@@ -349,385 +254,206 @@ local function endpoint_is_local_listener ( endpoint )
    return host=="localhost" or host=="127.0.0.1" or host=="0.0.0.0"
 end
 
--- Directory and bootstrap addresses use the same connection path. The remote
--- hello declares whether it is a player or a directory-only node.
-local function connect ( endpoint, expected_node )
-   if not endpoint_valid(endpoint) or endpoint_is_local_listener(endpoint)
-         or session.endpoints[endpoint] then return end
-   local peer=session.host:connect(endpoint)
-   if peer then
-      session.endpoints[endpoint]=peer
-      session.peers[peer]=endpoint
-      session.peer_meta[peer]={verified=false,expected_node=expected_node,
-         outbound=true,connected_at=now()}
-      return true
-   end
-end
-
-local function connect_configured ()
-   if endpoint_valid(session.settings.directory) and session.settings.directory~="" then
-      connect(session.settings.directory)
-   end
-   for _index,endpoint in ipairs(session.settings.bootstrap) do connect(endpoint) end
-end
-
-local function connect_known_peers ()
-   connect_configured()
-   for _index,entry in ipairs(session.settings.recent) do
-      connect(entry.endpoint)
-   end
-end
-
-local function send ( peer, message, reliable )
-   local packet=codec.encode(message)
-   if not packet or not peer then return nil end
-   peer:send(packet,0,reliable and "reliable" or "unsequenced")
-   return true
-end
-
-local has_feature
-local function broadcast_raw ( message, reliable, except, except_node )
-   local packet
-   for peer,meta in pairs(session.peer_meta) do
-      if peer~=except and meta.node~=except_node and meta.verified
-            and (meta.cap=="player"
-               or (meta.cap=="directory"
-                  and message.node==session.settings.node_id
-                  and (message.type=="claim" or message.type=="leave"))) then
-         local new_only=message.type=="player_control" or message.type=="npc_interest"
-            or message.type=="member_heartbeat" or message.type=="host_query"
-         if not new_only or has_feature(meta,"mesh_control_v1") then
-            if packet==nil then
-               packet=codec.encode(message)
-               if not packet then return false end
-            end
-            peer:send(packet,0,reliable and "reliable" or "unsequenced")
-         end
-      end
-   end
-   return packet~=nil
-end
-
-local function broadcast ( message, reliable, except )
-   if session.mesh and session.visit and Mesh.routed_type(message.type)
-         and not message.via then
-      session.mesh:origin(message,session.visit)
-   end
-   broadcast_raw(message,reliable,except)
-end
-
-local function relay_once ( message, except, reliable )
-   local forwarded=session.mesh and session.mesh:forward(message)
-   if forwarded then
-      trace("relay",{type=message.type,node=message.node,
-         route_seq=message.route_seq,hops=forwarded.hops})
-      -- Every participant has a direct transport to the current authority.
-      -- Relaying another guest's packet back to that authority is therefore
-      -- a duplicate while the origin still reports that direct path. If the
-      -- origin stops reporting it, the ordinary mesh relay resumes.
-      local except_node
-      local origin_links=session.direct_links[message.node]
-      if session.machine and session.machine.state~="host"
-            and message.node~=session.machine.host and origin_links
-            and origin_links[session.machine.host] then
-         except_node=session.machine.host
-      end
-      broadcast_raw(forwarded,reliable,except,except_node)
-   end
-end
-
-local function connected_node ( node, except, verified_only )
-   for peer,meta in pairs(session.peer_meta) do
-      if peer~=except and (not verified_only or meta.verified)
-            and (meta.node==node or meta.expected_node==node) then return true end
-   end
-   return false
-end
-
-has_feature = function ( meta, feature )
-   return meta and type(meta.features)=="string"
-      and (","..meta.features..","):find(","..feature..",",1,true)~=nil
-end
-
-function session.local_direct_links ()
-   local links={}
-   local stamp=now()
-   if session.machine then
-      for _peer,meta in pairs(session.peer_meta) do
-         if meta.verified and meta.cap=="player" and meta.node
-               and meta.node~=session.settings.node_id
-               and session.machine.members[meta.node]
-               and stamp-(meta.last_receive or -math.huge)<=2 then
-            links[#links+1]=meta.node
-         end
-      end
-   end
-   table.sort(links)
-   return #links>0 and table.concat(links,",") or "-"
-end
-
-function session.parse_direct_links ( packed )
-   local links={}
-   if packed and packed~="-" then
-      for node in packed:gmatch("([^,]+)") do links[node]=true end
-   end
-   return links
-end
-
-function session.rebuild_relay_targets ()
-   local targets={}
-   if session.machine and session.machine.state=="host" then
-      for origin in pairs(session.machine.members) do
-         if origin~=session.settings.node_id then
-            local missing={}
-            local origin_links=session.direct_links[origin] or {}
-            for recipient in pairs(session.machine.members) do
-               if recipient~=session.settings.node_id and recipient~=origin
-                     and session.player_peers[recipient] then
-                  local recipient_links=session.direct_links[recipient] or {}
-                  -- Require both ends to report the path. Until then, retain
-                  -- the authority relay so stale one-sided UDP state cannot
-                  -- silently drop another participant's updates.
-                  if not origin_links[recipient]
-                        or not recipient_links[origin] then
-                     missing[#missing+1]=recipient
-                  end
-               end
-            end
-            targets[origin]=missing
-         end
-      end
-   end
-   session.relay_targets=targets
-   session.relay_topology_dirty=nil
-end
-
-function session.relay_missing_player_paths ( message, except, reliable )
-   if session.relay_topology_dirty then session.rebuild_relay_targets() end
-   local recipients=session.relay_targets[message.node]
-   if not recipients then return false end
-   local packet
-   for _index,node in ipairs(recipients) do
-      local peer=session.player_peers[node]
-      local meta=peer and session.peer_meta[peer]
-      if peer and peer~=except and meta and meta.verified
-            and meta.cap=="player" then
-         if packet==nil then
-            packet=codec.encode(message)
-            if not packet then return false end
-         end
-         peer:send(packet,0,reliable and "reliable" or "unsequenced")
-      end
-   end
-   return packet~=nil
-end
-
-local function has_remote_member ()
-   if not session.machine then return false end
-   for node in pairs(session.machine.members) do
-      if node~=session.settings.node_id then return true end
-   end
-   return false
-end
-
-function session.keep_simulation_live ()
-   if not session.running or not session.machine or not session.machine.system
-         or player.isLanded() or not has_remote_member() then return false end
-   naev.unpause()
-   session.enforce_time_controls()
-   return true
-end
-
-local function base ( kind )
-   return {type=kind,node=session.settings.node_id,system=session.machine.system,
-      visit=session.visit}
-end
-
-local function query_rendezvous ()
-   if not session.machine or not session.machine.system then return end
-   for peer,meta in pairs(session.peer_meta) do
-      if meta.verified and meta.cap=="directory" then
-         send(peer,base("query"),true)
-      end
-   end
-end
-
-local function local_player_name ()
-   local p=player.pilot()
-   local name=p and p:exists() and p:name() or nil
-   if type(name)=="string" and name~="" then return name end
-   return player.name()
-end
-
-local function display_text ( text )
-   return tostring(text):gsub("#","＃")
-end
-
-local chat_sound
-local function play_chat_sound ()
-   if not chat_sound then chat_sound=audio.new("snd/sounds/hail.opus") end
-   chat_sound:play()
-end
-
-local disconnect_sound
-local function play_disconnect_sound ()
-   if not disconnect_sound then disconnect_sound=audio.new("snd/sounds/sokoban/invalid") end
-   disconnect_sound:play()
-end
-
-local function nearby_transition ( pos, pilot_radius, pilot_faction )
-   if not pos then return end
-   local px,py=pos:get()
-
-   local best_kind,best_target,best_distance
-   local function consider ( kind, target )
-      local target_pos=target:pos()
-      if not target_pos then return end
-      local tx,ty=target_pos:get()
-      local dx,dy=tx-px,ty-py
-      local distance=dx*dx+dy*dy
-      local radius=target:radius()
-      if type(radius)~="number" or radius<0 then radius=0 end
-      if type(pilot_radius)~="number" or pilot_radius<0 then pilot_radius=0 end
-      -- The last 15 Hz state can trail the real ship slightly. Use the target
-      -- radius plus the pilot radius and a small packet/smoothing allowance,
-      -- but never infer a transition from elsewhere in the system.
-      local transition_range=radius+pilot_radius+300
-      if distance > transition_range*transition_range then return end
-      if not best_distance or distance < best_distance then
-         best_kind,best_target,best_distance=kind,target,distance
-      end
-   end
-
-   local current=system.cur()
-   if not current then return end
-   for _index,spob in ipairs(current:spobs()) do
-      local usable=false
-      local services=spob:services()
-      if services and services.land then
-         usable=true
-         if pilot_faction then
-            local spob_faction=spob:faction()
-            if spob_faction and pilot_faction:areEnemies(spob_faction) then
-               usable=false
-            end
-         end
-      end
-      if usable then consider("land",spob) end
-   end
-   for _index,jump in ipairs(current:jumps(true)) do consider("jump",jump) end
-   return best_kind,best_target
-end
-
-local function departure_candidate ( p )
-   return nearby_transition(p:pos(),p:radius(),p:faction())
-end
-
-local function clear_departure_controls ( p )
-   p:taskClear()
-   local memory=p:memory()
-   memory.p2p_accel=0
-   memory.p2p_primary=false
-   memory.p2p_secondary=false
-end
-
-local function disable_departure ( p )
-   clear_departure_controls(p)
-   p:setDisable()
-   return "disabled"
-end
-
-local function begin_departure ( p )
-   local kind,target=departure_candidate(p)
-   if not kind then return disable_departure(p) end
-   clear_departure_controls(p)
-   if kind=="land" then p:pushtask("land",target)
-   else p:pushtask("hyperspace",target) end
-   return kind
-end
-
-local function clear_departure ( node, rejoining )
-   local old=session.departures[node]
-   if not old then return end
-   session.departures[node]=nil
-   if not exists(old.pilot) then return end
-   if rejoining and old.mode=="disabled" then
-      old.pilot:setNoDeath(false)
-      old.pilot:explode()
-      return
-   end
-   remove_pilot(old.pilot)
-end
-
-local function remove_remote_player ( node )
-   local departed=session.players[node]
-   if not departed then return false end
-   local p=departed.pilot
-   session.players[node]=nil
-   session.host_welcomed[node]=nil
-   if not exists(p) then return false end
-   -- Broadcast while the proxy still has its participant name so the comm
-   -- bubble is anchored to the ship that actually disconnected.
-   p:broadcast("Signal lost.",true)
-   play_disconnect_sound()
-   p:rename(p:name().." (disconnected "..node:sub(1,6)..")")
-   p:setNoDeath(false)
-   session.departures[node]={pilot=p,node=node,local_id=tostring(p:id()),mode=begin_departure(p)}
-   return true
-end
-
-local function hello ( peer )
-   send(peer,{type="hello",node=session.settings.node_id,cap="player",name=local_player_name(),
-      endpoint=session.endpoint,features=session.player_features},true)
-   if session.machine.system then send(peer,base("query"),true) end
-end
-
 local function reject_peer ( peer, reason, quiet )
    local endpoint=session.peers[peer]
    local meta=session.peer_meta[peer]
-   if meta and meta.node and session.player_peers[meta.node]==peer then
-      session.player_peers[meta.node]=nil
-      session.relay_topology_dirty=true
+   if meta and meta.protocol=="gameplay" and session.machine
+         and session.machine.state=="guest"
+         and meta.node==session.machine.host then
+      session.needs_host_join=true
    end
-   if not quiet then print("P2P: rejected peer: " .. tostring(reason)) end
+   if not quiet then print("P2P: rejected peer: "..tostring(reason)) end
    peer:disconnect_now()
-   session.peers[peer]=nil; session.peer_meta[peer]=nil
+   session.peers[peer]=nil
+   session.peer_meta[peer]=nil
    if endpoint then session.endpoints[endpoint]=nil end
 end
 
-local function disconnect_player_transports ()
-   local stale={}
-   for peer,meta in pairs(session.peer_meta) do
-      if meta.cap=="player" then stale[#stale+1]=peer end
-   end
-   for _index,peer in ipairs(stale) do
-      reject_peer(peer,"system lifecycle reset",true)
+local function encode_packet ( codec, message )
+   local packet,err=codec.encode(message)
+   if packet then return packet end
+   local signature=table.concat({
+      tostring(codec.VERSION),tostring(message and message.type),tostring(err),
+   },":")
+   if not session.encode_errors[signature] then
+      session.encode_errors[signature]=true
+      print("P2P: unable to encode "..tostring(codec.VERSION).." "
+         ..tostring(message and message.type)..": "..tostring(err))
    end
 end
 
-local function disconnect_node_transports ( node )
-   local stale={}
+local function send_packet ( peer, codec, message, reliable )
+   if not peer then return false end
+   local packet=encode_packet(codec,message)
+   if not packet then return false end
+   local result=peer:send(packet,0,reliable and "reliable" or "unreliable")
+   return result and result>=0 or false
+end
+
+local function send_game ( peer, message, reliable )
+   return send_packet(peer,gameplay_codec,message,reliable)
+end
+
+function session._send_game_state ( peer, message )
+   if not peer then return false end
+   local packet=encode_packet(gameplay_codec,message)
+   if not packet then return false end
+   local result=peer:send(packet,WORLD_CHANNEL,"unreliable")
+   return result and result>=0 or false
+end
+
+local function send_directory ( peer, message )
+   return send_packet(peer,directory_codec,message,true)
+end
+
+local function connect_endpoint ( endpoint, protocol, expected_node )
+   if not endpoint_valid(endpoint) or endpoint_is_local_listener(endpoint)
+         or session.endpoints[endpoint] then return false end
+   local peer=session.host:connect(
+      endpoint,protocol=="gameplay" and CANONICAL_CHANNEL+1 or 1)
+   if not peer then return false end
+   session.endpoints[endpoint]=peer
+   session.peers[peer]=endpoint
+   session.peer_meta[peer]={
+      protocol=protocol,
+      expected_node=expected_node,
+      outbound=true,
+      verified=false,
+      connected_at=now(),
+   }
+   return true
+end
+
+local function connect_directory ()
+   if session.settings.directory~="" then
+      connect_endpoint(session.settings.directory,"directory")
+   end
+end
+
+local function connect_gameplay ( endpoint, expected_node )
+   return connect_endpoint(endpoint,"gameplay",expected_node)
+end
+
+local function connect_known_peers ()
+   connect_directory()
+   for _index,endpoint in ipairs(session.settings.bootstrap) do
+      connect_gameplay(endpoint)
+   end
+   for _index,entry in ipairs(session.settings.recent) do
+      connect_gameplay(entry.endpoint)
+   end
+end
+
+local function peer_for_node ( node )
    for peer,meta in pairs(session.peer_meta) do
-      if meta.cap=="player"
+      if meta.protocol=="gameplay" and meta.verified
+            and meta.node==node then return peer end
+   end
+end
+
+local function connected_node ( node )
+   for _peer,meta in pairs(session.peer_meta) do
+      if meta.protocol=="gameplay"
             and (meta.node==node or meta.expected_node==node) then
-         stale[#stale+1]=peer
+         return true
       end
    end
-   for _index,peer in ipairs(stale) do
-      reject_peer(peer,"player liveness timeout",true)
+   return false
+end
+
+local function broadcast_gameplay ( message, reliable )
+   local packet=encode_packet(gameplay_codec,message)
+   if not packet then return false end
+   session.host:broadcast(
+      packet,CANONICAL_CHANNEL,reliable and "reliable" or "unreliable")
+   return true
+end
+
+local function broadcast_world_packet ( packet )
+   -- Gameplay peers negotiate channel 1 while the directory has only channel
+   -- 0. ENet reuses one packet across all gameplay peers without leaking
+   -- MP2G/2 traffic onto the directory connection. Receivers enforce the
+   -- accepted host and authority epoch.
+   session.host:broadcast(packet,WORLD_CHANNEL,"unreliable")
+   return true
+end
+
+local function fanout_control ( message, except )
+   local packet=encode_packet(gameplay_codec,message)
+   if not packet then return false end
+   local sent=false
+   for peer,meta in pairs(session.peer_meta) do
+      if peer~=except and meta.protocol=="gameplay" and meta.verified then
+         local result=peer:send(packet,0,"reliable")
+         if result and result>=0 then sent=true end
+      end
+   end
+   return sent
+end
+
+local function send_host ( message, reliable )
+   if not session.machine or session.machine.state~="guest"
+         or not session.machine.host then return false end
+   local peer=peer_for_node(session.machine.host)
+   if not peer then
+      local endpoint=session.member_endpoints
+         and session.member_endpoints[session.machine.host]
+      if endpoint then connect_gameplay(endpoint,session.machine.host) end
+      return false
+   end
+   return send_game(peer,message,reliable)
+end
+
+local function gameplay_base ( kind )
+   return {
+      type=kind,
+      node=session.settings.node_id,
+      system=current_system(),
+      visit=session.visit,
+      epoch=session.machine and session.machine.claim or "-",
+   }
+end
+
+local function directory_query ()
+   if not current_system() then return end
+   for peer,meta in pairs(session.peer_meta) do
+      if meta.protocol=="directory" and meta.verified then
+         send_directory(peer,{
+            type="query",node=session.settings.node_id,
+            system=current_system(),
+         })
+      end
    end
 end
 
-local function claim_message ()
-   local msg=base("claim")
-   msg.claim=session.machine.claim
-   msg.endpoint=session.endpoint
-   return msg
+local function publish_directory_claim ()
+   if not is_host() then return end
+   for peer,meta in pairs(session.peer_meta) do
+      if meta.protocol=="directory" and meta.verified then
+         send_directory(peer,{
+            type="claim",node=session.settings.node_id,
+            system=current_system(),claim=session.machine.claim,
+            endpoint=session.endpoint,
+         })
+      end
+   end
+end
+
+local function publish_directory_leave ( system_name )
+   for peer,meta in pairs(session.peer_meta) do
+      if meta.protocol=="directory" and meta.verified then
+         send_directory(peer,{
+            type="leave",node=session.settings.node_id,system=system_name,
+         })
+      end
+   end
 end
 
 local function outfit_names ( p )
    local names={}
-   for _index,o in ipairs(p:outfitsList()) do names[#names+1]=codec.escape(o:nameRaw()) end
+   for _index,o in ipairs(p:outfitsList()) do
+      names[#names+1]=gameplay_codec.escape(o:nameRaw())
+   end
    return table.concat(names,",")
 end
 
@@ -737,11 +463,12 @@ local function outfit_slots ( p )
       if type(index)=="number" and o then
          slots[#slots+1]={
             index=index,
-            value=tostring(index)..":"..codec.escape(o:nameRaw()),
+            value=tostring(index)..":"
+               ..gameplay_codec.escape(o:nameRaw()),
          }
       end
    end
-   table.sort(slots,function(a,b) return a.index<b.index end)
+   table.sort(slots,function ( a,b ) return a.index<b.index end)
    local values={}
    for index,entry in ipairs(slots) do values[index]=entry.value end
    return table.concat(values,",")
@@ -765,14 +492,14 @@ end
 local function install_weapon_sets ( p, packed )
    if packed==nil then return end
    p:weapsetCleanup()
-   local outfits=p:outfits()
+   local installed=p:outfits()
    for line in packed:gmatch("([^;]+)") do
       local id,slots=line:match("^(%d+):(.*)$")
       id=tonumber(id)
       if id and id>=1 and id<=10 then
          for value in slots:gmatch("(%d+)") do
             local slot=tonumber(value)
-            if slot and slot>=1 and slot<=512 and outfits[slot] then
+            if slot and slot>=1 and slot<=512 and installed[slot] then
                p:weapsetAdd(id,slot)
             end
          end
@@ -787,81 +514,47 @@ local function ship_fallback_names ( s )
       local name=inherited:nameRaw()
       if type(name)~="string" or name=="" or seen[name] then break end
       seen[name]=true
-      names[#names+1]=codec.escape(name)
+      names[#names+1]=gameplay_codec.escape(name)
       inherited=inherited:inherits()
    end
-
    local base_type=s:baseType()
    if #names<16 and type(base_type)=="string" and base_type~=""
          and not seen[base_type] and ship.exists(base_type) then
-      names[#names+1]=codec.escape(base_type)
+      names[#names+1]=gameplay_codec.escape(base_type)
    end
    return table.concat(names,",")
 end
 
--- Naev resource getters throw for unknown names. Manifests are untrusted, so
--- this is validation of external data, matching arena's ship-name validation.
 local function resource_get ( getter, name )
-   local valid,value=pcall(getter,name)
-   if valid then return value end
+   local ok,value=pcall(getter,name)
+   if ok then return value end
 end
 
 local function resolve_proxy_ship ( message )
-   if resource_get(ship.get,message.ship) then
-      return message.ship,true
+   if resource_get(ship.get,message.ship) then return message.ship,true end
+   for encoded in (message.ship_fallbacks or ""):gmatch("([^,]+)") do
+      local name=gameplay_codec.unescape(encoded)
+      if name and resource_get(ship.get,name) then return name,true end
    end
-
-   local fallbacks=message.ship_fallbacks
-   if type(fallbacks)=="string" and #fallbacks<=2048 then
-      local count=0
-      for encoded in fallbacks:gmatch("([^,]+)") do
-         count=count+1
-         if count>16 then break end
-         local name=codec.unescape(encoded)
-         if name and #name<=240 and not name:find("[%z\1-\31\127]")
-               and resource_get(ship.get,name) then
-            return name,true
-         end
-      end
-   end
-
-   if resource_get(ship.get,"Plowshare") then
-      return "Plowshare",false
-   end
+   if resource_get(ship.get,"Plowshare") then return "Plowshare",false end
 end
 
-local function replica_outfit_allowed ( o, fighter_bays_only )
-   local fighter_bay=o:type()=="Fighter Bay"
-   if fighter_bays_only then return fighter_bay end
-   return not fighter_bay
+local function replica_outfit_allowed ( o )
+   -- Fighter craft have their own owner-generated manifests. A replica carrier
+   -- must never launch a second speculative copy.
+   return o:type()~="Fighter Bay"
 end
 
-local function manifest_has_fighter_bay ( message )
-   for item in (message.slots or ""):gmatch("([^,]+)") do
-      local encoded=item:match("^%d+:(.+)$")
-      local name=encoded and codec.unescape(encoded) or nil
-      local o=name and outfit.exists(name) or nil
-      if o and o:type()=="Fighter Bay" then return true end
-   end
-   for item in (message.outfits or ""):gmatch("([^,]+)") do
-      local name=codec.unescape(item)
-      local o=name and outfit.exists(name) or nil
-      if o and o:type()=="Fighter Bay" then return true end
-   end
-   return false
-end
-
--- Fighter craft are synchronized as their own authoritative entities. Never
--- let a replica carrier launch an additional local wing.
-local function install_outfits ( p, message, fighter_bays_only )
+local function install_outfits ( p, message, compatible )
    local used_slots=false
-   for item in (message.slots or ""):gmatch("([^,]+)") do
-      local index,encoded=item:match("^(%d+):(.+)$")
-      index=tonumber(index)
-      local name=encoded and codec.unescape(encoded) or nil
-      if index and index>=1 and index<=512 and name then
-         local o=outfit.exists(name)
-         if o and replica_outfit_allowed(o,fighter_bays_only) then
+   if not compatible then
+      for item in (message.slots or ""):gmatch("([^,]+)") do
+         local index,encoded=item:match("^(%d+):(.+)$")
+         index=tonumber(index)
+         local name=encoded and gameplay_codec.unescape(encoded)
+         local o=name and outfit.exists(name) or nil
+         if index and index>=1 and index<=512 and o
+               and replica_outfit_allowed(o) then
             p:outfitAddSlot(o,index,true,true)
             used_slots=true
          end
@@ -869,393 +562,18 @@ local function install_outfits ( p, message, fighter_bays_only )
    end
    if used_slots then return end
    for item in (message.outfits or ""):gmatch("([^,]+)") do
-      local name=codec.unescape(item)
+      local name=gameplay_codec.unescape(item)
       local o=name and outfit.exists(name) or nil
-      if o and replica_outfit_allowed(o,fighter_bays_only) then
-         p:outfitAdd(o,1,true)
+      if o and replica_outfit_allowed(o) then
+         p:outfitAdd(o,1,true,compatible and false or nil)
       end
    end
-end
-
-local function install_compatible_outfits ( p, message )
-   for item in (message.outfits or ""):gmatch("([^,]+)") do
-      local name=codec.unescape(item)
-      local o=name and outfit.exists(name) or nil
-      if o and replica_outfit_allowed(o,false) then
-         -- Preserve slot type, size, and property checks. CPU is irrelevant
-         -- for a disposable proxy and is deliberately bypassed.
-         p:outfitAdd(o,1,true,false)
-      end
-   end
-end
-
-local reconcile_craft_leaders
-
-local function spawn_proxy ( message, display_name )
-   if message.node == session.settings.node_id then return end
-   local existing=session.players[message.entity]
-   if existing and not exists(existing.pilot) then
-      session.players[message.entity]=nil
-      existing=nil
-   end
-   if existing then
-      existing.last_seen=now()
-      install_weapon_sets(existing.pilot,message.weapsets)
-      return
-   end
-   local proxy_ship,install_manifest_outfits=resolve_proxy_ship(message)
-   if not proxy_ship then return end
-   clear_departure(message.node,true)
-   local fac=faction.dynAdd(nil,"P2P Players","P2P Players",{ai="p2p_remote_control",clear_allies=true,clear_enemies=true})
-   local proxy_name=display_name or message.name
-   -- The identity registry normally resolves this before spawning. Keep the
-   -- invariant here too: a remote participant may never use the local
-   -- participant's unsuffixed display name.
-   if proxy_name==local_player_name() then proxy_name=proxy_name.." (2)" end
-   local position=(message.x and message.y) and vec2.new(message.x,message.y)
-      or player.pilot():pos()
-   local arrival_kind,arrival_origin=nearby_transition(position,50,fac)
-   local p=pilot.add(proxy_ship,fac,arrival_origin or position,proxy_name,
-      {ai="p2p_remote_control",naked=true})
-   if not p then return end
-   if install_manifest_outfits then
-      install_outfits(p,message)
-   else
-      install_compatible_outfits(p,message)
-   end
-   install_weapon_sets(p,message.weapsets)
-   p:fillAmmo()
-   -- Invincible pilots are excluded from weapon collision in Naev. No-death
-   -- proxies can receive local impact effects while never becoming authority
-   -- for the remote player's real health.
-   p:setNoDeath(true)
-   p:setHealth(message.armour or 100,message.shield or 100,message.stress or 0)
-   if p:name()~=proxy_name then p:rename(proxy_name) end
-   -- Native takeoff and jump-in setup owns initial motion. Subsequent state
-   -- packets smoothly converge the proxy on the remote player's real ship.
-   if not arrival_kind then
-      if message.vx and message.vy then p:setVel(vec2.new(message.vx,message.vy)) end
-      if message.dir then p:setDir(message.dir) end
-   end
-   ai_setup.setup(p)
-   session.players[message.entity]={pilot=p,node=message.node,local_id=tostring(p:id()),
-      sequences={},last_seen=now()}
-   session.replica_entity_ids[tostring(p:id())]=message.entity
-   if reconcile_craft_leaders then session.pending_leader_owners[message.node]=true end
-   print("P2P: remote player proxy created")
-end
-
-local function active_names ( p )
-   local active={}
-   for _index,entry in ipairs(p:actives()) do
-      if entry.state=="on" or entry.state==true then
-         active[#active+1]=codec.escape(entry.outfit:nameRaw())
-      end
-   end
-   return table.concat(active,",")
-end
-
-local function target_entity ( target )
-   if not target then return "" end
-   if target==player.pilot() then return session.settings.node_id end
-   if exists(target) then
-      local local_id=tostring(target:id())
-      local replica_entity=session.replica_entity_ids[local_id]
-      local replica=replica_entity and (session.players[replica_entity]
-         or session.npcs[replica_entity] or session.craft[replica_entity])
-      if replica and replica.pilot==target then return replica_entity end
-      session.replica_entity_ids[local_id]=nil
-      local object_id=session.local_object_pilots[local_id]
-      if object_id then return object_id end
-      if session.machine and session.machine.state=="host" then
-         return session.authoritative_entities
-            and session.authoritative_entities[local_id]
-            or session.settings.node_id..":"..local_id
-      end
-   end
-   return ""
-end
-
-local function entity_pilot ( id )
-   if id==session.settings.node_id then
-      local p=player.pilot()
-      if exists(p) then return p end
-      return nil
-   end
-   local entry=session.players[id] or session.npcs[id] or session.craft[id]
-      or session.local_objects[id]
-   if entry then
-      if exists(entry.pilot) then return entry.pilot end
-      return nil
-   end
-   local authoritative=session.authoritative_pilots
-      and session.authoritative_pilots[id]
-   if exists(authoritative) then return authoritative end
-   local owned_pilot=session.owned_inventory and session.owned_inventory[id]
-   if exists(owned_pilot) then return owned_pilot end
-   -- Unknown wire identities are repaired through reliable manifests. Never
-   -- turn a state or control packet into a full pilot.get() search.
-   return nil
-end
-
-local function local_state ( p )
-   local x,y=p:pos():get(); local vx,vy=p:vel():get()
-   local armour,shield,stress=p:health()
-   local cache=naev.cache()
-   local target=p:target()
-   -- Input hooks do not see thrust commanded by Naev's autonav AI. A rising
-   -- squared speed is a cheap proxy for forward thrust that excludes autonav
-   -- coasting and braking without adding engine calls or square roots.
-   local speed2=vx*vx+vy*vy
-   local accelerating=(cache.accel and cache.accel~=0)
-      or (session.local_speed2 and speed2>session.local_speed2+1)
-   session.local_speed2=speed2
-   return {x=x,y=y,vx=vx,vy=vy,dir=p:dir(),accel=accelerating and 1 or 0,
-      primary=(cache.primary and cache.primary~=0) and 1 or 0,
-      secondary=(cache.secondary and cache.secondary~=0) and 1 or 0,
-      weapset=session.local_weapset or 1,
-      target=target_entity(target),active=active_names(p),energy=p:energy(),
-      armour=armour,shield=shield,stress=stress}
-end
-
-local function motion_target ( entry, state, received )
-   entry.motion={x=state.x,y=state.y,vx=state.vx,vy=state.vy,dir=state.dir,
-      received=received or now()}
-end
-
-local player_smoothing={position_gain=2.5,correction_speed=600,velocity_rate=12,
-   acceleration=2400,direction_rate=14,max_prediction=0.25}
-local npc_smoothing={position_gain=1.5,correction_speed=250,velocity_rate=8,
-   acceleration=600,direction_rate=10,direction_speed=2,max_prediction=0.4}
-local craft_smoothing={position_gain=2,correction_speed=400,velocity_rate=10,
-   acceleration=1200,direction_rate=12,max_prediction=0.3}
-
-local function smooth_entry ( entry, dt, stamp, limits )
-   local p=entry.pilot
-   if not entry.motion or not exists(p) then return end
-   local x,y=p:pos():get(); local vx,vy=p:vel():get(); local dir=p:dir()
-   local m=reconcile.steer({x=x,y=y,vx=vx,vy=vy,dir=dir},entry.motion,
-      dt,stamp-entry.motion.received,limits)
-   if math.abs(m.vx-vx)>0.01 or math.abs(m.vy-vy)>0.01 then
-      p:setVel(vec2.new(m.vx,m.vy))
-   end
-   if math.abs(math.sin((m.dir-dir)/2))>0.00025 then
-      p:setDir(m.dir)
-   end
-end
-
-local smooth_elapsed=0
-
-local function reset_smoothing ()
-   smooth_elapsed=0
-end
-
-local function smooth_replicas ( dt, stamp )
-   dt=math.max(0,math.min(tonumber(dt) or 1/60,0.1))
-   smooth_elapsed=smooth_elapsed+dt
-   if smooth_elapsed+1e-9 < 1/30 then return end
-   local step=math.min(smooth_elapsed,0.1)
-   smooth_elapsed=smooth_elapsed%(1/30)
-   for _entity_id,entry in pairs(session.players) do
-      smooth_entry(entry,step,stamp,player_smoothing)
-   end
-end
-
-local function mark_player_aggression ( node )
-   local entry=session.players[node]
-   if not entry or not exists(entry.pilot) then return end
-   local stamp=now()
-   entry.last_aggression=stamp
-   session.indicators:mark_aggression(stamp+AGGRESSION_GRACE,stamp)
-   if not entry.p2p_hostile then
-      entry.pilot:setHostile(true)
-      entry.p2p_hostile=true
-   end
-end
-
-local request_resync
-
-local function apply_player_control ( message )
-   local entry=session.players[message.entity]
-   if not entry or not exists(entry.pilot) then
-      if entry then session.players[message.entity]=nil end
-      request_resync("all",message.node)
-      return false
-   end
-   local sequence=tonumber(message.seq)
-   if not sequence or sequence<=(entry.control_seq or -1) then return false end
-   local target_id=message.target~="-" and message.target or nil
-   local target=target_id and entity_pilot(target_id) or nil
-   local memory=entry.pilot:memory()
-   if target_id and not target then
-      entry.pending_control=message
-      entry.pilot:setTarget(nil)
-      entry.target_pilot=nil
-      memory.p2p_primary=false
-      memory.p2p_secondary=false
-      -- A release is safety-critical even when its requested target has not
-      -- been manifested yet.
-      if message.primary==0 and message.secondary==0 then
-         entry.control_seq=sequence
-         entry.pending_control=nil
-      end
-      request_resync("npc",nil,target_id)
-      trace("control_pending",{node=message.node,seq=sequence,target=target_id})
-      return false
-   end
-   local old_primary=memory.p2p_primary==true
-   local old_secondary=memory.p2p_secondary==true
-   entry.control_seq=sequence
-   entry.pending_control=nil
-   entry.target_pilot=target
-   entry.applied=entry.applied or {}
-   entry.applied.target=target_id or "-"
-   entry.pilot:setTarget(target)
-   local px,py=entry.pilot:pos():get()
-   local dx,dy=message.x-px,message.y-py
-   local position_error=math.sqrt(dx*dx+dy*dy)
-   -- A reliable input edge must not become a transform snap. The proxy keeps
-   -- its current physical state and converges through the same capped motion
-   -- path as ordinary player state packets.
-   motion_target(entry,message)
-   if message.energy then
-      local live_energy=entry.pilot:energy()
-      if math.abs(live_energy-message.energy)>0.01 then
-         entry.pilot:setEnergy(message.energy)
-      end
-   end
-   if message.weapset~=nil then memory.p2p_weapset=message.weapset end
-   memory.p2p_primary=message.primary==1
-   memory.p2p_secondary=message.secondary==1
-   if memory.p2p_primary and not old_primary then
-      memory.p2p_primary_edges=math.min(4,(memory.p2p_primary_edges or 0)+1)
-      entry.pilot:fillAmmo()
-      entry.last_ammo_fill=now()
-   end
-   if memory.p2p_secondary and not old_secondary then
-      memory.p2p_secondary_edges=math.min(4,(memory.p2p_secondary_edges or 0)+1)
-      entry.pilot:fillAmmo()
-      entry.last_ammo_fill=now()
-   end
-   trace("control_apply",{node=message.node,seq=sequence,
-      target=target_id or "-",primary=memory.p2p_primary,
-      secondary=memory.p2p_secondary,position_error=position_error})
-   return true
-end
-
-local function apply_player_state ( message )
-   local entry=session.players[message.entity]
-   if not entry or not exists(entry.pilot) then
-      session.players[message.entity]=nil
-      request_resync("all",message.node)
-      return
-   end
-   if not reconcile.accept(entry.sequences,"state",message.seq) then return end
-   entry.last_seen=now()
-   motion_target(entry,message)
-   local p=entry.pilot
-   entry.applied=entry.applied or {}
-   local target_id=(message.target and message.target~="") and message.target or "-"
-   local target=target_id=="-" and nil or entity_pilot(target_id)
-   if (target_id=="-" or target) and p:target()~=target then
-         p:setTarget(target)
-      entry.target_pilot=target
-   end
-   local memory=p:memory()
-   memory.p2p_accel=message.accel==1 and 1 or 0
-   if message.control_seq and message.control_seq>(entry.control_seq or -1) then
-      apply_player_control{
-         node=message.node,entity=message.entity,seq=message.control_seq,
-         target=target_id,primary=message.primary,secondary=message.secondary,
-         x=message.x,y=message.y,vx=message.vx,vy=message.vy,dir=message.dir,
-         energy=message.energy,weapset=message.weapset,
-      }
-      target=entry.target_pilot
-   elseif not message.control_seq then
-      memory.p2p_primary=message.primary==1
-      memory.p2p_secondary=message.secondary==1
-      if message.weapset~=nil then memory.p2p_weapset=message.weapset end
-   end
-   -- Match arena semantics: a participant becomes hostile locally only
-   -- after firing at this client's real player. It stays hostile until the
-   -- pair has been quiet for the hostility grace period.
-   if target==player.pilot() and (memory.p2p_primary or memory.p2p_secondary) then
-      mark_player_aggression(message.node)
-   end
-   -- The remote participant is authoritative for its own health. Repair only
-   -- this disposable proxy from that reported state; never write health to
-   -- player.pilot().
-   local live_armour,live_shield,live_stress=p:health()
-   if math.abs(live_armour-message.armour)>0.01
-         or math.abs(live_shield-message.shield)>0.01
-         or math.abs(live_stress-message.stress)>0.01 then
-      p:setHealth(message.armour,message.shield,message.stress)
-   end
-   if message.energy then
-      local live_energy=p:energy()
-      if math.abs(live_energy-message.energy)>0.01 then p:setEnergy(message.energy) end
-   end
-   -- Replica ammo is a local counter. Refill on fire edges and at a bounded
-   -- one-second cadence while firing, rather than crossing into the engine on
-   -- every 15 Hz state packet.
-   if (memory.p2p_primary or memory.p2p_secondary)
-         and now()-(entry.last_ammo_fill or -math.huge)>=1 then
-      p:fillAmmo()
-      entry.last_ammo_fill=now()
-   end
-   local active_wire=message.active or ""
-   if entry.applied.active~=active_wire then
-      local desired={}
-      for item in active_wire:gmatch("([^,]+)") do
-         local name=codec.unescape(item)
-         if name then desired[name]=true end
-      end
-      entry.active=entry.active or {}
-      local slots={}
-      for _index,active in ipairs(p:actives()) do
-         local name=active.outfit:nameRaw()
-         if name then slots[name]=active.slot end
-      end
-      for name in pairs(entry.active) do
-         if not desired[name] and slots[name] then p:outfitToggle(slots[name],false) end
-      end
-      for name in pairs(desired) do
-         if not entry.active[name] and slots[name] then p:outfitToggle(slots[name],true) end
-      end
-      entry.active=desired
-      entry.applied.active=active_wire
-   end
-end
-
-local function publish_player_control ( force )
-   if not session.machine or not session.machine.system then return end
-   local p=player.pilot()
-   if not exists(p) then return end
-   local state=local_state(p)
-   local target=state.target~="" and state.target or "-"
-   local signature=table.concat({
-      target,state.primary,state.secondary,state.weapset,
-   },":")
-   if not force and signature==session.local_control_signature then return end
-   session.local_control_signature=signature
-   session.local_control_seq=(session.local_control_seq or 0)+1
-   local msg=base("player_control")
-   msg.entity=session.settings.node_id
-   msg.seq=session.local_control_seq
-   msg.target=target
-   msg.primary=state.primary; msg.secondary=state.secondary
-   msg.weapset=state.weapset
-   msg.energy=state.energy
-   msg.x=state.x; msg.y=state.y; msg.vx=state.vx; msg.vy=state.vy; msg.dir=state.dir
-   broadcast(msg,true)
-   trace("control_emit",{seq=msg.seq,target=target,
-      primary=msg.primary,secondary=msg.secondary})
 end
 
 local function pilot_owned ( p )
    if p:withPlayer() then return true end
    local seen={}
-   while p and not seen[p] do
+   while exists(p) and not seen[p] do
       seen[p]=true
       local leader=p:leader()
       if not leader then return false end
@@ -1265,2767 +583,1782 @@ local function pilot_owned ( p )
    return false
 end
 
-local function pilot_id ( p )
-   if not exists(p) then return nil end
-   return tostring(p:id())
+local function local_id ( p )
+   if exists(p) then return tostring(p:id()) end
 end
 
-local function authoritative_entity ( p )
-   local id=pilot_id(p)
-   if not id then return nil end
-   return session.authoritative_entities
-      and session.authoritative_entities[id]
-      or session.settings.node_id..":"..id
-end
-
-local function replica_lookup ()
-   local lookup={}
-   for _entity_id,e in pairs(session.players) do if e.local_id then lookup[e.local_id]=true end end
-   for _entity_id,e in pairs(session.npcs) do if e.local_id then lookup[e.local_id]=true end end
-   for _entity_id,e in pairs(session.craft) do if e.local_id then lookup[e.local_id]=true end end
-   for _node,e in pairs(session.departures) do if e.local_id then lookup[e.local_id]=true end end
-   return lookup
-end
-
--- High-frequency state collection must remain deliberately small. In
--- particular, do not add ship, name, faction, outfit, or leader calls here:
--- each one crosses the Lua/C boundary and belongs only in a reliable manifest.
-local function craft_state_record ( p, entity, target_entities )
-   local armour,shield,stress=p:health(); local x,y=p:pos():get(); local vx,vy=p:vel():get()
-   local target=p:target()
-   local target_id=""
-   if exists(target) then
-      target_id=target_entities and target_entities[tostring(target:id())]
-         or target_entity(target)
-      if (not target_id or target_id=="") and session.machine.state=="host"
-            and target~=player.pilot() then
-         local local_id=pilot_id(target)
-         if local_id then target_id=session.settings.node_id..":"..local_id end
-      end
-      target_id=target_id or ""
-   end
-   return {entity=entity,x=x,y=y,vx=vx,vy=vy,dir=p:dir(),armour=armour,shield=shield,
-      stress=stress,energy=p:energy(),target=target_id,disabled=p:disabled()}
-end
-
-local function task_goal ( p, target_id )
-   local task=p:taskname()
-   if not task then return "","" end
-   local data=p:taskdata()
-   if data and data==p:target() and target_id and target_id~="" then
-      return task,"pilot:"..target_id
-   end
-   if data then
-      local current=system.cur()
-      if current then
-         for _index,spob in ipairs(current:spobs()) do
-            if data==spob then return task,"spob:"..spob:nameRaw() end
-         end
-         for _index,jump in ipairs(current:jumps(true)) do
-            if data==jump then return task,"jump:"..jump:dest():nameRaw() end
-         end
-      end
-      local data_type=type(data)
-      local vector_data=VECTOR_METATABLE
-            and getmetatable(data)==VECTOR_METATABLE
-         or (data_type=="table" and type(data.get)=="function")
-      if vector_data then
-         local x,y=data:get()
-         if type(x)=="number" and type(y)=="number"
-               and math.abs(x)<=1e9 and math.abs(y)<=1e9 then
-            return task,string.format("vector:%.8g:%.8g",x,y)
-         end
-      end
-      -- AI tasks also carry private values such as vectors and internal state.
-      -- Sending the task name without that required argument creates malformed
-      -- tasks on replicas (notably loiter(nil), which warns from ai.face every
-      -- frame). Leave unsupported control to the replicated AI profile.
-      return "",""
-   end
-   -- Unknown no-argument tasks are not a compatibility contract. Replicating
-   -- an arbitrary task name as pushtask(task,nil) can create invalid AI state.
-   return "",""
-end
-
-local function manifest_record ( p, entity, with_control )
-   local rec=craft_state_record(p,entity)
-   local leader_id=""
-   local leader=p:leader()
-   if exists(leader) then
-      local local_id=pilot_id(leader)
-      leader_id=leader==player.pilot() and session.settings.node_id
-         or (local_id and authoritative_entity(leader) or "")
-   end
-   rec.ship=p:ship():nameRaw()
-   rec.name=p:name()
-   rec.faction=p:faction():nameRaw()
-   rec.outfits=outfit_names(p)
-   rec.slots=outfit_slots(p)
-   -- Exact-slot data is authoritative for NPC and owned-craft replicas. Avoid
-   -- duplicating every outfit name in the same reliable manifest packet.
-   if rec.slots~="" then rec.outfits="" end
-   rec.leader=leader_id
-   if with_control then
-      -- AI identity and the top-level goal are reliable, static manifest
-      -- data. They must never be added to the frequent NPC state record.
-      rec.ai=p:ainame() or ""
-      rec.task,rec.goal=task_goal(p,rec.target)
-   end
-   return rec
-end
-
-local function add_message ( rec, kind, owner )
-   session.sequence=session.sequence+1
-   local msg=base(kind); msg.entity=rec.entity; msg.seq=session.sequence; msg.ship=rec.ship
-   msg.name=rec.name; msg.faction=rec.faction; msg.outfits=rec.outfits; msg.slots=rec.slots
-   msg.x=rec.x; msg.y=rec.y; msg.vx=rec.vx; msg.vy=rec.vy; msg.dir=rec.dir
-   msg.armour=rec.armour; msg.shield=rec.shield; msg.stress=rec.stress; msg.energy=rec.energy
-   msg.target=rec.target; msg.leader=rec.leader
-   msg.ai=rec.ai; msg.task=rec.task; msg.goal=rec.goal
-   if session.machine.claim then msg.claim=session.machine.claim end
-   if owner then msg.owner=owner end
-   return msg
-end
-
-local function manifest_field ( value )
-   if value==nil or value=="" then return "~" end
-   return "v"..codec.escape(value)
-end
-
-local function manifest_line ( rec )
+local function new_entity_id ( owner, p, kind )
+   session.generation=session.generation+1
    return table.concat({
-      manifest_field(rec.entity),manifest_field(rec.ship),manifest_field(rec.name),
-      manifest_field(rec.faction),manifest_field(rec.outfits),manifest_field(rec.slots),
-      manifest_field(rec.x),manifest_field(rec.y),manifest_field(rec.vx),
-      manifest_field(rec.vy),manifest_field(rec.dir),manifest_field(rec.armour),
-      manifest_field(rec.shield),manifest_field(rec.stress),manifest_field(rec.energy),
-      manifest_field(rec.target),manifest_field(rec.leader),
+      owner,
+      session.visit or "0",
+      kind=="npc" and "n" or "c",
+      tostring(session.generation),
+      local_id(p) or "0",
+   },".")
+end
+
+local function target_entity ( target )
+   if not exists(target) then return "-" end
+   if target==player.pilot() then return local_entity() end
+   local id=local_id(target)
+   local replica=session.replica_by_local[id]
+   if replica then return replica end
+   local authoritative=session.authority_by_local[id]
+   if authoritative then return authoritative end
+   local object_id=session.objects and session.objects:entity_for_pilot(target)
+   return object_id or "-"
+end
+
+local function entity_pilot ( entity )
+   if not entity or entity=="-" then return nil end
+   if entity==local_entity() then return player.pilot() end
+   for _id,entry in pairs(session.players) do
+      if _id==entity and exists(entry.pilot) then return entry.pilot end
+   end
+   local entry=session.npcs[entity] or session.craft[entity]
+      or session.authority[entity]
+   if entry and exists(entry.pilot) then return entry.pilot end
+   return session.objects and session.objects:pilot_for_id(entity) or nil
+end
+
+local function active_names ( p )
+   local active={}
+   for _index,entry in ipairs(p:actives()) do
+      if entry.state=="on" or entry.state==true then
+         active[#active+1]=gameplay_codec.escape(entry.outfit:nameRaw())
+      end
+   end
+   return table.concat(active,",")
+end
+
+local function state_record ( p, entity, include_controls, stamp )
+   local x,y=p:pos():get()
+   local vx,vy=p:vel():get()
+   local armour,shield,stress=p:health()
+   local target=target_entity(p:target())
+   local record={
+      entity=entity,x=x,y=y,vx=vx,vy=vy,dir=p:dir(),
+      armour=armour,shield=shield,stress=stress,energy=p:energy(),
+      target=target,weapset=1,accel=0,turn=0,reverse=0,
+      primary=0,secondary=0,active="",
+   }
+   if include_controls then
+      local cache=naev.cache()
+      record.weapset=session.local_weapset or 1
+      record.accel=(cache.accel and cache.accel~=0) and 1 or 0
+      record.turn=((cache.right and cache.right~=0) and 1 or 0)
+         -((cache.left and cache.left~=0) and 1 or 0)
+      record.reverse=(cache.reverse and cache.reverse~=0) and 1 or 0
+      record.primary=(cache.primary and cache.primary~=0) and 1 or 0
+      record.secondary=(cache.secondary and cache.secondary~=0) and 1 or 0
+      stamp=stamp or now()
+      if not session.local_active
+            or stamp-(session.local_active_at or -math.huge)>=0.2 then
+         session.local_active=active_names(p)
+         session.local_active_at=stamp
+      end
+      record.active=session.local_active
+   elseif target~="-" and p:flags("combat") then
+      -- Naev does not expose native trigger state. The bounded replica firing
+      -- controller mirrors combat intent without inventing movement/targets.
+      record.primary=1
+   end
+   return record
+end
+
+local function pack_state ( record )
+   return table.concat({
+      record.entity,record.x,record.y,record.vx,record.vy,record.dir,
+      record.armour,record.shield,record.stress,record.energy,
+      record.target or "-",record.weapset or 1,record.accel or 0,
+      record.turn or 0,record.reverse or 0,
+      record.primary or 0,record.secondary or 0,
+      gameplay_codec.escape(record.active or ""),
    },",")
 end
 
-local function control_line ( rec )
-   return table.concat({manifest_field(rec.entity),manifest_field(rec.ai),
-      manifest_field(rec.task),manifest_field(rec.goal)},",")
+local function unpack_state ( packed )
+   local fields={}
+   for value in (packed..","):gmatch("(.-),") do fields[#fields+1]=value end
+   if #fields~=18 or not fields[1]:match("^[%w_%.%-]+$") then return nil end
+   local record={
+      entity=fields[1],
+      x=tonumber(fields[2]),y=tonumber(fields[3]),
+      vx=tonumber(fields[4]),vy=tonumber(fields[5]),
+      dir=tonumber(fields[6]),armour=tonumber(fields[7]),
+      shield=tonumber(fields[8]),stress=tonumber(fields[9]),
+      energy=tonumber(fields[10]),target=fields[11],
+      weapset=tonumber(fields[12]),accel=tonumber(fields[13]),
+      turn=tonumber(fields[14]),reverse=tonumber(fields[15]),
+      primary=tonumber(fields[16]),secondary=tonumber(fields[17]),
+      active=gameplay_codec.unescape(fields[18]),
+   }
+   for _index,key in ipairs({
+      "x","y","vx","vy","dir","armour","shield","stress","energy",
+      "weapset","accel","turn","reverse","primary","secondary",
+   }) do
+      local value=record[key]
+      if not value or value~=value then return nil end
+   end
+   if math.abs(record.x)>1e9 or math.abs(record.y)>1e9
+         or math.abs(record.vx)>1e7 or math.abs(record.vy)>1e7
+         or math.abs(record.dir)>1e6
+         or record.armour<0 or record.armour>1e9
+         or record.shield<0 or record.shield>1e9
+         or record.stress<0 or record.stress>1e9
+         or record.energy<0 or record.energy>1e9 then return nil end
+   if #record.entity>255 or #record.target>255
+         or (record.target~="-"
+            and not record.target:match("^[%w_%.%-]+$"))
+         or record.weapset<1 or record.weapset>10
+         or record.accel<0 or record.accel>1
+         or record.turn< -1 or record.turn>1
+         or record.reverse<0 or record.reverse>1
+         or record.primary<0 or record.primary>1
+         or record.secondary<0 or record.secondary>1 then return nil end
+   return record
 end
 
-local function queue_npc_manifests ( records, recipient )
-   if not recipient or recipient==session.settings.node_id
-         or not session.machine.members[recipient]
-         or session.pending_npc_manifests[recipient] then return false end
-   session.npc_snapshot=(session.npc_snapshot or 0)+1
-   session.pending_npc_manifests[recipient]={
-      recipient=recipient,records=records,next_key=nil,
-      visited={},snapshot=session.npc_snapshot,
-      baseline=session.sequence,population=session.host_npc_population,count=0,
+local function object_state_record ( p, entity )
+   local x,y=p:pos():get()
+   local vx,vy=p:vel():get()
+   local armour,shield,stress=p:health()
+   return {
+      entity=entity,x=x,y=y,vx=vx,vy=vy,dir=p:dir(),
+      armour=armour,shield=shield,stress=stress,
    }
-   if not session.pending_npc_manifest_enqueued[recipient] then
-      session.pending_npc_manifest_enqueued[recipient]=true
-      session.pending_npc_manifest_order[
-         #session.pending_npc_manifest_order+1]=recipient
+end
+
+local function pack_object_state ( record )
+   return table.concat({
+      record.entity,record.x,record.y,record.vx,record.vy,record.dir,
+      record.armour,record.shield,record.stress,
+   },",")
+end
+
+local function unpack_object_state ( packed )
+   local fields={}
+   for value in (packed..","):gmatch("(.-),") do fields[#fields+1]=value end
+   if #fields~=9 or not fields[1]:match("^[%w_%.%-]+$") then return nil end
+   local record={
+      entity=fields[1],
+      x=tonumber(fields[2]),y=tonumber(fields[3]),
+      vx=tonumber(fields[4]),vy=tonumber(fields[5]),
+      dir=tonumber(fields[6]),
+      armour=tonumber(fields[7]),shield=tonumber(fields[8]),
+      stress=tonumber(fields[9]),
+   }
+   for _index,key in ipairs({
+      "x","y","vx","vy","dir","armour","shield","stress",
+   }) do
+      local value=record[key]
+      if not value or value~=value then return nil end
+   end
+   if #record.entity>255
+         or math.abs(record.x)>1e9 or math.abs(record.y)>1e9
+         or math.abs(record.vx)>1e7 or math.abs(record.vy)>1e7
+         or math.abs(record.dir)>1e6
+         or record.armour<0 or record.armour>1e9
+         or record.shield<0 or record.shield>1e9
+         or record.stress<0 or record.stress>1e9 then return nil end
+   return record
+end
+
+local function player_manifest ()
+   local p=player.pilot()
+   if not exists(p) then return nil end
+   local record=state_record(p,local_entity(),true)
+   local current_ship=p:ship()
+   local message=gameplay_base("player_manifest")
+   message.owner=session.settings.node_id
+   message.entity=local_entity()
+   message.origin=session.settings.node_id.."."..session.visit..".player"
+   message.ship=current_ship:nameRaw()
+   message.ship_fallbacks=ship_fallback_names(current_ship)
+   message.name=local_player_name()
+   message.outfits=outfit_names(p)
+   if message.outfits=="" then message.outfits="-" end
+   message.slots=outfit_slots(p)
+   if message.slots=="" then message.slots="-" end
+   message.weapsets=weapon_sets(p)
+   if message.weapsets=="" then message.weapsets="-" end
+   for key,value in pairs(record) do
+      if key~="entity" then message[key]=value end
+   end
+   return message
+end
+
+local function authority_manifest ( entry )
+   local p=entry.pilot
+   if not exists(p) then return nil end
+   local message=gameplay_base("entity_manifest")
+   message.kind=entry.kind
+   message.owner=entry.owner
+   message.entity=entry.entity
+   message.origin=entry.origin
+   message.ship=p:ship():nameRaw()
+   message.name=p:name()
+   message.faction=p:faction():nameRaw()
+   message.ai=entry.ai or p:ainame() or "dummy"
+   message.outfits=outfit_names(p)
+   if message.outfits=="" then message.outfits="-" end
+   message.slots=outfit_slots(p)
+   if message.slots=="" then message.slots="-" end
+   local leader=p:leader()
+   message.leader=exists(leader) and target_entity(leader) or "-"
+   local record=state_record(p,entry.entity,false)
+   for key,value in pairs(record) do
+      if key~="entity" then message[key]=value end
+   end
+   return message
+end
+
+function session._pack_npc_announcement ( entry, record )
+   local description=entry.description
+   if not description then return nil end
+   local slots=description.slots or "-"
+   local outfits=slots~="-" and "-" or (description.outfits or "-")
+   return table.concat({
+      "n",pack_state(record),
+      gameplay_codec.escape(description.owner),
+      gameplay_codec.escape(description.origin),
+      gameplay_codec.escape(description.ship),
+      gameplay_codec.escape(description.name),
+      gameplay_codec.escape(description.faction),
+      gameplay_codec.escape(description.ai),
+      gameplay_codec.escape(outfits),
+      gameplay_codec.escape(slots),
+      gameplay_codec.escape(description.leader or "-"),
+   },",")
+end
+
+function session._unpack_npc_announcement ( packed )
+   local fields={}
+   for value in (packed..","):gmatch("(.-),") do fields[#fields+1]=value end
+   if #fields~=28 or fields[1]~="n" then return nil end
+   local dynamic={}
+   for index=2,19 do dynamic[#dynamic+1]=fields[index] end
+   local record=unpack_state(table.concat(dynamic,","))
+   if not record then return nil end
+   local decoded={}
+   for index=20,28 do
+      decoded[index]=gameplay_codec.unescape(fields[index])
+      if not decoded[index] then return nil end
+   end
+   local owner,origin,ship_name,name,faction_name,ai_name,
+      outfits,slots,leader=decoded[20],decoded[21],decoded[22],
+      decoded[23],decoded[24],decoded[25],decoded[26],decoded[27],decoded[28]
+   if #owner<1 or #owner>64 or not owner:match("^[%x]+$")
+         or #origin<1 or #origin>255
+         or not origin:match("^[%w_%.%-]+$")
+         or #ship_name<1 or #ship_name>240
+         or ship_name:find("[%z\1-\31\127]")
+         or #name<1 or #name>240 or name:find("[%z\1-\31\127]")
+         or #faction_name<1 or #faction_name>240
+         or faction_name:find("[%z\1-\31\127]")
+         or #ai_name<1 or #ai_name>240
+         or not ai_name:match("^[%w_%-]+$")
+         or #outfits>12000 or outfits:find("[%z\1-\31\127]")
+         or #slots>12000 or slots:find("[%z\1-\31\127]")
+         or (leader~="-" and (#leader>255
+            or not leader:match("^[%w_%.%-]+$"))) then
+      return nil
+   end
+   return record,{
+      kind="npc",owner=owner,entity=record.entity,origin=origin,
+      ship=ship_name,name=name,faction=faction_name,ai=ai_name,
+      outfits=outfits,slots=slots,leader=leader,
+      x=record.x,y=record.y,vx=record.vx,vy=record.vy,dir=record.dir,
+      armour=record.armour,shield=record.shield,stress=record.stress,
+      energy=record.energy,target=record.target,weapset=record.weapset,
+      accel=record.accel,turn=record.turn,reverse=record.reverse,
+      primary=record.primary,secondary=record.secondary,
+      active=record.active,
+   }
+end
+
+local function canonical_copy ( message )
+   local copy={}
+   for key,value in pairs(message) do copy[key]=value end
+   copy.node=session.settings.node_id
+   copy.system=current_system()
+   copy.visit=session.visit
+   copy.epoch=session.machine.claim
+   return copy
+end
+
+local player_limits={
+   position_gain=1.5,correction_speed=400,velocity_rate=12,
+   acceleration=2400,direction_rate=30,direction_speed=8,
+   max_prediction=0,rest_source_speed=0,follow_velocity=true,
+}
+local npc_limits={
+   position_gain=1.5,correction_speed=250,velocity_rate=8,
+   acceleration=600,direction_rate=10,direction_speed=2,
+   max_prediction=0,
+}
+local craft_limits={
+   position_gain=2,correction_speed=400,velocity_rate=10,
+   acceleration=1200,direction_rate=12,direction_speed=2.5,
+   max_prediction=0,
+}
+
+local function reconcile_arrival ( entry, record, limits, stamp )
+   local p=entry.pilot
+   if not exists(p) then return false end
+   stamp=stamp or now()
+   local elapsed=math.max(1/60,
+      math.min(0.25,stamp-(entry.last_record_at or stamp-1/15)))
+   entry.last_record_at=stamp
+   local x,y=p:pos():get()
+   local vx,vy=p:vel():get()
+   local dir=p:dir()
+   local wanted={
+      x=record.x,y=record.y,vx=record.vx,vy=record.vy,dir=record.dir,
+   }
+   local corrected_vx,corrected_vy,corrected_dir=
+      reconcile.steer_values(x,y,vx,vy,dir,wanted,elapsed,0,limits)
+   local exact_rest=corrected_vx==0 and corrected_vy==0
+      and (vx~=0 or vy~=0)
+   if exact_rest or math.abs(corrected_vx-vx)>0.01
+         or math.abs(corrected_vy-vy)>0.01 then
+      p:setVel(vec2.new(corrected_vx,corrected_vy))
+   end
+   if math.abs(math.sin((corrected_dir-dir)/2))>0.00025 then
+      p:setDir(corrected_dir)
    end
    return true
 end
 
-local function publish_next_npc_manifest_batch ( stamp )
-   stamp=stamp or now()
-   if stamp-session.last_npc_manifest_batch<NPC_SNAPSHOT_BATCH_INTERVAL then return end
-   local order=session.pending_npc_manifest_order
-   if #order==0 then return end
-   local start=math.max(1,math.min(session.pending_npc_manifest_cursor,#order))
-   local pending,pending_index
-   for offset=0,#order-1 do
-      local index=(start+offset-1)%#order+1
-      local recipient=order[index]
-      local candidate=session.pending_npc_manifests[recipient]
-      if candidate and session.machine.members[recipient] then
-         pending=candidate
-         pending_index=index
-         break
-      end
-      session.pending_npc_manifests[recipient]=nil
+local function apply_health_energy ( entry, record )
+   local p=entry.pilot
+   entry.applied=entry.applied or {}
+   local applied=entry.applied
+   local armour,shield,stress=p:health()
+   if math.abs(armour-record.armour)>0.01
+         or math.abs(shield-record.shield)>0.01
+         or math.abs(stress-record.stress)>0.01 then
+      p:setHealth(record.armour,record.shield,record.stress)
    end
-   if not pending then
-      session.pending_npc_manifest_order={}
-      session.pending_npc_manifest_enqueued={}
-      session.pending_npc_manifest_cursor=1
+   if math.abs(p:energy()-record.energy)>0.01 then
+      p:setEnergy(record.energy)
+   end
+   applied.armour=record.armour
+   applied.shield=record.shield
+   applied.stress=record.stress
+   applied.energy=record.energy
+end
+
+local function apply_active_outfits ( entry, packed )
+   packed=packed or ""
+   if packed=="-" then packed="" end
+   entry.applied=entry.applied or {}
+   if entry.applied.active==packed then return end
+   local wanted={}
+   for encoded in packed:gmatch("([^,]+)") do
+      local name=gameplay_codec.unescape(encoded)
+      if name then wanted[name]=true end
+   end
+   local slots={}
+   for _index,active in ipairs(entry.pilot:actives()) do
+      slots[active.outfit:nameRaw()]=active.slot
+   end
+   entry.active=entry.active or {}
+   for name in pairs(entry.active) do
+      if not wanted[name] and slots[name] then
+         entry.pilot:outfitToggle(slots[name],false)
+      end
+   end
+   for name in pairs(wanted) do
+      if not entry.active[name] and slots[name] then
+         entry.pilot:outfitToggle(slots[name],true)
+      end
+   end
+   entry.active=wanted
+   entry.applied.active=packed
+end
+
+local function mark_player_aggression ( owner )
+   local manifest=session.player_manifests[owner]
+   local entity=manifest and manifest.entity
+   local entry=entity and session.players[entity]
+   if not entry or not exists(entry.pilot) then return end
+   local stamp=now()
+   entry.last_aggression=stamp
+   session.indicators:mark_aggression(stamp+AGGRESSION_GRACE,stamp)
+   if not entry.hostile then
+      entry.pilot:setHostile(true)
+      entry.hostile=true
+   end
+end
+
+local function apply_player_controls ( entry, record )
+   local p=entry.pilot
+   local target=entity_pilot(record.target)
+   entry.applied=entry.applied or {}
+   if record.target=="-" or target then
+      if entry.applied.target~=record.target then
+         p:setTarget(target)
+         entry.applied.target=record.target
+      end
+   end
+   local memory=p:memory()
+   local old_primary=memory.p2p_primary==true
+   local old_secondary=memory.p2p_secondary==true
+   memory.p2p_accel=record.accel==1 and 1 or 0
+   memory.p2p_turn=math.max(-1,math.min(1,record.turn or 0))
+   memory.p2p_reverse=record.reverse==1
+   memory.p2p_primary=record.primary==1
+   memory.p2p_secondary=record.secondary==1
+   memory.p2p_weapset=record.weapset
+   if memory.p2p_primary and not old_primary then
+      memory.p2p_primary_edges=math.min(4,
+         (memory.p2p_primary_edges or 0)+1)
+      p:fillAmmo()
+   end
+   if memory.p2p_secondary and not old_secondary then
+      memory.p2p_secondary_edges=math.min(4,
+         (memory.p2p_secondary_edges or 0)+1)
+      p:fillAmmo()
+   end
+   if target==player.pilot()
+         and (memory.p2p_primary or memory.p2p_secondary) then
+      mark_player_aggression(entry.owner)
+   end
+end
+
+local function apply_player_record ( record, stamp, world_sequence )
+   if record.entity==local_entity() then return true end
+   local entry=session.players[record.entity]
+   if not entry or not exists(entry.pilot) then return false end
+   if world_sequence
+         and world_sequence<=(entry.world_sequence or -1) then return false end
+   if world_sequence then entry.world_sequence=world_sequence end
+   if not reconcile_arrival(entry,record,player_limits,stamp) then return false end
+   apply_player_controls(entry,record)
+   apply_health_energy(entry,record)
+   apply_active_outfits(entry,record.active)
+   return true
+end
+
+local function deactivate_npc ( entity )
+   local entry=session.active_npcs[entity]
+   if not entry then return end
+   session.active_npcs[entity]=nil
+   if exists(entry.pilot) then
+      entry.pilot:taskClear()
+      entry.pilot:setTarget(nil)
+      entry.pilot:changeAI("p2p_replica_passive")
+      ai_setup.setup(entry.pilot)
+   end
+   entry.active_replica=nil
+end
+
+local function npc_active_priority ( record )
+   local target=record.target
+   if target~="-" and (target==local_entity() or session.players[target]) then
+      return 1
+   end
+   if (session.interest_entities[target] or 0)>0 then return 2 end
+   local craft=session.craft[target] or session.authority[target]
+   if craft and craft.kind=="craft" then return 3 end
+end
+
+local function activate_npc ( entry, record, stamp, priority )
+   local newly_active=false
+   if not entry.active_replica then
+      entry.pilot:taskClear()
+      entry.pilot:changeAI("p2p_replica_active")
+      ai_setup.setup(entry.pilot)
+      entry.active_replica=true
+      newly_active=true
+      session.active_npcs[entry.entity]=entry
+      session.active_order[#session.active_order+1]=entry.entity
+   end
+   entry.active_until=stamp+ACTIVE_NPC_LEASE
+   entry.active_priority=priority
+   local target=entity_pilot(record.target)
+   if newly_active and (record.target=="-" or target) then
+      entry.pilot:setTarget(target)
+   end
+   local memory=entry.pilot:memory()
+   memory.p2p_primary=record.primary==1
+   memory.p2p_secondary=record.secondary==1
+   memory.p2p_weapset=record.weapset
+end
+
+local function service_active_npcs ( candidate, record, stamp )
+   local live=0
+   local compact={}
+   for _index,entity in ipairs(session.active_order) do
+      local entry=session.active_npcs[entity]
+      if entry and exists(entry.pilot) then
+         if stamp>=(entry.active_until or 0) then
+            deactivate_npc(entity)
+         else
+            live=live+1
+            compact[#compact+1]=entity
+         end
+      end
+   end
+   session.active_order=compact
+   if not candidate then return end
+   local firing=record.primary==1 or record.secondary==1
+   local priority=firing and npc_active_priority(record) or nil
+   if not priority then
+      if candidate.active_replica then deactivate_npc(candidate.entity) end
       return
    end
-   session.last_npc_manifest_batch=stamp
-   local function finish_snapshot ()
-      if not pending.finished or pending.current then return false end
-      session.sequence=session.sequence+1
-      local done=base("npc_done")
-      done.claim=session.machine.claim
-      done.seq=session.sequence
-      done.snapshot=pending.snapshot
-      done.baseline=pending.baseline
-      done.population=pending.population
-      done.count=pending.count
-      done.recipient=pending.recipient
-      broadcast(done,true)
-      session.pending_npc_manifests[pending.recipient]=nil
-      session.pending_npc_manifest_cursor=pending_index%#order+1
-      return true
+   if candidate.active_replica then
+      activate_npc(candidate,record,stamp,priority)
+      return
    end
-   local batch,control_batch,size,control_size={},{},0,0
-   local inspected=0
-   while inspected<NPC_SNAPSHOT_RECORDS_PER_BATCH do
-      local entry=pending.current
-      if not entry then
-         local cursor=pending.next_key
-         if cursor~=nil and pending.records[cursor]==nil then cursor=nil end
-         local id,p=next(pending.records,cursor)
-         pending.next_key=id
-         if not id then
-            pending.finished=true
+   if live>=ACTIVE_NPC_CAP then
+      local worst=-math.huge
+      for _index,entity in ipairs(session.active_order) do
+         local active=session.active_npcs[entity]
+         if active then worst=math.max(worst,active.active_priority or 4) end
+      end
+      if worst<priority then return end
+      local victim
+      for _index,entity in ipairs(session.active_order) do
+         local active=session.active_npcs[entity]
+         if active and (active.active_priority or 4)==worst then
+            victim=entity
             break
          end
-         if pending.visited[id] then
-            inspected=inspected+1
-         else
-            pending.visited[id]=true
-            entry={id=id,pilot=p}
-            pending.current=entry
-         end
       end
-      if not entry then
-         -- A lifecycle deletion can invalidate the table cursor and restart
-         -- traversal. Previously visited keys still consume the fixed batch
-         -- budget, preventing restart recovery from becoming a frame spike.
-      else
-         inspected=inspected+1
-         if not exists(entry.pilot) then
-            pending.current=nil
-         else
-            local rec=entry.rec or manifest_record(entry.pilot,entry.id,true)
-            entry.rec=rec
-            local line=manifest_line(rec)
-            local control=control_line(rec)
-            if #line>NPC_MANIFEST_BATCH_PAYLOAD
-                  or #control>NPC_MANIFEST_BATCH_PAYLOAD then
-               if #batch>0 then break end
-               pending.current=nil
-               local add=add_message(rec,"npc_add")
-               add.snapshot=pending.snapshot
-               add.baseline=pending.baseline
-               add.recipient=pending.recipient
-               broadcast(add,true)
-               pending.count=pending.count+1
-               finish_snapshot()
-               return
-            end
-            if #batch>0 and (size+#line+1>NPC_MANIFEST_BATCH_PAYLOAD
-                  or control_size+#control+1>NPC_MANIFEST_BATCH_PAYLOAD) then break end
-            batch[#batch+1]=line
-            control_batch[#control_batch+1]=control
-            size=size+#line+1
-            control_size=control_size+#control+1
-            pending.current=nil
-         end
+      if not victim then return end
+      deactivate_npc(victim)
+      for index,entity in ipairs(session.active_order) do
+         if entity==victim then table.remove(session.active_order,index); break end
       end
    end
-   if #batch>0 then
-      session.sequence=session.sequence+1
-      local msg=base("npc_manifest")
-      msg.claim=session.machine.claim
-      msg.seq=session.sequence
-      msg.snapshot=pending.snapshot
-      msg.baseline=pending.baseline
-      msg.recipient=pending.recipient
-      msg.entities=table.concat(batch,";")
-      broadcast(msg,true)
-      pending.count=pending.count+#batch
-      session.sequence=session.sequence+1
-      local control=base("npc_control")
-      control.claim=session.machine.claim
-      control.seq=session.sequence
-      control.baseline=pending.baseline
-      control.recipient=pending.recipient
-      control.entities=table.concat(control_batch,";")
-      broadcast(control,true)
-   end
-   if not finish_snapshot() and #order>0 then
-      session.pending_npc_manifest_cursor=pending_index%#order+1
-   end
+   activate_npc(candidate,record,stamp,priority)
 end
 
-local function state_line ( rec )
-   return table.concat({rec.entity,rec.x,rec.y,rec.vx,rec.vy,rec.dir,rec.armour,rec.shield,
-      rec.stress,rec.energy,(rec.target and rec.target~="") and rec.target or "-",
-      rec.disabled and 1 or 0},",")
+local function apply_entity_record ( record, stamp, world_sequence )
+   if session.authority[record.entity] then return true end
+   local entry=session.npcs[record.entity] or session.craft[record.entity]
+   if not entry or not exists(entry.pilot) then return false end
+   if world_sequence
+         and world_sequence<=(entry.world_sequence or -1) then return false end
+   if world_sequence then entry.world_sequence=world_sequence end
+   local limits=entry.kind=="npc" and npc_limits or craft_limits
+   if not reconcile_arrival(entry,record,limits,stamp) then return false end
+   apply_health_energy(entry,record)
+   entry.applied=entry.applied or {}
+   local target=entity_pilot(record.target)
+   if (record.target=="-" or target)
+         and entry.applied.target~=record.target then
+      entry.pilot:setTarget(target)
+      entry.applied.target=record.target
+   end
+   if entry.kind=="npc" then service_active_npcs(entry,record,stamp) end
+   return true
 end
 
-local function inventory ( include_ambient, include_craft, prune_unauthorized )
-   local list=pilot.get()
-   local unauthorized={}
-   if next(session.pending_fighter_bays or {}) then
-      local active_leaders={}
-      for _index,p in ipairs(list) do
-         if exists(p) then
-            local leader=p:leader()
-            if exists(leader) then active_leaders[leader]=true end
-         end
-      end
-      for entity,pending in pairs(session.pending_fighter_bays) do
-         if not exists(pending.pilot) then
-            session.pending_fighter_bays[entity]=nil
-         elseif not active_leaders[pending.pilot] then
-            install_outfits(pending.pilot,pending.manifest,true)
-            session.pending_fighter_bays[entity]=nil
-         end
-      end
+local function apply_object_state ( record, stamp, world_sequence )
+   local entry=session.objects
+      and session.objects:state_entry(record.entity)
+   if not entry then return false end
+   if world_sequence
+         and world_sequence<=(entry.world_sequence or -1) then return false end
+   if world_sequence then entry.world_sequence=world_sequence end
+   if not reconcile_arrival(entry,record,npc_limits,stamp) then return false end
+   local armour,shield,stress=entry.pilot:health()
+   if math.abs(armour-record.armour)>0.01
+         or math.abs(shield-record.shield)>0.01
+         or math.abs(stress-record.stress)>0.01 then
+      entry.pilot:setHealth(record.armour,record.shield,record.stress)
    end
-   local replicas=replica_lookup()
-   local ambient,craft={},{ }
-   local authoritative_pilots={}
-   local seen={}
-   local target_entities={[tostring(player.pilot():id())]=session.settings.node_id}
-   for entity,e in pairs(session.players) do if e.local_id then target_entities[e.local_id]=entity end end
-   for entity,e in pairs(session.npcs) do if e.local_id then target_entities[e.local_id]=entity end end
-   for entity,e in pairs(session.craft) do if e.local_id then target_entities[e.local_id]=entity end end
-   for _index,p in ipairs(list) do
-      if exists(p) then
-         local id=pilot_id(p)
-         seen[id]=true
-         if p~=player.pilot() and not replicas[id]
-               and not session.local_object_pilots[id] then
-            local entity=authoritative_entity(p)
-            target_entities[id]=entity
-            local owned_by_player=session.ownership_cache[id]
-            if owned_by_player==nil then
-               owned_by_player=pilot_owned(p)
-               session.ownership_cache[id]=owned_by_player
-            end
-            if (owned_by_player and include_craft)
-                  or (not owned_by_player and include_ambient and session.machine.state=="host") then
-               if owned_by_player then
-                  craft[session.settings.node_id..":"..id]=p
-               else
-                  ambient[entity]=p
-                  authoritative_pilots[entity]=p
-               end
-            elseif prune_unauthorized and not owned_by_player then
-               unauthorized[#unauthorized+1]=p
-            end
-         end
-      end
-   end
-   for _index,p in ipairs(unauthorized) do remove_pilot(p) end
-   for id in pairs(session.ownership_cache) do
-      if not seen[id] then session.ownership_cache[id]=nil end
-   end
-   session.authoritative_pilots=authoritative_pilots
-   for id in pairs(session.authoritative_entities or {}) do
-      if not seen[id] then session.authoritative_entities[id]=nil end
-   end
-   return ambient,craft,target_entities
+   return true
 end
 
-local function cached_inventory ( stamp, force )
-   local snapshot=session.inventory_snapshot
-   if not force and snapshot
-         and stamp-session.last_inventory<INVENTORY_INTERVAL then
-      return snapshot.ambient,snapshot.craft,snapshot.target_entities,false
+local function remove_replica ( entity, explode )
+   local entry=session.players[entity] or session.npcs[entity]
+      or session.craft[entity]
+   if not entry then return false end
+   deactivate_npc(entity)
+   if entry.local_id and session.replica_by_local[entry.local_id]==entity then
+      session.replica_by_local[entry.local_id]=nil
    end
-   local ambient,craft,target_entities=inventory(true,true,
-      session.machine.state~="host" and not session.locally_claimed)
-   session.inventory_snapshot={
-      ambient=ambient,
-      craft=craft,
-      target_entities=target_entities,
-   }
-   session.last_inventory=stamp
-   local ring={}
-   for entity in pairs(ambient) do ring[#ring+1]=entity end
-   session.npc_round_robin=ring
-   if session.npc_round_robin_at>#ring then session.npc_round_robin_at=1 end
-   return ambient,craft,target_entities,true
+   if entry.origin and session.origins[entry.origin]==entity then
+      session.origins[entry.origin]=nil
+   end
+   session.players[entity]=nil
+   session.npcs[entity]=nil
+   session.craft[entity]=nil
+   session.manifest_cache[entity]=nil
+   if exists(entry.pilot) then
+      if explode then entry.pilot:explode() else entry.pilot:rm() end
+   end
+   return true
 end
 
-local function remove_guest_population ()
-   local list=pilot.get()
-   local replicas=replica_lookup()
-   for _index,p in ipairs(list) do
-      if exists(p) and p~=player.pilot() and not replicas[pilot_id(p)]
-            and not session.local_object_pilots[pilot_id(p)]
-            and not pilot_owned(p) then
-         remove_pilot(p)
-      end
-   end
-   set_ambient_spawning(false)
-   for _object_id,entry in pairs(session.local_objects) do
-      if exists(entry.pilot) then entry.pilot:setNoDeath(true) end
-   end
-end
+local player_faction
+local craft_factions={}
 
-local function craft_faction ( owner )
-   local fac=session.craft_factions[owner]
+local function owner_craft_faction ( owner )
+   local fac=craft_factions[owner]
    if fac then return fac end
-   local display=session.identities and session.identities:display_name(owner) or owner
    local raw="P2P Craft "..owner
-   local existing=resource_get(faction.get,raw)
-   if existing then fac=existing
-   else
+   fac=resource_get(faction.get,raw)
+   if not fac then
+      local display=session.identities
+         and session.identities:display_name(owner) or owner
       fac=faction.dynAdd(nil,raw,(display or owner).." Craft",
          {ai="escort",clear_allies=true,clear_enemies=true})
    end
-   session.craft_factions[owner]=fac
+   craft_factions[owner]=fac
    return fac
 end
 
-local function resolve_task_goal ( goal )
-   if not goal or goal=="" then return nil,true end
-   local entity=goal:match("^pilot:(.+)$")
-   if entity then
-      local target=entity_pilot(entity)
-      return target,target~=nil
-   end
-   local spob_name=goal:match("^spob:(.+)$")
-   local jump_name=goal:match("^jump:(.+)$")
-   local vector_x,vector_y=goal:match("^vector:([^:]+):([^:]+)$")
-   if vector_x then
-      vector_x,vector_y=tonumber(vector_x),tonumber(vector_y)
-      if vector_x and vector_y and math.abs(vector_x)<=1e9
-            and math.abs(vector_y)<=1e9 then
-         return vec2.new(vector_x,vector_y),true
-      end
-      return nil,false
-   end
-   local current=system.cur()
-   if not current then return nil,false end
-   if spob_name then
-      for _index,spob in ipairs(current:spobs()) do
-         if spob:nameRaw()==spob_name then return spob,true end
-      end
-   elseif jump_name then
-      for _index,jump in ipairs(current:jumps(true)) do
-         if jump:dest():nameRaw()==jump_name then return jump,true end
-      end
-   end
-   return nil,false
+local function replace_origin_generation ( message )
+   local old=session.origins[message.origin]
+   if old and old~=message.entity then remove_replica(old,true) end
+   session.origins[message.origin]=message.entity
 end
 
-local function apply_npc_control ( entry, message )
-   if message.ai==nil or message.task==nil or message.goal==nil then return end
-   local sequence=tonumber(message.seq)
-   local entity=message.entity or entry.entity
-   if sequence and sequence<=(entry.control_seq or -1) then return end
-   if sequence and entry.pending_control and entry.pending_control.seq
-         and sequence<entry.pending_control.seq then return end
-   local p=entry.pilot
-   local current_ai=p:ainame() or ""
-   if message.ai~="" and current_ai~=message.ai then
-      p:changeAI(message.ai)
-      ai_setup.setup(p)
-      current_ai=p:ainame() or ""
-   end
-   if current_ai~=message.ai then return end
-   if message.task=="" then
-      entry.control={entity=entity,ai=message.ai,task="",goal=""}
-      entry.control_seq=sequence or entry.control_seq
-      entry.pending_control=nil
+local function remote_player_name ( owner, fallback )
+   local name=session.identities
+      and session.identities:display_name(owner) or nil
+   return display_text(name or fallback or owner)
+end
+
+local function announce_player_join ( owner, fallback )
+   if owner==session.settings.node_id or session.present_players[owner] then
       return
    end
-   local current_task=p:taskname() or ""
-   local goal,ready=resolve_task_goal(message.goal)
-   local current_goal=p:taskdata()
-   local goal_matches=message.goal=="" or (ready and current_goal==goal)
-   if ready and not goal_matches and message.goal:sub(1,7)=="vector:"
-         and current_goal then
-      local current_type=type(current_goal)
-      local vector_goal=VECTOR_METATABLE
-            and getmetatable(current_goal)==VECTOR_METATABLE
-         or (current_type=="table" and type(current_goal.get)=="function")
-      if vector_goal then
-         local cx,cy=current_goal:get()
-         local gx,gy=goal:get()
-         goal_matches=math.abs(cx-gx)<0.01 and math.abs(cy-gy)<0.01
-      end
-   end
-   if current_task~=message.task or not goal_matches then
-      if not ready then
-         entry.pending_control={
-            entity=entity,ai=message.ai,task=message.task,
-            goal=message.goal,seq=message.seq,
-         }
-         if entity then session.pending_npc_control_entities[entity]=true end
-         return
-      end
-      -- Control repair changes only AI/task state. Motion remains under the
-      -- capped velocity and direction reconciliation path.
-      if goal and message.goal:sub(1,6)=="pilot:"
-            and p:target()~=goal then
-         p:setTarget(goal)
-      end
-      p:taskClear()
-      if message.task~="" then p:pushtask(message.task,goal) end
-   end
-   entry.control={
-      entity=entity,ai=message.ai,task=message.task,goal=message.goal,
-   }
-   entry.control_seq=sequence or entry.control_seq
-   entry.pending_control=nil
-   if entity then session.pending_npc_control_entities[entity]=nil end
-   entry.control_mismatch=nil
-   entry.control_mismatch_at=nil
+   session.present_players[owner]=true
+   local name=remote_player_name(owner,fallback)
+   player.msg("#g"..string.format(_("%s joined the system."),name).."#0")
+   print("P2P: "..name.." joined the system")
 end
 
-local function spawn_npc ( message, craft_owner )
-   local container=craft_owner and session.craft or session.npcs
-   local existing=container[message.entity]
-   if existing and not exists(existing.pilot) then
-      container[message.entity]=nil
-      existing=nil
+local function announce_player_leave ( owner )
+   if owner==session.settings.node_id or not session.present_players[owner] then
+      return
    end
-   if existing and not craft_owner and existing.manifest
-         and (existing.manifest.ship~=message.ship
-            or existing.manifest.faction~=message.faction
-            or existing.manifest.name~=message.name) then
-      remove_npc_replica(message.entity,true)
-      existing=nil
-   end
-   if existing then
-      existing.leader_id=message.leader
+   local name=remote_player_name(owner)
+   session.present_players[owner]=nil
+   player.msg("#o"..string.format(_("%s left the system."),name).."#0")
+   print("P2P: "..name.." left the system")
+end
+
+local function spawn_player_manifest ( message )
+   if message.owner==session.settings.node_id then return true end
+   replace_origin_generation(message)
+   local existing=session.players[message.entity]
+   if existing and exists(existing.pilot) then
       existing.manifest=message
-      if craft_owner then
-         session.pending_leader_owners[craft_owner]=true
+      announce_player_join(message.owner,message.name)
+      return true
+   end
+   if existing then remove_replica(message.entity,false) end
+   local proxy_ship,compatible=resolve_proxy_ship(message)
+   if not proxy_ship then return false end
+   if not player_faction then
+      player_faction=faction.dynAdd(nil,"P2P Players","P2P Players",
+         {ai="p2p_remote_control",clear_allies=true,clear_enemies=true})
+   end
+   local display=session.identities:display_name(message.owner)
+      or display_text(message.name)
+   local p=pilot.add(proxy_ship,player_faction,
+      vec2.new(message.x or 0,message.y or 0),display,
+      {ai="p2p_remote_control",naked=true})
+   if not p then return false end
+   install_outfits(p,message,not compatible)
+   install_weapon_sets(p,message.weapsets)
+   p:fillAmmo()
+   p:setNoDeath(true)
+   if message.vx and message.vy then p:setVel(vec2.new(message.vx,message.vy)) end
+   if message.dir then p:setDir(message.dir) end
+   ai_setup.setup(p)
+   local entry={
+      kind="player",owner=message.owner,entity=message.entity,
+      origin=message.origin,pilot=p,manifest=message,
+      local_id=tostring(p:id()),applied={},
+   }
+   session.players[message.entity]=entry
+   session.replica_by_local[entry.local_id]=message.entity
+   if message.armour then
+      apply_health_energy(entry,message)
+      apply_player_controls(entry,message)
+   end
+   announce_player_join(message.owner,message.name)
+   return true
+end
+
+local function resolve_waiting_leaders ( entity )
+   local waiting=session.waiting_leaders[entity]
+   if not waiting then return end
+   session.waiting_leaders[entity]=nil
+   local leader=entity_pilot(entity)
+   if not leader then return end
+   for child in pairs(waiting) do
+      local entry=session.npcs[child] or session.craft[child]
+      if entry and exists(entry.pilot) then entry.pilot:setLeader(leader) end
+   end
+end
+
+local function bind_leader ( entry, leader_id )
+   if not leader_id or leader_id=="-" then return end
+   local leader=entity_pilot(leader_id)
+   if leader then
+      entry.pilot:setLeader(leader)
+      return
+   end
+   local waiting=session.waiting_leaders[leader_id] or {}
+   waiting[entry.entity]=true
+   session.waiting_leaders[leader_id]=waiting
+end
+
+local function spawn_entity_manifest ( message )
+   if message.owner==session.settings.node_id then return true end
+   replace_origin_generation(message)
+   local container=message.kind=="npc" and session.npcs or session.craft
+   local existing=container[message.entity]
+   if existing and exists(existing.pilot) then
+      if message.kind=="npc" then
+         existing.description=message
       else
-         session.pending_npc_leaders=true
-         apply_npc_control(existing,message)
-         local pending=session.pending_npc_controls[message.entity]
-         if pending then
-            apply_npc_control(existing,pending)
-            if (existing.control_seq or -1)>=(pending.seq or -1) then
-               session.pending_npc_controls[message.entity]=nil
-            end
-         end
+         existing.manifest=message
       end
       return true
    end
-   if not resource_get(ship.get,message.ship)
-         or (not craft_owner and not resource_get(faction.get,message.faction)) then return false end
-   local fac=craft_owner and craft_faction(craft_owner) or message.faction
-   local params=craft_owner and {ai="escort",naked=true}
-      or {ai=message.ai~="" and message.ai or nil,naked=true}
-   local p=pilot.add(message.ship,fac,vec2.new(message.x or 0,message.y or 0),
-      message.name,params)
+   if existing then remove_replica(message.entity,false) end
+   if not resource_get(ship.get,message.ship) then return false end
+   local fac
+   if message.kind=="npc" then
+      fac=resource_get(faction.get,message.faction)
+   else
+      fac=owner_craft_faction(message.owner)
+   end
+   if not fac then return false end
+   local ai=message.kind=="npc" and "p2p_replica_passive" or "escort"
+   local p=pilot.add(message.ship,fac,
+      vec2.new(message.x or 0,message.y or 0),message.name,
+      {ai=ai,naked=true})
    if not p then return false end
    install_outfits(p,message,false)
-   -- Health and existence belong to the host for ambient NPCs and to the
-   -- publishing player for owned craft. Local weapons may still disable and
-   -- visibly hit replicas, but must not delete them before their authority
-   -- sends a reliable removal.
    p:setNoDeath(true)
-   local target_id=(message.target and message.target~="") and message.target or "-"
-   local entry={entity=message.entity,pilot=p,owner=craft_owner,
-      leader_id=message.leader,
-      manifest=message,
-      local_id=tostring(p:id()),sequences={},
-      applied={armour=message.armour,shield=message.shield,stress=message.stress,
-         energy=message.energy,target=target_id=="-" and "-" or nil,
-         disabled=message.disabled==true or message.disabled=="1"}}
-   container[message.entity]=entry
-   session.replica_entity_ids[entry.local_id]=message.entity
-   if not craft_owner and not session.npc_replica_enqueued[message.entity] then
-      session.npc_replica_enqueued[message.entity]=true
-      session.npc_replica_order[#session.npc_replica_order+1]=message.entity
-   end
    if message.vx and message.vy then p:setVel(vec2.new(message.vx,message.vy)) end
    if message.dir then p:setDir(message.dir) end
-   if message.armour then p:setHealth(message.armour,message.shield,message.stress) end
-   if message.energy then p:setEnergy(message.energy) end
-   if message.target and message.target~="" then
-      local target=entity_pilot(message.target)
-      if target then
-         p:setTarget(target)
-         entry.applied.target=message.target
-      end
-   end
-   if craft_owner then
-      ai_setup.setup(p)
-      session.pending_leader_owners[craft_owner]=true
+   ai_setup.setup(p)
+   local entry={
+      kind=message.kind,owner=message.owner,entity=message.entity,
+      origin=message.origin,pilot=p,
+      local_id=tostring(p:id()),applied={},
+   }
+   if message.kind=="npc" then
+      entry.description=message
    else
-      ai_setup.setup(p)
-      session.pending_npc_leaders=true
-      apply_npc_control(entry,message)
-      local pending=session.pending_npc_controls[message.entity]
-      if pending then
-         apply_npc_control(entry,pending)
-         if (entry.control_seq or -1)>=(pending.seq or -1) then
-            session.pending_npc_controls[message.entity]=nil
+      entry.manifest=message
+   end
+   container[message.entity]=entry
+   session.replica_by_local[entry.local_id]=message.entity
+   if message.armour then apply_health_energy(entry,message) end
+   bind_leader(entry,message.leader)
+   resolve_waiting_leaders(message.entity)
+   return true
+end
+
+local function remove_authority_hooks ( entry )
+   for _index,h in ipairs(entry.hooks or {}) do hook.rm(h) end
+   entry.hooks={}
+end
+
+local function unregister_authority ( entry )
+   remove_authority_hooks(entry)
+   if session.authority_by_local[entry.local_id]==entry.entity then
+      session.authority_by_local[entry.local_id]=nil
+   end
+   if session.origins[entry.origin]==entry.entity then
+      session.origins[entry.origin]=nil
+   end
+   session.manifest_cache[entry.entity]=nil
+   session.authority[entry.entity]=nil
+end
+
+local function cache_manifest ( message )
+   if not message or (message.type~="player_manifest"
+         and message.type~="entity_manifest") then return false end
+   local packet=encode_packet(gameplay_codec,message)
+   if not packet then return false end
+   if not session.manifest_cache[message.entity] then
+      session.manifest_order[#session.manifest_order+1]=message.entity
+   end
+   local cached={message=message,packet=packet}
+   session.manifest_cache[message.entity]=cached
+   return cached
+end
+
+local function broadcast_manifest ( cached )
+   if not cached then return false end
+   session.host:broadcast(cached.packet,CANONICAL_CHANNEL,"reliable")
+   return true
+end
+
+local function host_reliable ( message )
+   return broadcast_gameplay(message,true)
+end
+
+local function publish_entity_manifest ( entry )
+   local message=authority_manifest(entry)
+   if not message then return false end
+   if entry.kind=="npc" then
+      entry.description=message
+      return true
+   end
+   entry.manifest=message
+   if is_host() then
+      return broadcast_manifest(cache_manifest(message))
+   end
+   return send_host(message,true)
+end
+
+local function register_authority ( p, kind, owner, origin, entity )
+   if not exists(p) or p==player.pilot() then return nil end
+   local id=local_id(p)
+   if session.authority_by_local[id] or session.replica_by_local[id]
+         or (session.objects and session.objects:entity_for_pilot(p)) then
+      return nil
+   end
+   entity=entity or new_entity_id(owner,p,kind)
+   origin=origin or owner.."."..session.visit.."."..kind.."."..id
+   local entry={
+      kind=kind,owner=owner,origin=origin,entity=entity,pilot=p,
+      local_id=id,ai=p:ainame() or "dummy",hooks={},
+   }
+   session.authority[entity]=entry
+   session.authority_by_local[id]=entity
+   session.origins[origin]=entity
+   if kind=="npc" then
+      session.npc_order[#session.npc_order+1]=entity
+      if not session.npc_announcement_seen[entity] then
+         session.npc_announcement_seen[entity]=true
+         session.npc_announcement_queue[
+            #session.npc_announcement_queue+1]=entity
+      end
+   else
+      session.craft_order[#session.craft_order+1]=entity
+      session.world_craft_order[#session.world_craft_order+1]=entity
+   end
+   session.audit_order[#session.audit_order+1]=entity
+   entry.hooks={
+      hook.pilot(p,"death","P2P_SESSION_PILOT_DEATH",entity),
+      hook.pilot(p,"jump","P2P_SESSION_PILOT_JUMP",entity),
+      hook.pilot(p,"land","P2P_SESSION_PILOT_LAND",entity),
+   }
+   publish_entity_manifest(entry)
+   return entry
+end
+
+local function remove_unowned_guest_pilot ( p )
+   if not exists(p) or p==player.pilot() then return end
+   local id=local_id(p)
+   if session.replica_by_local[id]
+         or (session.objects and session.objects:entity_for_pilot(p))
+         or pilot_owned(p) then return end
+   p:rm()
+end
+
+function session.pilot_created ( p )
+   if not session.running or not current_system() or not exists(p) then return end
+   local id=local_id(p)
+   if not id then return end
+   session.pending_creations[id]=p
+   if session.creation_safe_pending then return end
+   session.creation_safe_pending=true
+   -- hook.safe accepts one custom argument. Keep pilots in a runtime-only
+   -- queue and pass only the visit generation to the deferred callback.
+   hook.safe("P2P_SESSION_PILOT_DEFERRED",session.lifecycle_generation)
+end
+
+function session.pilot_created_deferred ( generation )
+   if generation~=session.lifecycle_generation then return end
+   session.creation_safe_pending=nil
+   local pending=session.pending_creations
+   session.pending_creations={}
+   local registered_npcs=0
+   local registered_craft=0
+   for id,p in pairs(pending) do
+      if exists(p) and p~=player.pilot()
+            and not session.replica_by_local[id]
+            and not session.authority_by_local[id]
+            and not (session.objects
+               and session.objects:entity_for_pilot(p)) then
+         if pilot_owned(p) then
+            if register_authority(
+                  p,"craft",session.settings.node_id) then
+               registered_craft=registered_craft+1
+            end
+         elseif is_host() then
+            if register_authority(p,"npc",session.settings.node_id) then
+               registered_npcs=registered_npcs+1
+            end
+         elseif session.machine.state=="guest"
+               or session.machine.state=="recovering" then
+            remove_unowned_guest_pilot(p)
          end
       end
+   end
+   if is_host() and not session.incremental_creation_logged
+         and registered_npcs+registered_craft>0 then
+      session.incremental_creation_logged=true
+      print("P2P: registered incremental population ("
+         ..tostring(registered_npcs).." NPC, "
+         ..tostring(registered_craft).." craft)")
+   end
+end
+
+function session.pilot_departed ( p, reason, entity )
+   if not session.running or not p or p==player.pilot() then return end
+   local id=local_id(p)
+   local resolved=entity or (id and session.authority_by_local[id])
+   if entity and id and session.authority_by_local[id]~=entity then return end
+   local entry=resolved and session.authority[resolved]
+   if not entry then return end
+   unregister_authority(entry)
+   session.sequence=session.sequence+1
+   local message=gameplay_base("entity_remove")
+   message.kind=entry.kind
+   message.owner=entry.owner
+   message.entity=entry.entity
+   message.seq=session.sequence
+   message.reason=reason or "removed"
+   if is_host() then host_reliable(message)
+   else send_host(message,true) end
+end
+
+local function pilot_leader_depth ( p )
+   local depth=0
+   local cursor=p
+   local seen={}
+   while exists(cursor) and cursor~=player.pilot()
+         and not seen[cursor] and depth<64 do
+      seen[cursor]=true
+      cursor=cursor:leader()
+      if cursor then depth=depth+1 end
+   end
+   return depth
+end
+
+local function ordered_population_scan ()
+   local ordered={}
+   for _index,p in ipairs(pilot.get()) do
+      ordered[#ordered+1]={
+         pilot=p,depth=pilot_leader_depth(p),
+         id=tonumber(local_id(p)) or math.huge,
+      }
+   end
+   table.sort(ordered,function ( a,b )
+      if a.depth~=b.depth then return a.depth<b.depth end
+      return a.id<b.id
+   end)
+   return ordered
+end
+
+local function scan_initial_host_population ()
+   for _index,item in ipairs(ordered_population_scan()) do
+      local p=item.pilot
+      if exists(p) and p~=player.pilot() then
+         local id=local_id(p)
+         if not session.replica_by_local[id]
+               and not (session.objects and session.objects:entity_for_pilot(p)) then
+            if pilot_owned(p) then
+               register_authority(p,"craft",session.settings.node_id)
+            else
+               register_authority(p,"npc",session.settings.node_id)
+            end
+         end
+      end
+   end
+end
+
+local function remove_guest_ambient_once ()
+   for _index,item in ipairs(ordered_population_scan()) do
+      local p=item.pilot
+      if exists(p) and p~=player.pilot() then
+         local id=local_id(p)
+         if not session.replica_by_local[id]
+               and not session.authority_by_local[id]
+               and not (session.objects
+                  and session.objects:entity_for_pilot(p)) then
+            if pilot_owned(p) then
+               register_authority(p,"craft",session.settings.node_id)
+            else
+               p:rm()
+            end
+         end
+      end
+   end
+end
+
+local function refresh_host_manifest_cache ()
+   local host_manifest=player_manifest()
+   if host_manifest then cache_manifest(host_manifest) end
+   for owner,manifest in pairs(session.player_manifests) do
+      if owner~=session.settings.node_id then
+         cache_manifest(canonical_copy(manifest))
+      end
+   end
+   for _entity,entry in pairs(session.authority) do
+      local manifest=entry.kind~="npc"
+         and (entry.manifest or authority_manifest(entry)) or nil
+      if manifest then
+         entry.manifest=manifest
+         cache_manifest(manifest)
+      end
+   end
+   for _entity,entry in pairs(session.craft) do
+      if entry.owner~=session.settings.node_id and entry.manifest then
+         cache_manifest(canonical_copy(entry.manifest))
+      end
+   end
+end
+
+local function publish_participant_manifests ()
+   if not is_host() then return end
+   local host_cached=session.manifest_cache[local_entity()]
+   if not host_cached then
+      local host_manifest=player_manifest()
+      if host_manifest then host_cached=cache_manifest(host_manifest) end
+   end
+   broadcast_manifest(host_cached)
+   for _entity,cached in pairs(session.manifest_cache) do
+      local manifest=cached.message
+      if manifest.type=="player_manifest"
+            and manifest.owner~=session.settings.node_id then
+         broadcast_manifest(cached)
+      end
+   end
+end
+
+local function publish_manifest_tick ()
+   if not is_host() then return false end
+   local order=session.manifest_order
+   local count=#order
+   if count==0 then return false end
+   local inspected=0
+   while inspected<math.min(count,8) do
+      if session.manifest_cursor>count then session.manifest_cursor=1 end
+      local entity=order[session.manifest_cursor]
+      session.manifest_cursor=session.manifest_cursor+1
+      inspected=inspected+1
+      local cached=session.manifest_cache[entity]
+      if cached then
+         broadcast_manifest(cached)
+         return true
+      end
+   end
+   return false
+end
+
+local function remember_priority ( entity, class )
+   local entry=session.authority[entity]
+   if not entry or entry.kind~="npc" then return end
+   if entry.priority_class==class then return end
+   entry.priority_class=class
+   if not session.priority_seen[class][entity] then
+      local queue=session.priority_queues[class]
+      queue[#queue+1]=entity
+      session.priority_seen[class][entity]=true
+   end
+end
+
+local function participant_entity ( entity )
+   if entity==local_entity() then return true end
+   local entry=session.players[entity]
+   return entry~=nil
+end
+
+local function classify_npc_record ( entry, record )
+   if record.target~="-" and participant_entity(record.target)
+         and (record.primary==1 or record.secondary==1) then
+      remember_priority(entry.entity,1)
+   elseif record.target~="-" and (session.craft[record.target]
+         or (session.authority[record.target]
+            and session.authority[record.target].kind=="craft")) then
+      remember_priority(entry.entity,3)
+   else
+      entry.priority_class=nil
+   end
+end
+
+local function select_priority_class ( class )
+   local queue=session.priority_queues[class]
+   local count=#queue
+   if count==0 then return nil end
+   local at=session.priority_cursor[class] or 1
+   for _index=1,math.min(count,8) do
+      if at>count then at=1 end
+      local entity=queue[at]
+      at=at+1
+      local entry=session.authority[entity]
+      if entry and entry.kind=="npc"
+            and entry.priority_class==class and exists(entry.pilot) then
+         session.priority_cursor[class]=at
+         return entry
+      end
+   end
+   session.priority_cursor[class]=at
+end
+
+local clear_interest
+
+local function select_interest_npc ( stamp )
+   local count=#session.interest_order
+   if count==0 then return nil end
+   local at=session.interest_cursor or 1
+   for _index=1,math.min(count,8) do
+      if at>count then at=1 end
+      local node=session.interest_order[at]
+      at=at+1
+      local interest=session.target_interests[node]
+      if interest and stamp<interest.expires then
+         local entry=session.authority[interest.entity]
+         if entry and entry.kind=="npc" and exists(entry.pilot) then
+            session.interest_cursor=at
+            return entry
+         end
+      elseif interest then
+         clear_interest(node)
+      end
+   end
+   session.interest_cursor=at
+end
+
+local function select_priority_npc ( stamp, include_priority )
+   local queue=session.npc_announcement_queue
+   while #queue>0 do
+      local entity=table.remove(queue,1)
+      session.npc_announcement_seen[entity]=nil
+      local entry=session.authority[entity]
+      if entry and entry.kind=="npc" and exists(entry.pilot) then
+         return entry
+      end
+   end
+   if not include_priority then return nil end
+   return select_priority_class(1)
+      or select_interest_npc(stamp)
+      or select_priority_class(3)
+end
+
+local function detectable_by_participant ( p )
+   local pp=player.pilot()
+   if exists(pp) and pp:inrange(p) then return true end
+   local inspected=1
+   for _entity,entry in pairs(session.players) do
+      if inspected>=PARTICIPANT_VISIBILITY_CAP then break end
+      if exists(entry.pilot) then
+         inspected=inspected+1
+         if entry.pilot:inrange(p) then return true end
+      end
+   end
+   return false
+end
+
+local function select_ambient_npc ( skip )
+   local count=#session.npc_order
+   if count==0 then return nil end
+   local inspected=0
+   while inspected<AMBIENT_INSPECTION_CAP and inspected<count do
+      if session.npc_cursor>count then session.npc_cursor=1 end
+      local entity=session.npc_order[session.npc_cursor]
+      session.npc_cursor=session.npc_cursor+1
+      inspected=inspected+1
+      local entry=session.authority[entity]
+      if entry and entry.kind=="npc" and entry~=skip
+            and exists(entry.pilot) and detectable_by_participant(entry.pilot) then
+         return entry
+      end
+   end
+end
+
+local function select_world_craft ()
+   local order=session.world_craft_order
+   local count=#order
+   if count==0 then return nil end
+   local inspected=0
+   while inspected<math.min(count,4) do
+      if session.world_craft_cursor>count then session.world_craft_cursor=1 end
+      local entity=order[session.world_craft_cursor]
+      session.world_craft_cursor=session.world_craft_cursor+1
+      inspected=inspected+1
+      local authority=session.authority[entity]
+      if authority and authority.kind=="craft" and exists(authority.pilot) then
+         return state_record(authority.pilot,entity,false)
+      end
+      local replica=session.craft[entity]
+      if replica and replica.cached_state then return replica.cached_state end
+   end
+end
+
+local function select_object_state ()
+   if not session.objects then return end
+   local object_id,p=session.objects:next_state_pilot()
+   if object_id and exists(p) then return object_state_record(p,object_id) end
+end
+
+local function player_state_message ( record )
+   session.sequence=session.sequence+1
+   local message=gameplay_base("player_state")
+   message.entity=record.entity
+   message.seq=session.sequence
+   for key,value in pairs(record) do
+      if key~="entity" then message[key]=value end
+   end
+   if message.active=="" then message.active="-" end
+   return message
+end
+
+local function publish_local_control ( force, record )
+   if not current_system() then return false end
+   record=record or state_record(player.pilot(),local_entity(),true)
+   local stamp=now()
+   local signature=table.concat({
+      record.target,record.weapset,record.accel,
+      record.turn,record.reverse,record.primary,record.secondary,record.active,
+   },":")
+   if not force and signature==session.local_control_signature
+         and stamp-(session.last_control_publish or -math.huge)
+            <CONTROL_REFRESH_INTERVAL then
+      return false
+   end
+   session.local_control_signature=signature
+   session.last_control_publish=stamp
+   session.control_sequence=(session.control_sequence or 0)+1
+   local message=gameplay_base("player_control")
+   message.owner=session.settings.node_id
+   message.entity=local_entity()
+   message.seq=session.control_sequence
+   message.x=record.x
+   message.y=record.y
+   message.vx=record.vx
+   message.vy=record.vy
+   message.dir=record.dir
+   message.energy=record.energy
+   message.target=record.target
+   message.weapset=record.weapset
+   message.accel=record.accel
+   message.turn=record.turn
+   message.reverse=record.reverse
+   message.primary=record.primary
+   message.secondary=record.secondary
+   message.active=record.active~="" and record.active or "-"
+   if is_host() then
+      return host_reliable(message)
+   end
+   return send_host(message,true)
+end
+
+local function publish_owned_craft_tick ()
+   local order=session.craft_order
+   local count=#order
+   if count==0 then return end
+   local inspected=0
+   while inspected<count do
+      if session.local_craft_cursor>count then session.local_craft_cursor=1 end
+      local entity=order[session.local_craft_cursor]
+      session.local_craft_cursor=session.local_craft_cursor+1
+      inspected=inspected+1
+      local entry=session.authority[entity]
+      if entry and entry.kind=="craft"
+            and entry.owner==session.settings.node_id and exists(entry.pilot) then
+         local record=state_record(entry.pilot,entity,false)
+         entry.cached_state=record
+         if not is_host() then
+            session.sequence=session.sequence+1
+            local message=gameplay_base("craft_state")
+            message.owner=session.settings.node_id
+            message.entity=entity
+            message.seq=session.sequence
+            message.state=pack_state(record)
+            send_host(message,false)
+         end
+         return
+      end
+   end
+end
+
+local function collect_player_lines ()
+   local ordered={}
+   for owner,record in pairs(session.player_states) do
+      ordered[#ordered+1]={owner=owner,record=record}
+   end
+   table.sort(ordered,function ( a,b ) return a.owner<b.owner end)
+   local lines={}
+   for _index,item in ipairs(ordered) do
+      lines[#lines+1]=pack_state(item.record)
+   end
+   return lines
+end
+
+local publish_target_interest
+
+local function host_world_tick ( stamp )
+   local p=player.pilot()
+   if not exists(p) then return end
+   local local_record=state_record(p,local_entity(),true,stamp)
+   session.player_states[session.settings.node_id]=local_record
+   publish_target_interest(local_record,stamp)
+   publish_local_control(false,local_record)
+   publish_owned_craft_tick()
+
+   session.world_tick=(session.world_tick or 0)+1
+   local entity_lines={}
+   -- Reserve every third primary slot for the ambient ring. Important NPCs
+   -- still receive two thirds of the primary slots, while no engagement can
+   -- starve the rest of the host population.
+   local first=select_priority_npc(stamp,session.world_tick%3~=0)
+   if not first then first=select_ambient_npc() end
+   if first then
+      local record=state_record(first.pilot,first.entity,false)
+      classify_npc_record(first,record)
+      local packed=session._pack_npc_announcement(first,record)
+      if packed then entity_lines[#entity_lines+1]=packed end
+   end
+   if session.world_tick%3==0 then
+      local ambient=select_ambient_npc(first)
+      if ambient then
+         local record=state_record(ambient.pilot,ambient.entity,false)
+         classify_npc_record(ambient,record)
+         local packed=session._pack_npc_announcement(ambient,record)
+         if packed then entity_lines[#entity_lines+1]=packed end
+      end
+   end
+   local craft_record=select_world_craft()
+   if craft_record then entity_lines[#entity_lines+1]=pack_state(craft_record) end
+   local object_record=select_object_state()
+
+   session.sequence=session.sequence+1
+   local world=gameplay_base("world")
+   world.seq=session.sequence
+   local batches,err,oversized=gameplay_codec.encode_world_batches(world,{
+      players=collect_player_lines(),
+      entities=entity_lines,
+      objects=object_record and {pack_object_state(object_record)} or {},
+   },WORLD_PACKET_BUDGET)
+   if not batches then
+      local signature="world_batch:"..tostring(err)
+      if not session.encode_errors[signature] then
+         session.encode_errors[signature]=true
+         print("P2P: unable to encode bounded world frame: "..tostring(err))
+      end
+      return
+   end
+   for _index,batch in ipairs(batches) do
+      broadcast_world_packet(batch.packet)
+   end
+   for _index,line in ipairs(oversized or {}) do
+      local fallback=canonical_copy(world)
+      fallback.players="-"
+      fallback.entities=line
+      fallback.objects="-"
+      host_reliable(fallback)
+   end
+   if not session.world_tx_logged then
+      session.world_tx_logged=true
+      print("P2P: canonical world stream active (native broadcast, "
+         ..tostring(#batches).." datagrams)")
+   end
+end
+
+local function guest_world_tick ( stamp )
+   if session.machine.state~="guest" or not peer_for_node(session.machine.host) then
+      return
+   end
+   local p=player.pilot()
+   if not exists(p) then return end
+   local record=state_record(p,local_entity(),true,stamp)
+   session.player_states[session.settings.node_id]=record
+   publish_target_interest(record,stamp)
+   publish_local_control(false,record)
+   local peer=peer_for_node(session.machine.host)
+   if peer then session._send_game_state(peer,player_state_message(record)) end
+   publish_owned_craft_tick()
+end
+
+function session._relay_player_state ( record )
+   session.sequence=session.sequence+1
+   local world=gameplay_base("world")
+   world.seq=session.sequence
+   local batches,err=gameplay_codec.encode_world_batches(world,{
+      players={pack_state(record)},entities={},objects={},
+   },WORLD_PACKET_BUDGET)
+   if not batches then
+      local signature="player_relay:"..tostring(err)
+      if not session.encode_errors[signature] then
+         session.encode_errors[signature]=true
+         print("P2P: unable to relay player state: "..tostring(err))
+      end
+      return false
+   end
+   for _index,batch in ipairs(batches) do
+      broadcast_world_packet(batch.packet)
    end
    return true
 end
 
-reconcile_craft_leaders = function ( owner )
-   for _entity_id,entry in pairs(session.craft) do
-      if entry.owner==owner and exists(entry.pilot) then
-         local leader
-         if entry.leader_id==owner then
-            local player_entry=session.players[owner]
-            leader=player_entry and player_entry.pilot or nil
-         elseif entry.leader_id and entry.leader_id~="" then
-            local craft_entry=session.craft[entry.leader_id]
-            leader=craft_entry and craft_entry.pilot or nil
+local function request_entity_manifest ( entity, stamp )
+   if session.machine.state~="guest" or not entity or entity=="-" then
+      return false
+   end
+   stamp=stamp or now()
+   if stamp-(session.manifest_queries[entity] or -math.huge)
+         <MANIFEST_QUERY_COOLDOWN then return false end
+   session.manifest_queries[entity]=stamp
+   session.sequence=session.sequence+1
+   local message=gameplay_base("entity_query")
+   message.entity=entity
+   message.seq=session.sequence
+   return send_host(message,true)
+end
+
+local function remember_pending_state ( record, stamp, sequence, kind )
+   if not session.pending_states[record.entity] then
+      if session.pending_state_count>=256 then return false end
+      session.pending_state_count=session.pending_state_count+1
+   end
+   session.pending_states[record.entity]={
+      record=record,stamp=stamp,sequence=sequence,kind=kind,
+   }
+   return true
+end
+
+local function take_pending_state ( entity )
+   local pending=session.pending_states[entity]
+   if pending then
+      session.pending_states[entity]=nil
+      session.pending_state_count=math.max(
+         0,session.pending_state_count-1)
+   end
+   return pending
+end
+
+local function parse_world_records ( packed, callback, stamp, sequence, kind )
+   if packed=="-" then return end
+   local count=0
+   for line in packed:gmatch("([^;]+)") do
+      count=count+1
+      if count>128 then break end
+      local record=unpack_state(line)
+      if record and callback(record,stamp,sequence)==false
+            and record.entity~=local_entity()
+            and not session.players[record.entity]
+            and not session.npcs[record.entity]
+            and not session.craft[record.entity]
+            and not session.authority[record.entity] then
+         remember_pending_state(record,stamp,sequence,kind)
+         request_entity_manifest(record.entity,stamp)
+      end
+   end
+end
+
+function session._parse_world_entities ( packed, stamp, sequence )
+   if packed=="-" then return end
+   local count=0
+   for line in packed:gmatch("([^;]+)") do
+      count=count+1
+      if count>128 then break end
+      if line:sub(1,2)=="n," then
+         local record,description=session._unpack_npc_announcement(line)
+         if record and description
+               and description.owner==session.machine.host
+               and record.entity~=local_entity() then
+            local known=session.npcs[record.entity]
+            if known or spawn_entity_manifest(description) then
+               apply_entity_record(record,stamp,sequence)
+               if not session.incremental_replica_logged then
+                  session.incremental_replica_logged=true
+                  print("P2P: receiving complete round-robin NPC announcements")
+               end
+            end
          end
-         if leader and exists(leader) and entry.bound_leader~=leader then
-            entry.pilot:setLeader(leader)
-            entry.bound_leader=leader
+      else
+         local record=unpack_state(line)
+         if record and apply_entity_record(record,stamp,sequence)==false
+               and record.entity~=local_entity()
+               and not session.craft[record.entity]
+               and not session.authority[record.entity] then
+            remember_pending_state(record,stamp,sequence,"entity")
+            request_entity_manifest(record.entity,stamp)
          end
       end
    end
 end
 
-local function reconcile_npc_leaders ()
-   for _entity_id,entry in pairs(session.npcs) do
-      if exists(entry.pilot) then
-         local leader_entry=entry.leader_id and session.npcs[entry.leader_id]
-         local leader=leader_entry and leader_entry.pilot or nil
-         if leader and exists(leader) and entry.pilot:leader()~=leader then
-            entry.pilot:setLeader(leader)
-         end
+local function apply_world ( message )
+   local stamp=now()
+   parse_world_records(
+      message.players,apply_player_record,stamp,message.seq,"player")
+   session._parse_world_entities(message.entities,stamp,message.seq)
+   if message.objects~="-" then
+      local count=0
+      for line in message.objects:gmatch("([^;]+)") do
+         count=count+1
+         if count>32 then break end
+         local record=unpack_object_state(line)
+         if record then apply_object_state(record,stamp,message.seq) end
       end
    end
+end
+
+local function apply_player_control_message ( message )
+   if message.owner==session.settings.node_id then return true end
+   local entry=session.players[message.entity]
+   if not entry or not exists(entry.pilot) then return false end
+   if message.seq<=(entry.control_sequence or -1) then return false end
+   local target=entity_pilot(message.target)
+   if message.target~="-" and not target then return nil,"absent" end
+   entry.control_sequence=message.seq
+   reconcile_arrival(entry,message,player_limits,now())
+   apply_player_controls(entry,message)
+   apply_active_outfits(entry,message.active)
+   if entry.applied.energy~=message.energy then
+      entry.pilot:setEnergy(message.energy)
+      entry.applied.energy=message.energy
+   end
+   return true
 end
 
 local function apply_craft_order ( message )
-   local owner_entry=session.players[message.owner]
-   local leader=owner_entry and owner_entry.pilot or nil
-   if not leader or not exists(leader) then return end
+   local target=entity_pilot(message.target)
+   local manifest=session.player_manifests[message.owner]
+   local leader=manifest and entity_pilot(manifest.entity)
+   if not leader then return end
    local recipients={}
-   for _entity_id,entry in pairs(session.craft) do
+   for _entity,entry in pairs(session.craft) do
       if entry.owner==message.owner and exists(entry.pilot) then
          recipients[#recipients+1]=entry.pilot
       end
    end
-   if #recipients==0 then return end
-   local target=message.order=="e_attack" and entity_pilot(message.target) or nil
-   if message.order=="e_attack" and not target then return end
+   if #recipients==0 or (message.order=="e_attack" and not target) then return end
    if target==player.pilot() then
       mark_player_aggression(message.owner)
-      for _index,recipient in ipairs(recipients) do recipient:setHostile(true) end
+      for _index,p in ipairs(recipients) do p:setHostile(true) end
    end
    leader:msg(recipients,message.order,target)
 end
 
-local publish_entities,publish_player,publish_manifests,remember_npc_interest
-
-local function parse_states ( packed, container, owner, sequence )
-   local missing=false
-   local received=now()
-   local limits=owner and craft_smoothing or npc_smoothing
-   local step=owner and 1 or NPC_STATE_INTERVAL
-   for line in packed:gmatch("([^;]+)") do
-      local f={}; for value in line:gmatch("([^,]+)") do f[#f+1]=value end
-      local id=f[1]; local entry=container[id]
-      if entry and not exists(entry.pilot) then
-         container[id]=nil
-         entry=nil
-      end
-      local applicable=entry and (not owner or entry.owner==owner)
-         and exists(entry.pilot)
-      if applicable and reconcile.accept(entry.sequences,"state",sequence) then
-         local state={x=tonumber(f[2]),y=tonumber(f[3]),vx=tonumber(f[4]),vy=tonumber(f[5]),dir=tonumber(f[6]),armour=tonumber(f[7]),shield=tonumber(f[8]),stress=tonumber(f[9]),energy=tonumber(f[10])}
-         local bounded=state.x and state.energy and math.abs(state.x)<=1e9 and math.abs(state.y)<=1e9
-            and math.abs(state.vx)<=1e7 and math.abs(state.vy)<=1e7 and math.abs(state.dir)<=1e6
-            and state.armour>=0 and state.armour<=1e9 and state.shield>=0 and state.shield<=1e9
-            and state.stress>=0 and state.stress<=1e9 and state.energy>=0 and state.energy<=1e9
-         if bounded then
-            motion_target(entry,state,received)
-            -- NPC and owned-craft populations can contain hundreds of pilots.
-            -- Correct replicas only when their authoritative packet arrives.
-            -- NPC angular correction is capped, so a bad direction is repaired
-            -- over multiple packets without adding any per-frame NPC work.
-            smooth_entry(entry,step,received,limits)
-            local live_armour,live_shield,live_stress=entry.pilot:health()
-            if math.abs(live_armour-state.armour)>0.01
-                  or math.abs(live_shield-state.shield)>0.01
-                  or math.abs(live_stress-state.stress)>0.01 then
-               entry.pilot:setHealth(state.armour,state.shield,state.stress)
-            end
-            local live_energy=entry.pilot:energy()
-            if math.abs(live_energy-state.energy)>0.01 then
-               entry.pilot:setEnergy(state.energy)
-            end
-            local authoritative_disabled=f[12]=="1"
-            if entry.pilot:disabled()~=authoritative_disabled then
-               entry.pilot:setDisable(authoritative_disabled)
-            end
-            local target_id=(f[11] and f[11]~="") and f[11] or "-"
-            local target=target_id=="-" and nil or entity_pilot(target_id)
-            if (target_id=="-" or target) and entry.pilot:target()~=target then
-                  entry.pilot:setTarget(target)
-               if owner and target==player.pilot() then entry.pilot:setHostile(true) end
-            end
-            if not owner and entry.control then
-               apply_npc_control(entry,entry.control)
-            end
-         end
-      elseif not entry and id then
-         missing=true
-      end
-   end
-   if missing and request_resync and now()>=(session.initial_sync_until or 0) then
-      -- One state packet can mention the host's entire NPC population. Ask
-      -- that authority once, not once per missing line/entity.
-      request_resync(owner and "craft" or "npc",owner)
-   end
+local function entity_absent ( peer, entity )
+   session.sequence=session.sequence+1
+   local message=gameplay_base("entity_absent")
+   message.entity=entity
+   message.seq=session.sequence
+   send_game(peer,message,true)
 end
 
-local function parse_manifest_field ( field )
-   if field=="~" then return "" end
-   if field:sub(1,1)~="v" then return nil end
-   return codec.unescape(field:sub(2))
-end
-
-local function advance_guest_population ( population )
-   population=tonumber(population)
-   if not population then return false end
-   session.guest_npc_population=population
-   while session.npc_population_events[population+1] do
-      session.npc_population_events[population+1]=nil
-      population=population+1
-      session.guest_npc_population=population
+clear_interest = function ( node )
+   local old=session.target_interests[node]
+   if old then
+      local count=(session.interest_entities[old.entity] or 1)-1
+      session.interest_entities[old.entity]=count>0 and count or nil
    end
-   for revision in pairs(session.npc_population_events) do
-      if revision<=population then session.npc_population_events[revision]=nil end
+   session.target_interests[node]=nil
+end
+
+local function remember_interest ( node, entity )
+   if entity=="-" then
+      clear_interest(node)
+      return
    end
-   return true
-end
-
-local function guest_population_has_gap ()
-   local population=session.guest_npc_population
-   if population==nil then return true end
-   for revision in pairs(session.npc_population_events) do
-      if revision>population+1 then return true end
+   local old=session.target_interests[node]
+   if old and old.entity~=entity then clear_interest(node); old=nil end
+   if not session.interest_seen[node] then
+      session.interest_order[#session.interest_order+1]=node
+      session.interest_seen[node]=true
    end
-   return false
-end
-
-local function note_population_event ( message )
-   local population=tonumber(message.population)
-   if not population or message.snapshot~=nil then return end
-   local current=session.guest_npc_population
-   if current~=nil and population<=current then return end
-   session.npc_population_events[population]=true
-   if current~=nil then advance_guest_population(current) end
-   if not session.receiving_npc_snapshot and guest_population_has_gap() then
-      request_resync("npc")
+   if not old then
+      session.interest_entities[entity]=
+         (session.interest_entities[entity] or 0)+1
    end
-end
-
-local function accept_npc_snapshot ( message )
-   if message.snapshot==nil then return true end
-   local current=session.receiving_npc_snapshot
-   if current and current.claim==message.claim then
-      if message.snapshot<current.snapshot then return false end
-      if message.snapshot==current.snapshot then
-         return not current.baseline or not message.baseline
-            or current.baseline==message.baseline
-      end
-   end
-   session.receiving_npc_snapshot={
-      claim=message.claim,snapshot=message.snapshot,seen={},count=0,
-      baseline=message.baseline,
-      deadline=now()+NPC_SNAPSHOT_TIMEOUT,
-   }
-   return true
-end
-
-local function mark_npc_snapshot ( message, entity )
-   local current=session.receiving_npc_snapshot
-   if message.snapshot==nil or not current
-         or current.claim~=message.claim
-         or current.snapshot~=message.snapshot
-         or current.seen[entity] then return end
-   current.seen[entity]=true
-   current.count=current.count+1
-end
-
-local function complete_npc_snapshot ( current )
-   if current.pruning then return false end
-   local expected=current.expected_count
-   if expected==nil or current.count<expected then return false end
-   if current.count>expected then
-      session.receiving_npc_snapshot=nil
-      request_resync("npc")
-      return false
-   end
-   current.pruning=true
-   current.prune_at=1
-   current.prune_limit=#session.npc_replica_order
-   return false
-end
-
-local function service_npc_snapshot_prune ()
-   local current=session.receiving_npc_snapshot
-   if not current or not current.pruning then return end
-   local processed=0
-   while current.prune_at<=current.prune_limit
-         and processed<NPC_SNAPSHOT_PRUNE_PER_FRAME do
-      local entity=session.npc_replica_order[current.prune_at]
-      current.prune_at=current.prune_at+1
-      processed=processed+1
-      local lifecycle=session.npc_lifecycle_sequences[entity] or -1
-      if session.npcs[entity] and not current.seen[entity]
-            and lifecycle<=(current.baseline or current.done_seq) then
-         remove_npc_replica(entity,true)
-      end
-   end
-   if current.prune_at>current.prune_limit then
-      advance_guest_population(current.population)
-      if guest_population_has_gap() then request_resync("npc") end
-      session.receiving_npc_snapshot=nil
-   end
-end
-
-local function finish_npc_snapshot ( message )
-   local current=session.receiving_npc_snapshot
-   if not current or current.claim~=message.claim
-         or message.snapshot>current.snapshot then
-      current={
-         claim=message.claim,snapshot=message.snapshot,seen={},count=0,
-         baseline=message.baseline,population=message.population,
-         deadline=now()+NPC_SNAPSHOT_TIMEOUT,
-      }
-      session.receiving_npc_snapshot=current
-   elseif message.snapshot<current.snapshot then
-      return false
-   elseif current.baseline and message.baseline
-         and current.baseline~=message.baseline then
-      return false
-   end
-   current.expected_count=message.count
-   current.done_seq=message.seq
-   current.baseline=message.baseline or current.baseline or message.seq
-   current.population=message.population or current.population
-   return complete_npc_snapshot(current)
-end
-
-local function accept_lifecycle ( sequences, entity, sequence )
-   sequence=tonumber(sequence)
-   if not sequence or sequence<=(sequences[entity] or -1) then return false end
-   sequences[entity]=sequence
-   return true
-end
-
-local function clear_owner_lifecycle ( sequences, owner )
-   local prefix=owner..":"
-   for entity in pairs(sequences) do
-      if entity:sub(1,#prefix)==prefix then sequences[entity]=nil end
-   end
-end
-
-local function spawn_npc_manifest ( message )
-   for line in message.entities:gmatch("([^;]+)") do
-      local fields,field_count,valid={},0,true
-      for field in line:gmatch("([^,]+)") do
-         field_count=field_count+1
-         local decoded=parse_manifest_field(field)
-         if decoded==nil then valid=false else fields[field_count]=decoded end
-      end
-      if valid and (field_count==17 or field_count==20) then
-         local manifest={
-            type="npc_add",node=message.node,system=message.system,claim=message.claim,
-            seq=message.seq,entity=fields[1],ship=fields[2],name=fields[3],
-            faction=fields[4],outfits=fields[5],slots=fields[6],
-            x=fields[7],y=fields[8],vx=fields[9],vy=fields[10],dir=fields[11],
-            armour=fields[12],shield=fields[13],stress=fields[14],energy=fields[15],
-            target=fields[16]~="" and fields[16] or nil,
-            leader=fields[17]~="" and fields[17] or nil,
-            ai=fields[18],task=fields[19],goal=fields[20],
-         }
-         if codec.validate(manifest) then
-            local accepted=accept_lifecycle(session.npc_lifecycle_sequences,
-               manifest.entity,message.baseline or message.seq)
-            if (accepted and spawn_npc(manifest)) or not accepted then
-               mark_npc_snapshot(message,manifest.entity)
-               local current=session.receiving_npc_snapshot
-               if current then complete_npc_snapshot(current) end
-            end
-         end
-      end
-   end
-end
-
-local function apply_npc_control_batch ( message )
-   for line in message.entities:gmatch("([^;]+)") do
-      local fields,field_count,valid={},0,true
-      for field in line:gmatch("([^,]+)") do
-         field_count=field_count+1
-         local decoded=parse_manifest_field(field)
-         if decoded==nil then valid=false else fields[field_count]=decoded end
-      end
-      if valid and field_count==4 then
-         local control={
-            type="npc_control",node=message.node,system=message.system,
-            claim=message.claim,seq=message.baseline or message.seq,
-            entities=message.entities,
-            entity=fields[1],ai=fields[2],task=fields[3],goal=fields[4],
-         }
-         local entry=session.npcs[control.entity]
-         if codec.validate(control) then
-            if entry and exists(entry.pilot) then
-               apply_npc_control(entry,control)
-            else
-               local pending=session.pending_npc_controls[control.entity]
-               local lifecycle=session.npc_lifecycle_sequences[control.entity]
-               if (not lifecycle or control.seq>lifecycle)
-                     and (not pending or control.seq>pending.seq) then
-                  session.pending_npc_controls[control.entity]=control
-               end
-            end
-         end
-      end
-   end
-end
-
-local function handle_host_loss ()
-   session.machine:host_lost()
-   reconcile.host_lost(session.npcs)
+   session.target_interests[node]={entity=entity,expires=now()+5}
 end
 
 local function promote_guest_population ()
-   -- Replicas already run native AI. On takeover their current live state is
-   -- the new authority; only remove replica protection and bookkeeping.
-   session.authoritative_entities={}
-   session.authoritative_pilots={}
-   session.pending_fighter_bays={}
-   local inherited_fighters={}
-   local inherited_count=0
-   for _entity_id,entry in pairs(session.npcs) do
-      if exists(entry.pilot) and entry.leader_id and entry.leader_id~="" then
-         inherited_fighters[entry.leader_id]=true
+   local promoted={}
+   for old_entity,entry in pairs(session.npcs) do
+      deactivate_npc(old_entity)
+      if session.replica_by_local[entry.local_id]==old_entity then
+         session.replica_by_local[entry.local_id]=nil
       end
-   end
-   for entity_id,entry in pairs(session.npcs) do
+      if session.origins[entry.origin]==old_entity then
+         session.origins[entry.origin]=nil
+      end
       if exists(entry.pilot) then
-         inherited_count=inherited_count+1
-         if entry.manifest and inherited_fighters[entity_id]
-               and manifest_has_fighter_bay(entry.manifest) then
-            session.pending_fighter_bays[entity_id]={
-               pilot=entry.pilot,manifest=entry.manifest,
-            }
-         elseif entry.manifest then
-            install_outfits(entry.pilot,entry.manifest,true)
-         end
-         entry.pilot:setNoDeath(false)
-         local local_id=pilot_id(entry.pilot)
-         if local_id then session.authoritative_entities[local_id]=entity_id end
-         session.authoritative_pilots[entity_id]=entry.pilot
+         local entity=new_entity_id(
+            session.settings.node_id,entry.pilot,"npc")
+         promoted[#promoted+1]={
+            pilot=entry.pilot,kind="npc",entity=entity,
+            origin=entry.origin,
+            ai=entry.description.ai,
+            depth=pilot_leader_depth(entry.pilot),
+            id=tonumber(entry.local_id) or math.huge,
+         }
       end
    end
+   table.sort(promoted,function ( a,b )
+      if a.depth~=b.depth then return a.depth<b.depth end
+      return a.id<b.id
+   end)
    session.npcs={}
-   session.host_inventory={}
-   session.host_npc_controls={}
-   session.pending_npc_controls={}
-   session.pending_npc_control_entities={}
-   session.npc_lifecycle_sequences={}
-   session.npc_snapshot=0
-   session.receiving_npc_snapshot=nil
-   session.host_npc_population=0
-   session.guest_npc_population=nil
-   session.npc_population_events={}
-   session.pending_npc_leaders=nil
-   -- Snapshot-created pilots have no native Naev presence charge. Re-enabling
-   -- the scheduler underneath them would create a second full ambient
-   -- population. An initial claimant has no inherited replicas and should use
-   -- Naev's normal scheduler; a failover authority keeps the inherited
-   -- population for the remainder of this system visit.
-   set_ambient_spawning(inherited_count==0)
-   for _object_id,entry in pairs(session.local_objects) do
-      if exists(entry.pilot) then entry.pilot:setNoDeath(false) end
+   session.active_npcs={}
+   session.active_order={}
+   for _index,item in ipairs(promoted) do
+      item.pilot:taskClear()
+      item.pilot:changeAI(item.ai)
+      ai_setup.setup(item.pilot)
+      item.pilot:taskClear()
+      item.pilot:setNoDeath(false)
+      register_authority(item.pilot,item.kind,session.settings.node_id,
+         item.origin,item.entity)
    end
+   session.promoted_visit=true
+   set_ambient_spawning(false)
 end
 
 local function demote_host_population ()
-   -- A recovering host can rejoin a guest that inherited these same stable
-   -- entities. Preserve the live pilots as replicas until the new host's
-   -- complete snapshot proves otherwise. This avoids a visible population
-   -- teardown/recreation during authority transfer.
-   local ambient=inventory(true,false)
-   for entity,p in pairs(ambient) do
-      if exists(p) and not session.npcs[entity] then
-         local deferred=session.pending_fighter_bays[entity]
-         local manifest=deferred and deferred.manifest
-            or manifest_record(p,entity,true)
-         for slot,o in pairs(p:outfits()) do
-            if o and o:type()=="Fighter Bay" then p:outfitRmSlot(slot) end
-         end
-         p:setNoDeath(true)
-         local target_id=manifest.target~="" and manifest.target or "-"
-         session.npcs[entity]={
-            entity=entity,pilot=p,leader_id=manifest.leader,manifest=manifest,
-            local_id=pilot_id(p),sequences={},
-            control={ai=manifest.ai,task=manifest.task,goal=manifest.goal},
-            applied={
-               armour=manifest.armour,shield=manifest.shield,
-               stress=manifest.stress,energy=manifest.energy,
-               target=target_id,disabled=manifest.disabled==true,
-            },
-         }
-         local local_id=pilot_id(p)
-         if local_id then session.replica_entity_ids[local_id]=entity end
-         if not session.npc_replica_enqueued[entity] then
-            session.npc_replica_enqueued[entity]=true
-            session.npc_replica_order[#session.npc_replica_order+1]=entity
-         end
+   local demoted={}
+   for entity,entry in pairs(session.authority) do
+      if entry.kind=="npc" and exists(entry.pilot) then
+         remove_authority_hooks(entry)
+         entry.pilot:taskClear()
+         entry.pilot:changeAI("p2p_replica_passive")
+         ai_setup.setup(entry.pilot)
+         entry.pilot:setNoDeath(true)
+         demoted[#demoted+1]=entry
+         session.authority[entity]=nil
+         session.authority_by_local[entry.local_id]=nil
       end
    end
-   session.authoritative_entities={}
-   session.authoritative_pilots={}
-   session.host_inventory={}
-   session.host_npc_controls={}
-   session.pending_fighter_bays={}
-   session.pending_npc_leaders=true
+   for _index,entry in ipairs(demoted) do
+      session.npcs[entry.entity]=entry
+      session.replica_by_local[entry.local_id]=entry.entity
+      session.origins[entry.origin]=entry.entity
+   end
    set_ambient_spawning(false)
-   for _object_id,entry in pairs(session.local_objects) do
-      if exists(entry.pilot) then entry.pilot:setNoDeath(true) end
-   end
 end
 
-local function join_host_population ( old_state )
-   local preserving=old_state=="host"
-      or (old_state=="recovering" and next(session.host_inventory)~=nil)
-   if preserving then demote_host_population()
-   else remove_guest_population() end
-   session.host_npc_controls={}
-   session.pending_npc_controls={}
-   session.pending_npc_control_entities={}
-   session.npc_lifecycle_sequences={}
-   session.receiving_npc_snapshot=nil
-   session.guest_npc_population=nil
-   session.npc_population_events={}
-end
-
-local function host_hint ( peer )
-   local hint
-   if session.machine.state=="host" then
-      hint={host=session.settings.node_id,endpoint=session.endpoint,claim=session.machine.claim,expires=now()+60}
-   elseif not session.locally_claimed then
-      hint=session.machine.topology:hint(session.machine.system)
-   end
-   if hint then
-      send(peer,{type="hint",node=session.settings.node_id,system=session.machine.system,host=hint.host,
-         endpoint=hint.endpoint,claim=hint.claim,ttl=math.max(1,math.min(60,hint.expires-now()))},true)
-   end
-end
-
-local buoy_faction
-
-local function object_directory_peer ()
-   if session.object_client and session.object_client:available() then
-      return session.object_client
-   end
-end
-
-local function publish_object_capability ()
-   local cache=naev.cache()
-   cache.multiplayer_p2p_objects=session.running
-      and object_directory_peer()~=nil or false
-end
-
-local function next_object_request ()
-   session.object_request=(session.object_request or 0)+1
-   return session.object_request
-end
-
-local function remove_local_object ( object_id )
-   local entry=session.local_objects[object_id]
-   if not entry then return end
-   entry.removing=true
-   if entry.hook then hook.rm(entry.hook) end
-   if entry.local_id then session.local_object_pilots[entry.local_id]=nil end
-   remove_pilot(entry.pilot)
-   session.local_objects[object_id]=nil
-end
-
-local function explode_local_object ( object_id )
-   local entry=session.local_objects[object_id]
-   if not entry then return end
-   entry.removing=true
-   if entry.hook then hook.rm(entry.hook) end
-   if entry.local_id then session.local_object_pilots[entry.local_id]=nil end
-   session.local_objects[object_id]=nil
-   if exists(entry.pilot) then entry.pilot:explode() end
-end
-
-local function clear_local_objects ()
-   local ids={}
-   for object_id in pairs(session.local_objects) do ids[#ids+1]=object_id end
-   for _index,object_id in ipairs(ids) do remove_local_object(object_id) end
-end
-
-local function message_buoy_endpoint ( object )
-   if object.kind~="message_buoy" or not session.machine
-         or not session.machine.system then return end
-   for _index,endpoint in ipairs(object.endpoints) do
-      if endpoint.visible and endpoint.system==session.machine.system then
-         return endpoint
-      end
-   end
-end
-
-local function remember_object ( object )
-   for _index,endpoint in ipairs(object.endpoints) do
-      if endpoint.visible then
-         local known=session.known_objects_by_system[endpoint.system]
-         if not known then
-            known={}
-            session.known_objects_by_system[endpoint.system]=known
-         end
-         known[object.id]=object
-      end
-   end
-end
-
-local function forget_object ( object_id )
-   for system_name,known in pairs(session.known_objects_by_system) do
-      known[object_id]=nil
-      if next(known)==nil then
-         session.known_objects_by_system[system_name]=nil
-      end
-   end
-end
-
-local function spawn_local_object ( object )
-   local endpoint=message_buoy_endpoint(object)
-   if not endpoint then return end
-   local old=session.local_objects[object.id]
-   if old and old.object.revision>=object.revision then return end
-   if old then remove_local_object(object.id) end
-   if not buoy_faction then
-      buoy_faction=faction.dynAdd(nil,"P2P Message Buoys","Message Buoys",
-         {ai="dummy",clear_allies=true,clear_enemies=true})
-   end
-   local p=pilot.add("Message Buoy",buoy_faction,
-      vec2.new(endpoint.x,endpoint.y),
-      "Message Buoy",{ai="dummy",naked=true})
-   if not p then return end
-   p:setDir(endpoint.dir)
-   p:setFriendly(true)
-   -- Guest copies receive local impact effects, but persistent-object
-   -- existence is decided by the host's native simulation. Guest player
-   -- controls target this exact object ID on the host proxy.
-   p:setNoDeath(session.machine.state~="host")
-   -- Persistent objects are navigation landmarks. Keep the local copy
-   -- detectable throughout the system regardless of ordinary sensor range.
-   p:setVisplayer(true)
-   p:setHilight(true)
-   local local_id=tostring(p:id())
-   local entry={object=object,pilot=p,local_id=local_id,
-      announce_at=now()+1}
-   session.local_objects[object.id]=entry
-   session.local_object_pilots[local_id]=object.id
-   entry.hook=hook.pilot(p,"death","P2P_OBJECT_DESTROYED",object.id)
-end
-
-local function spawn_known_objects ( system_name )
-   for _object_id,object in pairs(
-         session.known_objects_by_system[system_name] or {}) do
-      spawn_local_object(object)
-   end
-end
-
-local function complete_object_create ( request, pending, object_id )
-   -- The reliable result is independently sufficient proof that the directory
-   -- accepted this exact object. Do not depend on the separate subscription
-   -- push to make the deploying client see its own buoy.
-   if pending.object and pending.object.id==object_id then
-      remember_object(pending.object)
-      spawn_local_object(pending.object)
-   end
-   session.pending_object_requests[request]=nil
-   naev.cache().multiplayer_buoy_consume={
-      slot=pending.slot,object_id=object_id,
-   }
-   player.msg("#g".._("Message buoy deployed.").."#0")
-end
-
-local function fail_object_create ( request, code )
-   session.pending_object_requests[request]=nil
-   local reasons={
-      occupied=_("This system already has a message buoy."),
-      capacity=_("The directory cannot accept more persistent objects."),
-      duplicate=_("That object ID is already in use."),
-      forbidden=_("The directory rejected the message buoy."),
-      invalid=_("The directory rejected invalid buoy data."),
-      timeout=_("Message buoy deployment timed out."),
-      missing=_("The directory did not retain the message buoy."),
-   }
-   player.msg("#r"..(reasons[code]
-      or _("Message buoy deployment failed.")).."#0")
-end
-
-local function reconcile_object_create ( object )
-   if object.owner~=session.settings.node_id then return end
-   for request,pending in pairs(session.pending_object_requests) do
-      if (pending.action=="create" or pending.action=="create_reconcile")
-            and pending.object_id==object.id
-            and pending.system
-            and Object.visible_in(object,pending.system) then
-         complete_object_create(request,pending,object.id)
-         return true
-      end
-   end
-end
-
-local function apply_object_entry ( message )
-   local object=Object.decode(message.object)
-   if not object then return end
-   reconcile_object_create(object)
-   if message.request==0 then
-      remember_object(object)
-      spawn_local_object(object)
-      return
-   end
-   local pending=session.pending_object_requests[message.request]
-   if not pending or pending.action~="query"
-         or not Object.visible_in(object,pending.system) then return end
-   pending.objects[object.id]=object
-end
-
-local send_object_create
-
-local function finish_object_query ( message )
-   local pending=session.pending_object_requests[message.request]
-   if not pending or pending.action~="query"
-         or pending.system~=message.system then return end
-   local received=0
-   for _object_id in pairs(pending.objects) do received=received+1 end
-   if received~=message.count then
-      session.pending_object_requests[message.request]=nil
-      session.object_confirmed_system=nil
-      session.object_confirmed_at=-math.huge
-      if session.object_client then session.object_client:invalidate() end
-      return
-   end
-   session.pending_object_requests[message.request]=nil
-   local occupied=false
-   for _id,object in pairs(pending.objects) do
-      if object.kind=="message_buoy"
-            and Object.visible_in(object,pending.system) then
-         occupied=true
-         break
-      end
-   end
-   for request,creation in pairs(session.pending_object_requests) do
-      if creation.action=="create_reconcile"
-            and creation.system==message.system then
-         if occupied then
-            fail_object_create(request,"occupied")
-         else
-            creation.action="create"
-            send_object_create(object_directory_peer(),request,creation)
-         end
-      end
-   end
-   local previously_known=session.known_objects_by_system[message.system] or {}
-   for object_id in pairs(previously_known) do
-      if not pending.objects[object_id] then forget_object(object_id) end
-   end
-   session.known_objects_by_system[message.system]=nil
-   for _id,object in pairs(pending.objects) do remember_object(object) end
-   if session.object_subscription_system==message.system then
-      session.object_confirmed_system=message.system
-      session.object_confirmed_at=now()
-   end
-   print("P2P objects: confirmed "..message.system.." request="
-      ..tostring(message.request).." count="..tostring(message.count))
-   if not session.machine or session.machine.system~=message.system then return end
-   local remove={}
-   for object_id in pairs(session.local_objects) do
-      if not pending.objects[object_id] then remove[#remove+1]=object_id end
-   end
-   for _index,object_id in ipairs(remove) do explode_local_object(object_id) end
-   for _id,object in pairs(pending.objects) do spawn_local_object(object) end
-end
-
-local function query_objects ( peer )
-   if not peer or not session.machine or not session.machine.system then return end
-   local system_name=session.machine.system
-   for _request,pending in pairs(session.pending_object_requests) do
-      if pending.action=="query" and pending.system==system_name then return end
-   end
-   local request=next_object_request()
-   session.pending_object_requests[request]={
-      action="query",system=system_name,objects={},
-      deadline=now()+OBJECT_QUERY_TIMEOUT,
-   }
-   send(peer,{type="object_query",node=session.settings.node_id,
-      system=system_name,request=request},true)
-   print("P2P objects: query "..system_name.." request="..tostring(request))
-end
-
-local function ensure_object_subscription ()
-   if not session.object_subscription_system
-         or not session.machine
-         or session.machine.system~=session.object_subscription_system then return end
-   if session.object_confirmed_system==session.object_subscription_system
-         and now()-session.object_confirmed_at<OBJECT_SUBSCRIPTION_REFRESH then
-      return
-   end
-   query_objects(object_directory_peer())
-end
-
-local function send_pending_object_deletes ( peer )
-   if not peer then return end
-   for object_id,entry in pairs(session.pending_object_deletes) do
-      if not entry.sent then
-         local request=next_object_request()
-         entry.sent=true
-         entry.request=request
-         session.pending_object_requests[request]={
-            action="delete",object_id=object_id,
-            deadline=now()+OBJECT_REQUEST_TIMEOUT,
-         }
-         send(peer,{type="object_delete",node=session.settings.node_id,
-            request=request,object_id=object_id},true)
-      end
-   end
-end
-
-local function has_pending_object_delete ( system_name )
-   for _object_id,entry in pairs(session.pending_object_deletes) do
-      if not entry.system or entry.system==system_name then return true end
-   end
-   return false
-end
-
-send_object_create = function ( peer, request, pending )
-   if not peer then return false end
-   pending.action="create"
-   pending.deadline=now()+OBJECT_REQUEST_TIMEOUT
-   if send(peer,{type="object_create",node=session.settings.node_id,
-         request=request,object_id=pending.object_id,
-         object=pending.packed},true) then return true end
-   pending.action="create_wait_delete"
-   pending.deadline=now()+OBJECT_RECONCILE_TIMEOUT
-   return false
-end
-
-local function send_waiting_object_creates ( peer )
-   if not peer then return end
-   for request,pending in pairs(session.pending_object_requests) do
-      if pending.action=="create_wait_delete"
-            and not has_pending_object_delete(pending.system) then
-         send_object_create(peer,request,pending)
-      end
-   end
-end
-
-local function object_result ( message )
-   local pending=session.pending_object_requests[message.request]
-   if not pending then return end
-   if pending.action=="create" or pending.action=="create_reconcile" then
-      if message.action~="create"
-            or message.object_id~=pending.object_id then return end
-      if message.ok==1 then
-         if pending.object then pending.object.revision=message.revision end
-         complete_object_create(message.request,pending,message.object_id)
-      else
-         fail_object_create(message.request,message.code)
-      end
-   elseif pending.action=="delete" then
-      if message.action~="delete"
-            or message.object_id~=pending.object_id then return end
-      session.pending_object_requests[message.request]=nil
-      local entry=session.pending_object_deletes[pending.object_id]
-      if message.ok==1 then
-         session.pending_object_deletes[pending.object_id]=nil
-         send_waiting_object_creates(object_directory_peer())
-      elseif entry then
-         entry.sent=false
-      end
-   end
-end
-
-local function handle_directory_object_message ( message )
-   if message.type=="object_entry" then
-      apply_object_entry(message)
-   elseif message.type=="object_done" then
-      finish_object_query(message)
-   elseif message.type=="object_deleted" then
-      forget_object(message.object_id)
-      explode_local_object(message.object_id)
-      session.pending_object_deletes[message.object_id]=nil
-      send_waiting_object_creates(object_directory_peer())
-   elseif message.type=="object_result" then
-      object_result(message)
-   end
-end
-
-local function reset_object_requests_after_disconnect ()
-   for request,pending in pairs(session.pending_object_requests) do
-      if pending.action=="create" then
-         pending.action="create_reconcile"
-         pending.deadline=now()+OBJECT_RECONCILE_TIMEOUT
-      elseif pending.action=="query" then
-         session.pending_object_requests[request]=nil
-      elseif pending.action=="delete" then
-         session.pending_object_requests[request]=nil
-         local queued=session.pending_object_deletes[pending.object_id]
-         if queued then queued.sent=false; queued.request=nil end
-      end
-   end
-end
-
-local function process_object_deadlines ( stamp )
-   local expired={}
-   for request,pending in pairs(session.pending_object_requests) do
-      if stamp>=pending.deadline then expired[#expired+1]=request end
-   end
-   for _index,request in ipairs(expired) do
-      local pending=session.pending_object_requests[request]
-      if pending and (pending.action=="query" or pending.action=="create"
-            or pending.action=="delete")
-            and session.object_client
-            and session.object_client:available() then
-         print("P2P objects: reconnecting after unanswered "
-            ..pending.action.." request="..tostring(request))
-         session.object_client:invalidate()
-         return
-      end
-   end
-   for _index,request in ipairs(expired) do
-      local pending=session.pending_object_requests[request]
-      if pending.action=="create" then
-         pending.action="create_reconcile"
-         pending.deadline=stamp+OBJECT_RECONCILE_TIMEOUT
-         local peer=object_directory_peer()
-         if peer then query_objects(peer) end
-      elseif pending.action=="create_reconcile" then
-         -- A missing reply is not a rejection. Keep the stable object ID and
-         -- reconcile until the directory either returns the object or an
-         -- authoritative query proves the system is occupied by another one.
-         pending.deadline=stamp+OBJECT_RECONCILE_TIMEOUT
-         local peer=object_directory_peer()
-         if peer then query_objects(peer) end
-      elseif pending.action=="create_wait_delete" then
-         pending.deadline=stamp+OBJECT_RECONCILE_TIMEOUT
-         send_waiting_object_creates(object_directory_peer())
-      elseif pending.action=="delete" then
-         session.pending_object_requests[request]=nil
-         local queued=session.pending_object_deletes[pending.object_id]
-         if queued then queued.sent=false; queued.request=nil end
-      else
-         session.pending_object_requests[request]=nil
-      end
-   end
-   if stamp-(session.last_object_retry or 0)>=1 then
-      session.last_object_retry=stamp
-      local peer=object_directory_peer()
-      send_pending_object_deletes(peer)
-      send_waiting_object_creates(peer)
-   end
-end
-
--- Persistent-object traffic uses a dedicated ENet host, independently of the
--- system authority and gameplay transports.
-function session.update_object_client ()
-   if not session.running then return false end
-   if session.object_client then session.object_client:update() end
-   process_object_deadlines(now())
-   ensure_object_subscription()
-   local stamp=now()
-   for object_id,entry in pairs(session.local_objects) do
-      if not exists(entry.pilot) then
-         -- Landing and system teardown remove pilots without implying that
-         -- the persistent object was destroyed.
-         remove_local_object(object_id)
-      elseif stamp>=entry.announce_at then
-         entry.pilot:broadcast(display_text(entry.object.data.text),true)
-         entry.announce_at=stamp+BUOY_BROADCAST_INTERVAL
-      end
-   end
-   return true
-end
-
-function session.object_service_pending ()
-   if not session.running then return false end
-   return next(session.pending_object_requests)~=nil
-      or next(session.pending_object_deletes)~=nil
-end
-
-local function start_object_client ()
-   if session.object_client or session.settings.directory=="" then return end
-   session.object_client=ObjectClient.new{
-      endpoint=session.settings.directory,
-      node=session.settings.node_id,
-      name=local_player_name(),
-      now=now,
-         on_ready=function(client)
-            publish_object_capability()
-            send_pending_object_deletes(client)
-            session.object_confirmed_system=nil
-            session.object_confirmed_at=-math.huge
-            ensure_object_subscription()
-            send_waiting_object_creates(client)
-      end,
-      on_message=handle_directory_object_message,
-         on_disconnect=function()
-            reset_object_requests_after_disconnect()
-            session.object_confirmed_system=nil
-            session.object_confirmed_at=-math.huge
-            publish_object_capability()
-      end,
-   }
-   local object_ok,object_err=session.object_client:start()
-   if not object_ok then
-      print("P2P: "..tostring(object_err))
-      session.object_client=nil
-   end
-end
-
-local function on_message ( peer, message )
-   local meta=session.peer_meta[peer] or {}; session.peer_meta[peer]=meta
-   if message.type=="hello" then
-      if message.node==session.settings.node_id then
-         reject_peer(peer,"self connection"); return
-      end
-      if meta.expected_node and meta.expected_node~=message.node then
-         reject_peer(peer,"unexpected node identity"); return
-      end
-      if message.cap=="player" then
-         local duplicate_peer,duplicate_meta
-         for other,other_meta in pairs(session.peer_meta) do
-            if other~=peer and other_meta.verified and other_meta.cap=="player"
-                  and other_meta.node==message.node then
-               duplicate_peer,duplicate_meta=other,other_meta
-               break
-            end
-         end
-         if duplicate_peer then
-            local prefer_outbound=session.settings.node_id<message.node
-            if meta.outbound==prefer_outbound and duplicate_meta.outbound~=prefer_outbound then
-               reject_peer(duplicate_peer,"duplicate connection",true)
-            else
-               reject_peer(peer,"duplicate connection",true)
-               return
-            end
-         end
-         local accepted,err=session.identities:add(message.node,message.name)
-         if not accepted and err=="node changed player name" and not duplicate_peer then
-            accepted,err=session.identities:update(message.node,message.name)
-            local entry=session.players[message.node]
-            if accepted and entry and exists(entry.pilot) then
-               entry.pilot:rename(accepted)
-            end
-         end
-         if not accepted then reject_peer(peer,err); return end
-         meta.name=message.name
-      end
-      meta.node=message.node; meta.cap=message.cap
-      meta.features=message.features or ""; meta.verified=true
-      meta.last_receive=now()
-      if meta.cap=="player" then
-         session.member_features[message.node]=meta.features
-         session.player_peers[message.node]=peer
-         session.relay_topology_dirty=true
-      end
-      local endpoint=session.peers[peer]
-      if meta.cap=="player" and endpoint_valid(endpoint) then
-         session.machine.topology:add_peer(endpoint)
-         session.settings.recent=session.machine.topology:serialize_peers()
-      end
-      if message.cap=="player" and session.machine.system then send(peer,base("query"),true) end
-      if message.cap=="player" then refresh_discovered_time_controls() end
-      if message.cap=="player" and session.machine.state=="guest"
-            and message.node==session.machine.host then
-         -- A reconnecting guest may contain only stale extra NPCs, so no
-         -- incoming state can reveal that it needs repair. Re-verifying the
-         -- incumbent transport is the bounded positive signal for a fresh
-         -- authoritative membership snapshot.
-         request_resync("npc")
-      end
-      if message.cap=="directory" then
-         if session.machine.state=="host" then send(peer,claim_message(),true) end
-         if has_feature(meta,"activity") then
-            local sent=send(peer,{
-               type="activity_query",node=session.settings.node_id,
-            },true)
-            session.last_activity_query=now()
-            if sent then
-               session.directory_probe_deadline=
-                  session.last_activity_query+DIRECTORY_RESPONSE_TIMEOUT
-            end
-         end
-         if has_feature(meta,"objects") then start_object_client() end
-      end
-      return
-   end
-   if not meta.verified then return end
-   if message.type=="punch" then
-      if meta.cap=="directory" and message.system==session.machine.system
-            and message.peer~=session.settings.node_id then
-         connect(message.endpoint,message.peer)
-      end
-      return
-   end
-   if message.type=="query" then host_hint(peer); return end
-   if message.type=="hint" then
-      if session.locally_claimed then return end
-      if message.host==session.settings.node_id then return end
-      if meta.node==message.host and endpoint_valid(session.peers[peer]) then message.endpoint=session.peers[peer] end
-      local expires=now()+message.ttl
-      if session.machine.topology:remember_hint(message.system,message.host,message.endpoint,message.claim,expires) then
-         session.settings.recent=session.machine.topology:serialize_peers()
-         if meta.node==message.host and meta.cap=="player" then
-            local old_state,old_host,old_claim=session.machine.state,
-               session.machine.host,session.machine.claim
-            local accepted=session.machine:accept_claim{system=message.system,node=message.host,claim=message.claim}
-            local joined=accepted and (old_state~="guest"
-               or old_host~=message.host
-               or old_claim~=session.machine.claim)
-            refresh_time_controls()
-            if joined then
-               join_host_population(old_state)
-               request_resync("all")
-            end
-         else
-            if not connected_node(message.host) then connect(message.endpoint,message.host) end
-         end
-      end
-      return
-   end
-   if meta.cap=="directory" then
-      if message.type=="activity" then
-         local received=now()
-         local activity={}
-         if message.entries~="-" then
-            for line in message.entries:gmatch("([^;]+)") do
-               if #activity>=20 then break end
-               local encoded,active,age=line:match("^([^,]+),([01]),(%d+)$")
-               local system_name=encoded and codec.unescape(encoded) or nil
-               age=tonumber(age)
-               if system_name and system_name~="" and #system_name<=240
-                     and not system_name:find("[%z\1-\31\127]")
-                     and age and age>=0 and age<=86400 then
-                  activity[#activity+1]={system=system_name,active=active=="1",
-                     seen=received-age}
-               end
-            end
-         end
-         session.activity=activity
-         session.activity_received=received
-         session.directory_probe_deadline=nil
-         session.activity_generation=session.activity_generation+1
-         for system_name,generation in pairs(session.self_activity) do
-            if generation<session.activity_generation then
-               session.self_activity[system_name]=nil
-            end
-         end
-         if session.machine.system then
-            refresh_discovered_time_controls(received)
-         elseif session.skip_next_host_grace then
-            session.skip_next_host_grace=
-               no_other_players_discovered(session.departed_system)
-         end
-         naev.cache().multiplayer_activity={
-            received=received,
-            entries=activity,
-         }
-      end
-      return
-   end
-   if message.system~=session.machine.system then return end
-   local active_visit=message.node and session.machine.member_visits[message.node]
-   if message.visit and session.visit_tombstones[message.node]==message.visit then
-      return
-   end
-   if message.visit and active_visit and message.visit~=active_visit then
-      local establishes_visit=message.type=="member_heartbeat"
-         or message.type=="player_manifest" or message.type=="claim"
-      if meta.node~=message.node or not establishes_visit then return end
-      local old=session.players[message.node]
-      if old then remove_pilot(old.pilot); session.players[message.node]=nil end
-      owned.cleanup(session.craft,message.node,function(entry)
-         remove_pilot(entry.pilot)
-      end)
-      clear_owner_lifecycle(session.craft_lifecycle_sequences,message.node)
-      session.npc_target_interests[message.node]=nil
-      session.pending_npc_manifests[message.node]=nil
-      session.machine:remove_member(message.node)
-      session.machine:reset_member_sequences(message.node)
-      session.host_welcomed[message.node]=nil
-      session.visit_tombstones[message.node]=nil
-      active_visit=nil
-   end
-   -- An origin advertises its local listener, which is commonly 0.0.0.0 and
-   -- is not a usable address on another machine. A directly connected peer
-   -- gives us the observed address. Replace it before mesh forwarding so
-   -- every member learns a reconnectable endpoint rather than relaying the
-   -- origin's wildcard bind address.
-   if meta.cap=="player" and meta.node==message.node and message.endpoint
-         and endpoint_valid(session.peers[peer]) then
-      message.endpoint=session.peers[peer]
-   end
-   local routed=false
-   local routed_relayed=false
-   if message.via then
-      if not has_feature(meta,"mesh_control_v1") then return end
-      local accepted,route_err=session.mesh:accept(message,meta.node)
-      if accepted==false then return end
-      if not accepted then
-         trace("route_reject",{type=message.type,reason=route_err or "invalid"})
-         return
-      end
-      routed=true
-   end
-   local legacy_relay=not routed and session.machine.state~="host"
-      and meta.node==session.machine.host
-   local owner_ok=routed or meta.node==message.node or legacy_relay
-   if routed then
-      local direct_establishes=meta.node==message.node and message.visit
-         and (message.type=="member_heartbeat"
-            or message.type=="player_manifest" or message.type=="claim")
-      if not active_visit and not direct_establishes then
-         local incumbent_introduction=meta.node==session.machine.host
-            and message.type=="player_manifest" and message.visit
-            and endpoint_valid(message.endpoint)
-         if incumbent_introduction then
-            -- The incumbent already verified this manifest on its direct
-            -- connection to the origin. Admit the visit now so the manifest
-            -- can create a proxy while a direct guest-to-guest route is being
-            -- established in parallel.
-            session.member_endpoints[message.node]=message.endpoint
-            session.machine.topology:add_peer(message.endpoint)
-            session.machine:observe_member(message.node,message.visit,nil,nil,now())
-            active_visit=message.visit
-            connect(message.endpoint,message.node)
-         elseif (message.type=="member_heartbeat"
-               or message.type=="player_manifest" or message.type=="claim")
-               and endpoint_valid(message.endpoint) then
-            session.member_endpoints[message.node]=message.endpoint
-            session.machine.topology:add_peer(message.endpoint)
-            connect(message.endpoint,message.node)
-            relay_once(message,peer,true)
-            return
-         else
-            return
-         end
-      end
-      if active_visit then
-         local reliable=message.type~="npc_state"
-            and message.type~="npc_focus_state"
-         relay_once(message,peer,reliable)
-         routed_relayed=true
-      end
-   end
-   if message.type=="member_heartbeat" then
-      if not owner_ok then return end
-      if not session.machine:accept_sequence(
-            "heartbeat:"..message.node..":"..message.visit,message.seq) then
-         return
-      end
-      session.machine:observe_member(message.node,message.visit,
-         message.accepted_host,message.accepted_claim,now())
-      if meta.node==message.node then
-         local signature=message.links or ""
-         if session.direct_link_signatures[message.node]~=signature then
-            session.direct_link_signatures[message.node]=signature
-            session.direct_links[message.node]=session.parse_direct_links(message.links)
-            session.relay_topology_dirty=true
-         end
-      end
-      if endpoint_valid(message.endpoint) then
-         session.member_endpoints[message.node]=message.endpoint
-         session.machine.topology:add_peer(message.endpoint)
-      end
-      local player_entry=session.players[message.node]
-      if message.node~=session.settings.node_id
-            and (not player_entry or not exists(player_entry.pilot)) then
-         if meta.node==message.node then
-            session.sequence=session.sequence+1
-            local repair=base("resync")
-            repair.seq=session.sequence
-            repair.scope="all"
-            repair.owner=message.node
-            send(peer,repair,true)
-         else
-            request_resync("all",message.node)
-         end
-      end
-      return
-   elseif message.type=="host_query" then
-      if not owner_ok then return end
-      if not session.machine:accept_sequence(
-            "host_query:"..message.node..":"..message.visit,message.seq) then
-         return
-      end
-      session.machine:observe_member(message.node,message.visit,nil,nil,now())
-      if session.machine.state=="host" then broadcast(claim_message(),true) end
-      return
-   end
-   if message.type=="claim" then
-      if session.locally_claimed then return end
-      if not owner_ok then return end
-      if meta.node==message.node and endpoint_valid(session.peers[peer]) then message.endpoint=session.peers[peer] end
-      local old_state,old_host,old_claim=session.machine.state,
-         session.machine.host,session.machine.claim
-      local accepted=session.machine:accept_claim(message)
-      local joined=accepted and (old_state~="guest"
-         or old_host~=message.node
-         or old_claim~=session.machine.claim)
-      refresh_time_controls()
-      session.machine.topology:remember_hint(message.system,message.node,message.endpoint,message.claim,now()+60)
-      if joined then
-         print("P2P: joined system host")
-         join_host_population(old_state)
-         request_resync("all")
-      end
-      if session.machine.state=="host" then broadcast(claim_message(),true) end
-      return
-   end
-   if (message.type=="player_manifest" or message.type=="player_state" or message.type=="chat"
-         or message.type=="player_control"
-         or message.type=="npc_interest"
-         or message.type=="craft_manifest" or message.type=="craft_state" or message.type=="craft_remove"
-         or message.type=="craft_order" or message.type=="resync"
-         or message.type=="leave") and not owner_ok then return end
-   if owner_ok and message.node~=session.settings.node_id
-         and (not message.visit
-            or not session.machine.member_visits[message.node]
-            or session.machine.member_visits[message.node]==message.visit) then
-      session.machine:observe_member(message.node,message.visit,nil,nil,now())
-   end
-   if message.type~="resync" and message.owner and message.owner~=message.node then return end
-   if message.type=="npc_interest" then
-      if not owner_ok or not session.machine:accept_sequence(
-            "npc_interest:"..message.node..":"..message.visit,message.seq) then
-         return
-      end
-      if session.machine.state=="host" then
-         remember_npc_interest(message.node,message.target,now())
-         if message.target~="-" then
-            publish_manifests("npc",nil,message.target,message.node)
-         end
-      end
-      return
-   end
-   if message.type=="resync" then
-      if message.node==session.settings.node_id
-            or not session.machine:accept_sequence(table.concat({
-               "resync",message.node,message.scope,message.owner or "",
-               message.entity or "",
-            },":"),message.seq) then return end
-      if session.machine.state=="host" and not routed then
-         broadcast_raw(message,true,peer)
-      end
-      -- Reuse the compatible "all" scope with an owner as a targeted player
-      -- repair. Older peers safely answer it as a full resynchronization.
-      local player_target=message.scope=="all" and message.owner
-      if message.scope=="all"
-            and (not player_target or player_target==session.settings.node_id) then
-         publish_player(true)
-      end
-      if not player_target then
-         publish_manifests(message.scope,message.owner,message.entity,message.node)
-      end
-      return
-   end
-   if message.type=="player_manifest" then
-      if message.node==session.settings.node_id then return end
-      local accepted
-      if meta.node==message.node then
-         local known_name=session.identities:raw_name(message.node)
-         accepted=(known_name==nil and session.identities:add(message.node,message.name))
-            or known_name==message.name
-      else
-         accepted=session.identities:add(message.node,message.name)
-      end
-      if not accepted then return end
-      session.machine:observe_member(message.node,message.visit,nil,nil,now())
-      session.relay_topology_dirty=true
-      session.member_features[message.node]=message.features or session.member_features[message.node] or ""
-      refresh_time_controls()
-      if session.machine.state=="host" and session.peers[peer] then message.endpoint=session.peers[peer] end
-      if endpoint_valid(message.endpoint) then
-         session.member_endpoints[message.node]=message.endpoint
-         session.machine.topology:add_peer(message.endpoint)
-         if not connected_node(message.node) then connect(message.endpoint,message.node) end
-      end
-      spawn_proxy(message,session.identities:display_name(message.node))
-      if session.machine.state=="host" then
-         if meta.node==message.node and not session.host_welcomed[message.node] then
-            -- Put the host manifest ahead of the private reliable chat so the
-            -- recipient can anchor the communication to the host's proxy.
-            publish_player(true)
-            session.sequence=session.sequence+1
-            local welcome=base("chat")
-            welcome.seq=session.sequence
-            welcome.text="This is "..player.name()..", captain of "..local_player_name()..". Identify yourself."
-            if send(peer,welcome,true) then session.host_welcomed[message.node]=true end
-         end
-         if routed and not routed_relayed then
-            relay_once(message,peer,true)
-         elseif not routed then
-            broadcast_raw(message,true,peer)
-         end
-      end
-   elseif message.type=="player_control" then
-      apply_player_control(message)
-   elseif message.type=="player_state" then
-      apply_player_state(message)
-      if session.machine.state=="host" and not routed then
-         session.relay_missing_player_paths(message,peer,false)
-      end
-   elseif message.type=="chat" and session.machine:accept_sequence("chat:"..message.node,message.seq) then
-      local entry=session.players[message.node]
-      if message.node~=session.settings.node_id
-            and (not entry or not exists(entry.pilot)) then
-         request_resync("all",message.node)
-      end
-      if message.node==session.settings.node_id then
-         pilot.comm(display_text(local_player_name()),display_text(message.text))
-      elseif entry and exists(entry.pilot) then
-         entry.pilot:broadcast(display_text(message.text),true)
-      else
-         pilot.comm(session.identities:display_name(message.node) or message.node,
-            display_text(message.text))
-      end
-      play_chat_sound()
-      -- Arena echoes chat through the server to every client, including the
-      -- sender. Do the same so a guest sees confirmation of its own message.
-      if session.machine.state=="host" and not routed then broadcast_raw(message,true) end
-   elseif message.type=="npc_manifest" and session.machine.state~="host"
-         and (not message.recipient
-            or message.recipient==session.settings.node_id)
-         and message.node==session.machine.host and message.claim==session.machine.claim
-         and accept_npc_snapshot(message) then
-      spawn_npc_manifest(message)
-   elseif message.type=="npc_done" and session.machine.state~="host"
-         and (not message.recipient
-            or message.recipient==session.settings.node_id)
-         and message.node==session.machine.host and message.claim==session.machine.claim
-         then
-      finish_npc_snapshot(message)
-   elseif message.type=="npc_control" and session.machine.state~="host"
-         and (not message.recipient
-            or message.recipient==session.settings.node_id)
-         and message.node==session.machine.host and message.claim==session.machine.claim
-         then
-      apply_npc_control_batch(message)
-   elseif message.type=="npc_add" and session.machine.state~="host"
-         and (not message.recipient
-            or message.recipient==session.settings.node_id)
-         and message.node==session.machine.host and message.claim==session.machine.claim
-         and accept_npc_snapshot(message) then
-      note_population_event(message)
-      local accepted=accept_lifecycle(session.npc_lifecycle_sequences,
-         message.entity,message.baseline or message.seq)
-      if (accepted and spawn_npc(message)) or not accepted then
-         mark_npc_snapshot(message,message.entity)
-         local current=session.receiving_npc_snapshot
-         if current then complete_npc_snapshot(current) end
-      end
-   elseif message.type=="npc_remove"
-         and (not message.recipient
-            or message.recipient==session.settings.node_id)
-         and message.node==session.machine.host
-         and message.claim==session.machine.claim then
-      note_population_event(message)
-      if accept_lifecycle(session.npc_lifecycle_sequences,
-            message.entity,message.seq) then
-         remove_npc_replica(message.entity,
-            message.reason=="absent" or message.reason=="death"
-               or message.reason=="exploded")
-      end
-   elseif message.type=="npc_state" and message.node==session.machine.host
-         and message.claim==session.machine.claim then
-      parse_states(message.entities,session.npcs,nil,message.seq)
-   elseif message.type=="npc_focus_state" and session.machine.state~="host"
-         and message.node==session.machine.host
-         and message.claim==session.machine.claim then
-      parse_states(message.entities,session.npcs,nil,message.seq)
-   elseif message.type=="craft_manifest" and message.owner~=session.settings.node_id then
-      if accept_lifecycle(session.craft_lifecycle_sequences,
-            message.entity,message.seq) then
-         spawn_npc(message,message.owner)
-      end
-      if session.machine.state=="host" and not routed then
-         broadcast_raw(message,true,peer)
-      end
-   elseif message.type=="craft_state"
-         and message.owner~=session.settings.node_id then
-      parse_states(message.entities,session.craft,message.owner,message.seq)
-      if session.machine.state=="host" then
-         session.relay_missing_player_paths(message,peer,false)
-      end
-   elseif message.type=="craft_remove" and message.owner~=session.settings.node_id
-         and accept_lifecycle(session.craft_lifecycle_sequences,
-            message.entity,message.seq) then
-      local e=session.craft[message.entity]
-      if e and e.owner==message.owner then
-         remove_pilot(e.pilot)
-         session.craft[message.entity]=nil
-      end
-      if session.machine.state=="host" and not routed then
-         broadcast_raw(message,true,peer)
-      end
-   elseif message.type=="craft_order" and session.machine:accept_sequence("craft_order:"..message.owner,message.seq) then
-      apply_craft_order(message)
-      if session.machine.state=="host" and not routed then
-         broadcast_raw(message,true,peer)
-      end
-   elseif message.type=="leave" then
-      if message.visit and session.machine.member_visits[message.node]
-            and message.visit~=session.machine.member_visits[message.node] then return end
-      session.machine:remove_member(message.node)
-      session.visit_tombstones[message.node]=message.visit
-      session.direct_links[message.node]=nil
-      session.direct_link_signatures[message.node]=nil
-      session.relay_topology_dirty=true
-      session.npc_target_interests[message.node]=nil
-      session.pending_npc_manifests[message.node]=nil
-      owned.cleanup(session.craft,message.node,function(entry) remove_pilot(entry.pilot) end)
-      clear_owner_lifecycle(session.craft_lifecycle_sequences,message.node)
-      remove_remote_player(message.node)
-      if message.node==session.machine.host then handle_host_loss() end
-      if session.machine.state=="host" and not routed then
-         broadcast_raw(message,true,peer)
-      end
-      refresh_time_controls()
-   end
-end
-
-remember_npc_interest = function ( node, target, stamp )
-   if not target or target=="" or target=="-" then
-      session.npc_target_interests[node]=nil
-      return
-   end
-   if not session.npc_target_interest_enqueued[node] then
-      session.npc_target_interest_enqueued[node]=true
-      session.npc_target_interest_order[
-         #session.npc_target_interest_order+1]=node
-   end
-   session.npc_target_interests[node]={
-      entity=target,
-      expires=stamp+NPC_TARGET_INTEREST_LEASE,
-   }
-end
-
-local function publish_npc_interest ( target, stamp )
-   if session.machine.state=="host" then
-      remember_npc_interest(session.settings.node_id,target,stamp)
-      return
-   elseif session.machine.state~="guest" then
-      session.local_npc_interest_target=nil
-      return
-   end
-   target=target and session.npcs[target] and target or "-"
-   stamp=stamp or now()
-   if target==session.local_npc_interest_target
-         and stamp-session.last_npc_interest<NPC_TARGET_INTEREST_REFRESH then
-      return
-   end
-   session.local_npc_interest_target=target
-   session.last_npc_interest=stamp
-   session.local_npc_interest_seq=(session.local_npc_interest_seq or 0)+1
-   local message=base("npc_interest")
-   message.seq=session.local_npc_interest_seq
-   message.target=target
-   broadcast(message,true)
-end
-
-publish_player = function ( full )
-   local p=player.pilot(); if not p or not session.machine.system then return end
-   local state=local_state(p)
-   publish_npc_interest(state.target,now())
-   local control_signature=table.concat({
-      state.target~="" and state.target or "-",state.primary,state.secondary
-   },":")
-   if control_signature~=session.local_control_signature then
-      publish_player_control(false)
-   end
-   if full then
-      local current_ship=p:ship()
-      local msg=base("player_manifest")
-      msg.entity=session.settings.node_id
-      msg.ship=current_ship:nameRaw()
-      msg.name=local_player_name()
-      msg.features=session.player_features
-      msg.outfits=outfit_names(p)
-      msg.slots=outfit_slots(p)
-      msg.weapsets=weapon_sets(p)
-      local fallbacks=ship_fallback_names(current_ship)
-      if fallbacks~="" then msg.ship_fallbacks=fallbacks end
-      msg.endpoint=session.endpoint
-      msg.x=state.x; msg.y=state.y; msg.vx=state.vx; msg.vy=state.vy; msg.dir=state.dir
-      msg.armour=state.armour; msg.shield=state.shield; msg.stress=state.stress
-      broadcast(msg,true)
-   end
-   session.sequence=session.sequence+1
-   local msg=base("player_state"); msg.entity=session.settings.node_id; msg.seq=session.sequence
-   for k,v in pairs(state) do msg[k]=v end
-   msg.control_seq=session.local_control_seq or 0
-   broadcast(msg,false)
-end
-
-local function greet_host ()
-   if not session.machine or session.machine.state~="guest" or not session.machine.system
-         or session.greeted_system==session.machine.system then return end
-   for peer,meta in pairs(session.peer_meta) do
-      if meta.verified and meta.cap=="player" and meta.node==session.machine.host then
-         -- Reliable packets on the same channel preserve ordering. Give the
-         -- host our proxy manifest before it receives and displays the chat.
-         publish_player(true)
-         session.sequence=session.sequence+1
-         local msg=base("chat")
-         msg.seq=session.sequence
-         msg.text="I am "..player.name()..", captain of "..local_player_name().."!"
-         session.machine:accept_sequence("chat:"..session.settings.node_id,msg.seq)
-         pilot.comm(display_text(local_player_name()),display_text(msg.text))
-         play_chat_sound()
-         broadcast(msg,true)
-         session.greeted_system=session.machine.system
-         return
-      end
-   end
-end
-
-local function publish_state_batches ( kind, lines, owner )
-   local batch,size={},0
-   local function flush ()
-      if #batch==0 then return end
-      session.sequence=session.sequence+1
-      local msg=base(kind); msg.seq=session.sequence; msg.entities=table.concat(batch,";")
-      if kind=="npc_state" or kind=="npc_focus_state" then
-         msg.claim=session.machine.claim
-      else
-         msg.owner=owner
-      end
-      broadcast(msg,false); batch={}; size=0
-   end
-   for _index,line in ipairs(lines) do
-      if size+#line+1>12000 then flush() end
-      batch[#batch+1]=line; size=size+#line+1
-   end
-   flush()
-end
-
-local function publish_focus_states ( ambient, target_entities, stamp )
-   local order=session.npc_target_interest_order
-   local order_count=#order
-   if order_count==0 then return end
-   local start=math.max(1,math.min(session.npc_target_interest_cursor,order_count))
-   local inspected=0
-   local selected={}
-   local lines={}
-   while inspected<order_count and inspected<NPC_INTERESTS_PER_TICK
-         and #lines<NPC_TARGETS_PER_TICK do
-      local index=(start+inspected-1)%order_count+1
-      local node=order[index]
-      local interest=session.npc_target_interests[node]
-      local participant=node==session.settings.node_id
-         or session.machine.members[node]
-      if not interest or not participant
-            or stamp>=interest.expires then
-         session.npc_target_interests[node]=nil
-      else
-         local p=ambient[interest.entity]
-         if exists(p) and not selected[interest.entity] then
-            selected[interest.entity]=true
-            lines[#lines+1]=state_line(
-               craft_state_record(p,interest.entity,target_entities))
-         end
-      end
-      inspected=inspected+1
-   end
-   session.npc_target_interest_cursor=(start+inspected-1)%order_count+1
-   publish_state_batches("npc_focus_state",lines)
-end
-
-function session.publish_focus_entities ( stamp )
-   -- The membership publisher owns inventory refreshes and their add/remove
-   -- edge. Focus updates only consume the last completed snapshot; otherwise a
-   -- faster focus tick could hide a refresh from the authoritative diff.
-   local snapshot=session.inventory_snapshot
-   if not snapshot then return end
-   publish_focus_states(snapshot.ambient,snapshot.target_entities,stamp)
-end
-
-local function publish_ambient_states ( ambient, target_entities )
-   local selected,selected_set={},{}
-   local ring=session.npc_round_robin
-   local ring_count=#ring
-   local inspected,round_robin_added=0,0
-   while inspected<ring_count
-         and round_robin_added<NPC_ROUND_ROBIN_PER_TICK do
-      if session.npc_round_robin_at>ring_count then session.npc_round_robin_at=1 end
-      local entity=ring[session.npc_round_robin_at]
-      session.npc_round_robin_at=session.npc_round_robin_at+1
-      inspected=inspected+1
-      if not selected_set[entity] then
-         local p=ambient[entity]
-         if exists(p) then
-            selected[#selected+1]={entity=entity,pilot=p}
-            selected_set[entity]=true
-            round_robin_added=round_robin_added+1
-         end
-      end
-   end
-
-   local lines,controls={},{}
-   for _index,entry in ipairs(selected) do
-      local rec=craft_state_record(entry.pilot,entry.entity,target_entities)
-      lines[#lines+1]=state_line(rec)
-      -- Control discovery shares the same hard entity budget as state. It may
-      -- never turn into a second population scan.
-      local task,goal=task_goal(entry.pilot,rec.target)
-      local control={
-         entity=entry.entity,ai=entry.pilot:ainame() or "",task=task,goal=goal,
-      }
-      local signature=table.concat({control.ai,control.task,control.goal},"\n")
-      if session.host_npc_controls[entry.entity]~=signature then
-         session.host_npc_controls[entry.entity]=signature
-         controls[#controls+1]=control_line(control)
-      end
-   end
-   publish_state_batches("npc_state",lines)
-   local batch,size={},0
-   local function flush_controls ()
-      if #batch==0 then return end
-      session.sequence=session.sequence+1
-      local message=base("npc_control")
-      message.claim=session.machine.claim
-      message.seq=session.sequence
-      message.entities=table.concat(batch,";")
-      broadcast(message,true)
-      batch={}; size=0
-   end
-   for _index,line in ipairs(controls) do
-      if #batch>0 and size+#line+1>NPC_MANIFEST_BATCH_PAYLOAD then
-         flush_controls()
-      end
-      batch[#batch+1]=line
-      size=size+#line+1
-   end
-   flush_controls()
-end
-
-local function next_host_population ()
-   session.host_npc_population=(session.host_npc_population or 0)+1
-   return session.host_npc_population
-end
-
-local function publish_pending_entity_removals ()
-   local published=0
-   for entity,removal in pairs(session.pending_entity_removals) do
-      session.pending_entity_removals[entity]=nil
-      local kind=removal.kind
-      if kind=="npc" and session.machine.state=="host" then
-         session.sequence=session.sequence+1
-         local message=base("npc_remove")
-         message.claim=session.machine.claim
-         message.entity=entity
-         message.seq=session.sequence
-         message.reason=removal.reason
-         message.population=next_host_population()
-         broadcast(message,true)
-      elseif kind=="craft" then
-         session.sequence=session.sequence+1
-         local message=base("craft_remove")
-         message.owner=session.settings.node_id
-         message.entity=entity
-         message.seq=session.sequence
-         broadcast(message,true)
-      end
-      published=published+1
-      if published>=ENTITY_REMOVALS_PER_FRAME then break end
-   end
-end
-
-publish_entities = function ( full, include_ambient, include_craft )
-   include_ambient=include_ambient~=false
-   include_craft=include_craft~=false
-   local stamp=now()
-   local ambient,craft,target_entities,inventory_refreshed=
-      cached_inventory(stamp,full)
-   if include_ambient and session.machine.state=="host" then
-      if inventory_refreshed or full then
-         for id,p in pairs(ambient) do
-            local previous=session.host_inventory[id]
-            if not full and previous~=p and exists(p) then
-               session.host_npc_controls[id]=nil
-               local rec=manifest_record(p,id,true)
-               local message=add_message(rec,"npc_add")
-               message.population=next_host_population()
-               broadcast(message,true)
-            end
-         end
-         for id in pairs(session.host_inventory) do
-            if not ambient[id] then
-               session.host_npc_controls[id]=nil
-               session.sequence=session.sequence+1
-               local msg=base("npc_remove")
-               msg.claim=session.machine.claim
-               msg.entity=id
-               msg.seq=session.sequence
-               msg.population=next_host_population()
-               broadcast(msg,true)
-            end
-         end
-         session.host_inventory=ambient
-      end
-      if full then
-         for node in pairs(session.machine.members) do
-            if node~=session.settings.node_id then
-               queue_npc_manifests(ambient,node)
-            end
-         end
-      end
-      publish_ambient_states(ambient,target_entities,stamp)
-   end
-   if include_craft then
-      for id,p in pairs(craft) do
-         if (full or not session.owned_inventory[id]) and exists(p) then
-            broadcast(add_message(manifest_record(p,id),"craft_manifest",session.settings.node_id),true)
-         end
-      end
-      for id in pairs(session.owned_inventory) do
-         if not craft[id] then
-            session.sequence=session.sequence+1
-            local msg=base("craft_remove"); msg.owner=session.settings.node_id; msg.entity=id; msg.seq=session.sequence
-            broadcast(msg,true)
-         end
-      end
-      session.owned_inventory=craft
-      local lines={}
-      for id,p in pairs(craft) do
-         if exists(p) then
-            lines[#lines+1]=state_line(craft_state_record(p,id,target_entities))
-         end
-      end
-      publish_state_batches("craft_state",lines,session.settings.node_id)
-   end
-end
-
-publish_manifests = function ( scope, owner, entity, recipient )
-   local include_ambient=scope=="all" or scope=="npc"
-   local include_craft=(scope=="all" or scope=="craft")
-      and (not owner or owner==session.settings.node_id)
-   if entity then
-      local p
-      local kind
-      if include_ambient and session.machine.state=="host" then
-         p=session.host_inventory[entity]
-         kind="npc_add"
-      end
-      if not p and include_craft then
-         p=session.owned_inventory[entity]
-         kind="craft_manifest"
-      end
-      if p and exists(p) then
-         local message=add_message(manifest_record(p,entity,kind=="npc_add"),kind,
-            kind=="craft_manifest" and session.settings.node_id or nil)
-         if kind=="npc_add" then message.recipient=recipient end
-         broadcast(message,true)
-         return
-      end
-      if scope=="npc" and session.machine.state=="host" then
-         session.sequence=session.sequence+1
-         local message=base("npc_remove")
-         message.claim=session.machine.claim
-         message.entity=entity
-         message.seq=session.sequence
-         message.recipient=recipient
-         message.reason="absent"
-         broadcast(message,true)
-         return
-      end
-      -- A request may race the one-second membership pass. Do not turn that
-      -- race into an unbounded pilot.get() scan; the next membership pass will
-      -- publish the new entity reliably.
-   end
-   local ambient=session.host_inventory
-   local craft=session.owned_inventory
-   if include_ambient and session.machine.state=="host" then
-      if entity then
-         local p=ambient[entity]
-         if p then
-            local message=add_message(manifest_record(p,entity,true),"npc_add")
-            message.recipient=recipient
-            broadcast(message,true)
-         end
-      else
-         queue_npc_manifests(ambient,recipient)
-      end
-   end
-   if include_craft then
-      for id,p in pairs(craft) do
-         if not entity or id==entity then
-            broadcast(add_message(manifest_record(p,id),"craft_manifest",session.settings.node_id),true)
-         end
-      end
-   end
-end
-
-request_resync = function ( scope, owner, entity )
-   if not session.machine or not session.machine.system then return end
-   local key=table.concat({scope or "",owner or "",entity or ""},"|")
-   local stamp=now()
-   if scope=="all" then session.initial_sync_until=stamp+3 end
-   if stamp-(session.resync_sent[key] or -math.huge)<1 then return end
-   session.resync_sent[key]=stamp
-   session.sequence=session.sequence+1
-   local msg=base("resync")
-   msg.seq=session.sequence
-   msg.scope=scope
-   msg.owner=owner
-   msg.entity=entity
-   broadcast(msg,true)
-end
-
-function session.start ( settings )
-   if session.running then return true end
-   clear_local_controls()
-   session.local_speed2=nil
-   session.indicators:clear()
-   session.settings=session.defaults(settings)
-   local ok,host=pcall(enet.host_create,"*:"..tostring(session.settings.listen_port))
-   if not ok then return nil,"unable to create P2P host: "..tostring(host) end
-   if not host then return nil,"unable to create P2P host" end
-   session.host=host; session.running=true; session.machine=core.new(session.settings.node_id,now); session.machine:start()
-   session.identities=identity.new(session.settings.node_id,local_player_name())
-   session.member_endpoints={}; session.craft_factions={}; session.departures={}; session.host_welcomed={}
-   session.pending_leader_owners={}; session.resync_sent={}; session.ownership_cache={}
-   session.pending_npc_leaders=nil
-   session.host_inventory={}; session.owned_inventory={}
-   session.host_npc_controls={}
-   session.pending_npc_controls={}
-   session.pending_npc_control_entities={}
-   session.npc_lifecycle_sequences={}
-   session.craft_lifecycle_sequences={}
-   session.pending_fighter_bays={}
-   session.pending_entity_removals={}
-   session.host_npc_population=0
-   session.guest_npc_population=nil
-   session.npc_population_events={}
-   session.replica_entity_ids={}
-   session.npc_replica_order={}; session.npc_replica_enqueued={}
-   session.npc_snapshot=0
-   session.authoritative_entities={}
-   session.authoritative_pilots={}
-   session.mesh=Mesh.new(session.settings.node_id,now)
-   session.member_features={}
-   session.player_peers={}
-   session.direct_links={}
-   session.direct_link_signatures={}
-   session.relay_targets={}
-   session.relay_topology_dirty=true
-   session.local_control_seq=0
+local function reset_delivery_state ()
+   local active={}
+   for _index,entity in ipairs(session.active_order) do active[#active+1]=entity end
+   for _index,entity in ipairs(active) do deactivate_npc(entity) end
+   session.active_npcs={}
+   session.active_order={}
+   session.world_sequence_received=-1
+   session.manifest_cache={}
+   session.manifest_order={}
+   session.manifest_cursor=1
+   session.manifest_queries={}
+   session.pending_states={}
+   session.pending_state_count=0
+   session.npc_announcement_queue={}
+   session.npc_announcement_seen={}
+   session.target_interests={}
+   session.interest_entities={}
+   session.interest_order={}
+   session.interest_seen={}
+   session.interest_cursor=1
+   session.local_interest=nil
+   session.last_interest=nil
    session.local_control_signature=nil
-   session.local_weapset=1
-   session.ambient_spawning=true
-   session.heartbeat_seq=0
-   session.last_heartbeat=-math.huge
-   session.inventory_snapshot=nil; session.last_inventory=-math.huge
-   session.npc_round_robin={}; session.npc_round_robin_at=1
-   session.npc_target_interests={}
-   session.npc_target_interest_order={}; session.npc_target_interest_cursor=1
-   session.npc_target_interest_enqueued={}
-   session.local_npc_interest_seq=0
-   session.local_npc_interest_target=nil; session.last_npc_interest=-math.huge
-   session.pending_npc_manifests={}
-   session.pending_npc_manifest_order={}; session.pending_npc_manifest_cursor=1
-   session.pending_npc_manifest_enqueued={}
-   session.last_npc_manifest_batch=-math.huge
-   session.last_npc_focus=-math.huge
-   session.receiving_npc_snapshot=nil
-   session.visit_tombstones={}
-   session.local_objects={}
-   session.local_object_pilots={}
-   session.pending_object_requests={}
-   session.pending_object_deletes={}
-   session.known_objects_by_system={}
-   session.object_subscription_system=nil
-   session.object_confirmed_system=nil
-   session.object_confirmed_at=-math.huge
-   session.object_request=0
-   session.last_object_retry=0
-   session.object_client=nil
-   session.activity={}
-   session.activity_received=0
-   session.activity_generation=0
-   session.self_activity={}
-   session.last_activity_query=0
-   session.directory_probe_deadline=nil
-   session.initial_sync_until=0
-   session.solo_since=nil
-   session.realtime_clock_pinned=nil
-   session.skip_host_grace=nil
-   session.skip_next_host_grace=nil
-   session.departed_system=nil
-   session.last_liveness=now()
-   session.last_claim_check=0
-   session.endpoint=tostring(host:get_socket_address())
-   start_object_client()
-   publish_object_capability()
-   print("P2P: listener started")
-   session.machine.topology:load_peers(session.settings.recent)
-   connect_known_peers()
-   session.last_seed_connect=now()
-   return true
+   session.last_control_publish=nil
 end
 
-function session.stop ()
-   clear_local_controls()
-   session.local_speed2=nil
-   if not session.running then
-      session.indicators:clear()
-      lock_autonav(false)
-      naev.cache().multiplayer_p2p_objects=false
-      return
-   end
-   if session.machine.system then broadcast(base("leave"),true) end
-   session.leave()
-   if session.object_client then session.object_client:stop() end
-   for peer in pairs(session.peers) do peer:disconnect_now() end
-   session.settings.recent=session.machine.topology:serialize_peers()
-   session.machine:stop(); session.host=nil; session.object_client=nil
-   session.running=false; session.peers={}; session.endpoints={}; session.peer_meta={}; session.identities=nil
-   publish_object_capability()
-end
-
-function session.enter ( system_name )
-   if not session.running then return nil,"not running" end
-   -- Naev can run both takeoff and enter hooks for one transition. Do not
-   -- restart discovery, discard peers, or rebuild the population when the
-   -- player is already in this system.
-   if session.machine.system==system_name then
-      refresh_time_controls()
-      return true
-   end
-   session.leave()
-   local skip_host_grace=session.skip_next_host_grace==true
-      and session.departed_system~=system_name
-   session.skip_next_host_grace=nil
-   session.departed_system=nil
-   session.visit_generation=(session.visit_generation or 0)+1
-   session.visit=random_id()..string.format("%x",session.visit_generation)
-   session.mesh:reset()
-   session.machine:enter(system_name,session.visit)
-   session.object_subscription_system=system_name
-   session.object_confirmed_system=nil
-   session.object_confirmed_at=-math.huge
-   session.skip_host_grace=skip_host_grace
-   session.locally_claimed=locally_claimed()
-   session.last_claim_check=now()
-   session.last_liveness=now()
-   session.solo_since=nil
-   session.realtime_clock_pinned=nil
-   session.local_speed2=nil
-   reset_smoothing()
-   session.greeted_system=nil
-   if session.locally_claimed then
+local function become_host ( failover )
+   reset_delivery_state()
+   if failover then
+      promote_guest_population()
+   elseif not session.host_inventory_scanned then
+      session.host_inventory_scanned=true
       set_ambient_spawning(true)
+      scan_initial_host_population()
+   end
+   for entity,entry in pairs(session.authority) do
+      if entry.kind=="npc" and exists(entry.pilot)
+            and not session.npc_announcement_seen[entity] then
+         session.npc_announcement_seen[entity]=true
+         session.npc_announcement_queue[
+            #session.npc_announcement_queue+1]=entity
+      end
+   end
+   refresh_host_manifest_cache()
+   publish_participant_manifests()
+   publish_directory_claim()
+   local action=failover and "elected replacement system host"
+      or "claimed system host"
+   print("P2P: "..action.." for "..tostring(current_system())
+      .." (epoch "..tostring(session.machine.claim)..")")
+end
+
+local function join_host ( old_state )
+   reset_delivery_state()
+   session.needs_host_join=nil
+   if old_state=="host" then demote_host_population() end
+   set_ambient_spawning(false)
+   if not session.guest_population_pruned then
+      session.guest_population_pruned=true
+      remove_guest_ambient_once()
+   end
+   local host=session.machine.host
+   print("P2P: joined system host "
+      ..remote_player_name(host).." for "..tostring(current_system())
+      .." (epoch "..tostring(session.machine.claim)..")")
+   local endpoint=session.member_endpoints[host]
+   if endpoint and not connected_node(host) then connect_gameplay(endpoint,host) end
+   session.sequence=session.sequence+1
+   local join=gameplay_base("join")
+   join.seq=session.sequence
+   send_host(join,true)
+   local manifest=player_manifest()
+   if manifest then send_host(manifest,true) end
+   for _entity,entry in pairs(session.authority) do
+      if entry.kind=="craft" and entry.owner==session.settings.node_id then
+         local craft_manifest=authority_manifest(entry)
+         if craft_manifest then send_host(craft_manifest,true) end
+      end
+   end
+end
+
+local chat_sound
+local function play_chat_sound ()
+   if not chat_sound then chat_sound=audio.new("snd/sounds/hail.opus") end
+   chat_sound:play()
+end
+
+local function show_chat ( owner, text )
+   if owner==session.settings.node_id then
+      pilot.comm(display_text(local_player_name()),display_text(text))
    else
-      -- No peer is allowed to contribute a speculative ambient population
-      -- while authority is undecided. The elected initial host enables Naev's
-      -- scheduler; followers reconstruct only the authority's population.
-      remove_guest_population()
-   end
-   spawn_known_objects(system_name)
-   lock_autonav(not skip_host_grace)
-   connect_known_peers(); session.last_seed_connect=now()
-   -- The directory transport normally predates takeoff. Its hello handler
-   -- therefore cannot subscribe a landed client to a system that did not
-   -- exist yet. Subscribe on every visit so simultaneous arrivals are
-   -- introduced after either peer publishes its claim.
-   query_rendezvous()
-   print("P2P: discovering system host")
-   session.sequence=session.sequence+1
-   local query=base("host_query"); query.seq=session.sequence
-   broadcast(query,true)
-   ensure_object_subscription()
-   publish_player(true)
-   return true
-end
-
-function session.leave ()
-   clear_local_controls()
-   session.local_control_signature=nil
-   if not session.machine or not session.machine.system then
-      session.local_speed2=nil
-      session.indicators:clear()
-      lock_autonav(false)
-      return
-   end
-   local current_system=session.machine.system
-   session.object_subscription_system=nil
-   session.object_confirmed_system=nil
-   session.object_confirmed_at=-math.huge
-   clear_local_objects()
-   for request,pending in pairs(session.pending_object_requests) do
-      if pending.action=="query" then session.pending_object_requests[request]=nil end
-   end
-   session.skip_next_host_grace=session.machine.state=="host"
-      and no_other_players_discovered(current_system)
-   if session.machine.state=="host" then
-      for _index,entry in ipairs(session.activity) do
-         if entry.active and entry.system==current_system then
-            session.self_activity[current_system]=session.activity_generation
-            break
-         end
+      local manifest=session.player_manifests[owner]
+      local entry=manifest and session.players[manifest.entity]
+      if entry and exists(entry.pilot) then
+         entry.pilot:broadcast(display_text(text),true)
+      else
+         pilot.comm(session.identities:display_name(owner) or owner,
+            display_text(text))
       end
    end
-   session.departed_system=current_system
-   broadcast(base("leave"),true)
-   -- A gameplay peer is only a path for the system visit that established it.
-   -- Landing and jumping must not carry a half-open UDP association into the
-   -- the next host election. Directory transports remain available to
-   -- rendezvous a fresh path, while remembered player endpoints are retried by
-   -- enter() below.
-   disconnect_player_transports()
-   session.player_peers={}
-   session.direct_links={}
-   session.direct_link_signatures={}
-   session.relay_targets={}
-   session.relay_topology_dirty=true
-   for _entity_id,entry in pairs(session.players) do remove_pilot(entry.pilot) end
-   for _entity_id,entry in pairs(session.npcs) do remove_pilot(entry.pilot) end
-   for _entity_id,entry in pairs(session.craft) do remove_pilot(entry.pilot) end
-   for node in pairs(session.departures) do clear_departure(node,false) end
-   session.players={}; session.npcs={}; session.craft={}
-   session.departures={}
-   session.craft_factions={}; session.host_welcomed={}
-   session.pending_leader_owners={}; session.resync_sent={}; session.ownership_cache={}
-   session.pending_npc_leaders=nil
-   session.host_inventory={}; session.owned_inventory={}
-   session.host_npc_controls={}
-   session.pending_npc_controls={}
-   session.pending_npc_control_entities={}
-   session.npc_lifecycle_sequences={}
-   session.craft_lifecycle_sequences={}
-   session.pending_fighter_bays={}
-   session.pending_entity_removals={}
-   session.host_npc_population=0
-   session.guest_npc_population=nil
-   session.npc_population_events={}
-   session.replica_entity_ids={}
-   session.npc_replica_order={}; session.npc_replica_enqueued={}
-   session.authoritative_entities={}
-   session.authoritative_pilots={}
-   session.inventory_snapshot=nil; session.last_inventory=-math.huge
-   session.npc_round_robin={}; session.npc_round_robin_at=1
-   session.npc_target_interests={}
-   session.npc_target_interest_order={}; session.npc_target_interest_cursor=1
-   session.npc_target_interest_enqueued={}
-   session.local_npc_interest_seq=0
-   session.local_npc_interest_target=nil; session.last_npc_interest=-math.huge
-   session.pending_npc_manifests={}
-   session.pending_npc_manifest_order={}; session.pending_npc_manifest_cursor=1
-   session.pending_npc_manifest_enqueued={}
-   session.last_npc_manifest_batch=-math.huge
-   session.last_npc_focus=-math.huge
-   session.receiving_npc_snapshot=nil
-   session.initial_sync_until=0
-   session.solo_since=nil
-   session.realtime_clock_pinned=nil
-   session.local_speed2=nil
-   session.indicators:clear()
-   reset_smoothing()
-   session.greeted_system=nil
-   session.locally_claimed=nil
-   set_ambient_spawning(true); session.machine:leave(); session.visit=nil
-   session.mesh:reset(); lock_autonav(false)
-end
-
-function session.create_message_buoy ( text, slot )
-   if not session.running or not session.machine or not session.machine.system
-         or player.isLanded() then
-      return nil,_("Message buoys can only be deployed during P2P spaceflight.")
-   end
-   if type(text)~="string" then return nil,_("Invalid message.") end
-   text=text:match("^%s*(.-)%s*$")
-   if text=="" or #text>96 or text:find("[%z\1-\31\127]") then
-      return nil,_("Enter a message without control characters.")
-   end
-   slot=tonumber(slot)
-   local current=slot and player.pilot():outfitSlot(slot) or nil
-   if not current or current:nameRaw()~="Message Buoy" then
-      return nil,_("The fitted message buoy could not be found.")
-   end
-   local peer=object_directory_peer()
-   if not peer then return nil,_("The configured directory does not support persistent objects.") end
-   for _request,pending in pairs(session.pending_object_requests) do
-      if (pending.action=="create" or pending.action=="create_reconcile"
-            or pending.action=="create_wait_delete")
-            and pending.system==session.machine.system then
-         return nil,_("A message buoy deployment is already in progress.")
-      end
-   end
-   local object_id=session.settings.node_id.."_"..random_id()
-   local x,y=player.pilot():pos():get()
-   local object={
-      id=object_id,kind="message_buoy",owner=session.settings.node_id,
-      created=math.max(0,math.floor(now())),revision=1,
-      data={text=text,captain=player.name()},
-      endpoints={{
-         id=object_id.."_physical",
-         system=session.machine.system,x=x,y=y,dir=player.pilot():dir(),
-         role="physical",visible=true,
-      }},
-   }
-   local packed,err=Object.encode(object)
-   if not packed then return nil,tostring(err) end
-   local request=next_object_request()
-   local waiting=has_pending_object_delete(session.machine.system)
-   session.pending_object_requests[request]={
-      action=waiting and "create_wait_delete" or "create",
-      object_id=object_id,slot=slot,system=session.machine.system,
-      object=object,packed=packed,
-      deadline=now()+(waiting and OBJECT_RECONCILE_TIMEOUT
-         or OBJECT_REQUEST_TIMEOUT),
-   }
-   if waiting then
-      player.msg(_("Waiting for the destroyed message buoy to be removed…"))
-   elseif not send_object_create(peer,request,session.pending_object_requests[request]) then
-      session.pending_object_requests[request]=nil
-      return nil,_("The message buoy directory is unavailable.")
-   end
-   return true
-end
-
-function session.message_buoy_destroyed ( object_id, destroyed_pilot )
-   local entry=session.local_objects[object_id]
-   if not entry or entry.removing
-         or (destroyed_pilot and entry.pilot~=destroyed_pilot) then return false end
-   if entry.hook then hook.rm(entry.hook) end
-   if entry.local_id then session.local_object_pilots[entry.local_id]=nil end
-   session.local_objects[object_id]=nil
-   forget_object(object_id)
-   local endpoint=message_buoy_endpoint(entry.object)
-   session.pending_object_deletes[object_id]={
-      sent=false,system=endpoint and endpoint.system,
-   }
-   send_pending_object_deletes(object_directory_peer())
-   return true
-end
-
-function session.send_chat ( text )
-   if not session.running or not session.machine.system or type(text)~="string" or text=="" then return nil end
-   session.sequence=session.sequence+1
-   local msg=base("chat"); msg.seq=session.sequence; msg.text=text:sub(1,1024)
-   -- Display immediately. If a host relays the message back, the accepted
-   -- sequence makes that echo a no-op instead of showing it twice.
-   session.machine:accept_sequence("chat:"..session.settings.node_id,msg.seq)
-   pilot.comm(display_text(local_player_name()),display_text(msg.text))
    play_chat_sound()
-   broadcast(msg,true)
-   return true
 end
 
-function session.request_activity ()
-   if not session.running then return false end
+local function directory_feature ( meta, name )
+   return meta and type(meta.features)=="string"
+      and (","..meta.features..","):find(","..name..",",1,true)~=nil
+end
+
+local function request_activity_from_directory ()
    local sent=false
    for peer,meta in pairs(session.peer_meta) do
-      if meta.verified and meta.cap=="directory" and has_feature(meta,"activity") then
-         sent=send(peer,{type="activity_query",node=session.settings.node_id},true)
-            or sent
+      if meta.protocol=="directory" and meta.verified
+            and directory_feature(meta,"activity") then
+         sent=send_directory(peer,{
+            type="activity_query",node=session.settings.node_id,
+         }) or sent
       end
    end
    session.last_activity_query=now()
@@ -4036,329 +2369,1087 @@ function session.request_activity ()
    return sent
 end
 
-function session.recent_activity ()
-   local stamp=now()
+local function apply_directory_activity ( message )
+   local received=now()
    local activity={}
-   local snapshot_fresh=stamp-(session.activity_received or 0)
-      <=2*ACTIVITY_QUERY_INTERVAL
-   for _index,entry in ipairs(session.activity or {}) do
-      local age=math.max(0,math.floor(stamp-entry.seen))
-      if age<=ACTIVITY_RETENTION then
-         activity[#activity+1]={system=entry.system,
-            active=entry.active and snapshot_fresh,age=age}
-      end
-   end
-   return activity
-end
-
-function session.input ( input_name, input_pressed )
-   if not session.running then return end
-   -- Arena multiplayer unpauses on every input event. P2P must keep pumping
-   -- networking and the authoritative NPC simulation while a menu is open
-   -- too, but a solo host must retain ordinary single-player pausing.
-   session.keep_simulation_live()
-   local selected=input_name:match("^weapset([0-9])$")
-   if selected then
-      if input_pressed then
-         session.local_weapset=tonumber(selected)
-         if session.local_weapset==0 then session.local_weapset=10 end
-         publish_player_control(false)
-      end
-      return
-   end
-   if input_pressed and (input_name=="e_attack" or input_name=="e_hold"
-         or input_name=="e_return" or input_name=="e_clear") then
-      session.sequence=session.sequence+1
-      local msg=base("craft_order")
-      msg.owner=session.settings.node_id; msg.seq=session.sequence; msg.order=input_name
-      if input_name=="e_attack" then
-         local target=player.pilot():target()
-         msg.target=target_entity(target)
-         if msg.target=="" then return end
-         for node,entry in pairs(session.players) do
-            if entry.pilot==target then mark_player_aggression(node); break end
-         end
-      end
-      broadcast(msg,true)
-      return
-   end
-   local key
-   if input_name=="accel" then key="accel"
-   elseif input_name=="primary" then key="primary"
-   elseif input_name=="secondary" then key="secondary"
-   else return end
-   if input_pressed and (key=="primary" or key=="secondary") then
-      local target=player.pilot():target()
-      for node,entry in pairs(session.players) do
-         if entry.pilot==target then
-            mark_player_aggression(node)
-            break
-         end
-      end
-   end
-   naev.cache()[key]=input_pressed and 1 or 0
-   if key=="primary" or key=="secondary" then publish_player_control(false) end
-end
-
-function session.enforce_time_controls ()
-   -- Naev's ship time_mod changes the global simulation dt, while each
-   -- pilot's time_speedup remains its own action-speed balance modifier.
-   -- Multiplayer must share the former without flattening the latter.
-   if not session.autonav_locked then return end
-   local current=player.dt_mod()
-   if not session.locked_dt_mod
-         or math.abs(current-session.locked_dt_mod)>1e-6 then
-      player.autonavSetSpeed(1)
-      session.locked_dt_mod=player.dt_mod()
-   end
-end
-
-function session.update ( dt )
-   if not session.running then return end
-   local stamp=now()
-   session.indicators:update(stamp)
-   if session.machine.system
-         and stamp-(session.last_claim_check or 0)>=1 then
-      session.last_claim_check=stamp
-      session.locally_claimed=locally_claimed()
-      if session.locally_claimed and session.machine.state=="guest" then
-         local system_name=session.machine.system
-         print("P2P: local system claim requires hosting")
-         session.leave()
-         session.enter(system_name)
-      end
-   end
-   -- Autonav can be entered through map and scripted paths that bypass the
-   -- disabled speed input. Keep it usable without allowing time compression.
-   session.enforce_time_controls()
-   local processed=0
-   local event=session.host:service(0)
-   while event do
-      processed=processed+1
-      if event.type=="connect" then
-         if not session.peers[event.peer] then
-            session.peers[event.peer]=tostring(event.peer)
-            session.peer_meta[event.peer]={
-               verified=false,outbound=false,connected_at=stamp,
+   if message.entries~="-" then
+      for line in message.entries:gmatch("([^;]+)") do
+         if #activity>=20 then break end
+         local encoded,active,age=line:match("^([^,]+),([01]),(%d+)$")
+         local system_name=encoded and directory_codec.unescape(encoded)
+         age=tonumber(age)
+         if system_name and system_name~="" and #system_name<=240
+               and age and age>=0 and age<=86400 then
+            activity[#activity+1]={
+               system=system_name,active=active=="1",seen=received-age,
             }
          end
-         hello(event.peer)
-      elseif event.type=="receive" then
-         local message,err=codec.decode(event.data)
-         if message then
-            local receive_meta=session.peer_meta[event.peer]
-            if receive_meta then receive_meta.last_receive=stamp end
-            on_message(event.peer,message)
+      end
+   end
+   session.activity=activity
+   session.activity_received=received
+   session.directory_probe_deadline=nil
+   naev.cache().multiplayer_activity={
+      received=received,entries=activity,
+   }
+end
+
+local function handle_directory_message ( peer, message )
+   local meta=session.peer_meta[peer]
+   if message.type=="hello" then
+      if message.cap~="directory" or message.node==session.settings.node_id then
+         reject_peer(peer,"invalid directory hello")
+         return
+      end
+      meta.verified=true
+      meta.node=message.node
+      meta.features=message.features or ""
+      meta.last_receive=now()
+      directory_query()
+      if is_host() then publish_directory_claim() end
+      if directory_feature(meta,"activity") then
+         request_activity_from_directory()
+      end
+      return
+   end
+   if not meta.verified or message.node~=meta.node then return end
+   if message.type=="punch" and message.system==current_system()
+         and message.peer~=session.settings.node_id then
+      session.member_endpoints[message.peer]=message.endpoint
+      connect_gameplay(message.endpoint,message.peer)
+   elseif message.type=="hint" and message.system==current_system()
+         and message.host~=session.settings.node_id then
+      session.member_endpoints[message.host]=message.endpoint
+      session.machine.topology:remember_hint(
+         message.system,message.host,message.endpoint,
+         message.claim,now()+message.ttl)
+      connect_gameplay(message.endpoint,message.host)
+   elseif message.type=="activity" then
+      apply_directory_activity(message)
+   end
+end
+
+local function gameplay_hello ( peer )
+   send_game(peer,{
+      type="hello",node=session.settings.node_id,
+      name=local_player_name(),endpoint=session.endpoint,
+   },true)
+   if current_system() then
+      local query=gameplay_base("query")
+      query.epoch=nil
+      send_game(peer,query,true)
+   end
+end
+
+local function directory_hello ( peer )
+   send_directory(peer,{
+      type="hello",node=session.settings.node_id,cap="player",
+      name=local_player_name(),endpoint=session.endpoint,
+   })
+end
+
+local function verify_gameplay_hello ( peer, message )
+   local meta=session.peer_meta[peer]
+   if message.node==session.settings.node_id then
+      reject_peer(peer,"self connection")
+      return false
+   end
+   if meta.expected_node and meta.expected_node~=message.node then
+      reject_peer(peer,"unexpected node identity")
+      return false
+   end
+   local duplicate
+   for other,other_meta in pairs(session.peer_meta) do
+      if other~=peer and other_meta.protocol=="gameplay"
+            and other_meta.verified and other_meta.node==message.node then
+         duplicate=other
+         break
+      end
+   end
+   if duplicate then
+      local duplicate_meta=session.peer_meta[duplicate]
+      local prefer_outbound=session.settings.node_id<message.node
+      if meta.outbound==prefer_outbound
+            and duplicate_meta.outbound~=prefer_outbound then
+         reject_peer(duplicate,"duplicate connection",true)
+      else
+         reject_peer(peer,"duplicate connection",true)
+         return false
+      end
+   end
+   local accepted,err=session.identities:add(message.node,message.name)
+   if not accepted and err=="node changed player name" then
+      accepted,err=session.identities:update(message.node,message.name)
+   end
+   if not accepted then
+      reject_peer(peer,err)
+      return false
+   end
+   meta.verified=true
+   meta.node=message.node
+   meta.name=message.name
+   meta.last_receive=now()
+   local observed=session.peers[peer]
+   local endpoint=endpoint_valid(observed) and observed or message.endpoint
+   if endpoint_valid(endpoint) then
+      session.member_endpoints[message.node]=endpoint
+      session.machine.topology:add_peer(endpoint)
+      session.settings.recent=session.machine.topology:serialize_peers()
+   end
+   refresh_time_controls()
+   if current_system() then
+      local query=gameplay_base("query")
+      query.epoch=nil
+      send_game(peer,query,true)
+      if is_host() then
+         local claim=gameplay_base("claim")
+         claim.epoch=session.machine.claim
+         claim.endpoint=session.endpoint
+         send_game(peer,claim,true)
+      end
+   end
+   return true
+end
+
+local remove_owner_population
+
+local function accept_claim_message ( message )
+   if message.node==session.settings.node_id
+         or message.system~=current_system() then return false end
+   local old_state=session.machine.state
+   local old_host=session.machine.host
+   local old_claim=session.machine.claim
+   local candidate={
+      node=message.node,system=message.system,visit=message.visit,
+      claim=message.epoch,endpoint=message.endpoint,
+   }
+   local accepted=session.machine:accept_claim(candidate)
+   if not accepted then return false end
+   session.member_endpoints[message.node]=message.endpoint
+   session.machine.topology:remember_hint(
+      message.system,message.node,message.endpoint,message.epoch,now()+60)
+   local changed=old_state~="guest" or old_host~=message.node
+      or old_claim~=message.epoch
+   if changed or (session.machine.state=="guest"
+         and session.machine.host==message.node
+         and session.needs_host_join) then
+      local departed=old_host or session.recovering_from
+      if changed and departed and departed~=message.node then
+         if old_state=="recovering" then announce_player_leave(departed) end
+         remove_owner_population(departed,false)
+      end
+      session.recovering_from=nil
+      join_host(old_state)
+   end
+   refresh_time_controls()
+   return true
+end
+
+remove_owner_population = function ( owner, explode )
+   local entities={}
+   for entity,entry in pairs(session.players) do
+      if entry.owner==owner then entities[#entities+1]=entity end
+   end
+   for entity,entry in pairs(session.craft) do
+      if entry.owner==owner then entities[#entities+1]=entity end
+   end
+   for _index,entity in ipairs(entities) do remove_replica(entity,explode) end
+   session.player_manifests[owner]=nil
+   session.player_states[owner]=nil
+   clear_interest(owner)
+end
+
+local function host_replace_member_visit ( node, visit, _except )
+   if not is_host() then return false end
+   local old_visit=session.machine.member_visits[node]
+   if not old_visit or old_visit==visit then return false end
+   announce_player_leave(node)
+   remove_owner_population(node,false)
+   session.machine:remove_member(node)
+   local leave=gameplay_base("leave")
+   leave.owner=node
+   host_reliable(leave)
+   return true
+end
+
+local function canonical_player_manifest ( message )
+   local copy=canonical_copy(message)
+   copy.owner=message.owner
+   return copy
+end
+
+local function handle_host_player_manifest ( peer, meta, message )
+   if message.owner~=meta.node or message.node~=meta.node
+         or message.epoch~=session.machine.claim
+         or not message.origin:match("^"..meta.node.."%.") then return end
+   local known=session.identities:raw_name(message.owner)
+   if known~=message.name then return end
+   local canonical=canonical_player_manifest(message)
+   session.player_manifests[message.owner]=canonical
+   if not spawn_player_manifest(message) then
+      reject_peer(peer,"unable to create remote player proxy")
+      return
+   end
+   broadcast_manifest(cache_manifest(canonical))
+end
+
+local function handle_host_entity_manifest ( peer, meta, message )
+   if message.kind~="craft" or message.owner~=meta.node
+         or message.epoch~=session.machine.claim then return end
+   if not message.entity:match("^"..message.owner.."%.")
+         or not message.origin:match("^"..message.owner.."%.") then return end
+   if spawn_entity_manifest(message) then
+      session.world_craft_order[#session.world_craft_order+1]=message.entity
+      local canonical=canonical_copy(message)
+      local entry=session.craft[message.entity]
+      if entry then entry.manifest=canonical end
+      broadcast_manifest(cache_manifest(canonical))
+   end
+end
+
+local function handle_entity_remove ( peer, meta, message )
+   if is_host() then
+      if message.owner~=meta.node or message.kind~="craft" then return end
+      local entry=session.craft[message.entity]
+      if entry and entry.owner==message.owner then
+         remove_replica(message.entity,
+            message.reason=="death" or message.reason=="exploded")
+      end
+      host_reliable(canonical_copy(message))
+   elseif meta.node==session.machine.host then
+      local entry=session.npcs[message.entity] or session.craft[message.entity]
+      if entry and entry.owner==message.owner then
+         remove_replica(message.entity,
+            message.reason=="absent" or message.reason=="death"
+               or message.reason=="exploded")
+      end
+   end
+end
+
+local function handle_gameplay_message ( peer, message )
+   local meta=session.peer_meta[peer]
+   if message.type=="hello" then
+      verify_gameplay_hello(peer,message)
+      return
+   end
+   if not meta.verified or message.node~=meta.node then return end
+   meta.last_receive=now()
+   if message.type=="query" then
+      if message.system==current_system() and is_host() then
+         local claim=gameplay_base("claim")
+         claim.endpoint=session.endpoint
+         send_game(peer,claim,true)
+      end
+      return
+   elseif message.type=="claim" then
+      accept_claim_message(message)
+      return
+   end
+   if not current_system() or message.system~=current_system() then return end
+   if message.type=="heartbeat" then
+      host_replace_member_visit(message.node,message.visit,peer)
+      session.machine:observe_member(
+         message.node,message.visit,
+         message.accepted_host,message.accepted_epoch,now())
+      if session.machine.state=="guest"
+            and message.node==session.machine.host then
+         session.recovering_from=nil
+      end
+      if message.endpoint and endpoint_valid(message.endpoint) then
+         session.member_endpoints[message.node]=message.endpoint
+      end
+      refresh_time_controls()
+      return
+   end
+   local active_visit=session.machine.member_visits[message.node]
+   if active_visit and message.visit~=active_visit then
+      if not (is_host() and message.type=="join") then return end
+      host_replace_member_visit(message.node,message.visit,peer)
+   end
+   session.machine:observe_member(message.node,message.visit,nil,nil,now())
+   if message.type=="leave" then
+      if is_host() and message.owner~=meta.node then return end
+      if not is_host() then
+         if message.epoch~=session.machine.claim then return end
+         if meta.node~=session.machine.host
+               and message.owner~=meta.node then return end
+         if message.owner==session.settings.node_id then return end
+      end
+      session.machine:remove_member(message.owner)
+      announce_player_leave(message.owner)
+      remove_owner_population(message.owner,false)
+      session.identities:remove(message.owner)
+      if is_host() then host_reliable(canonical_copy(message)) end
+      refresh_time_controls()
+      return
+   end
+   if is_host() then
+      if message.epoch~=session.machine.claim then return end
+      if message.type=="join" then
+         publish_participant_manifests()
+      elseif message.type=="entity_query" then
+         local npc=session.authority[message.entity]
+         local cached=session.manifest_cache[message.entity]
+         if npc and npc.kind=="npc" and exists(npc.pilot) then
+            if not session.npc_announcement_seen[message.entity] then
+               session.npc_announcement_seen[message.entity]=true
+               session.npc_announcement_queue[
+                  #session.npc_announcement_queue+1]=message.entity
+            end
+         elseif cached then
+            broadcast_manifest(cached)
          else
-            print("P2P: rejected packet: "..tostring(err))
-            reject_peer(event.peer,"malformed packet",true)
+            entity_absent(peer,message.entity)
+         end
+      elseif message.type=="player_manifest" then
+         handle_host_player_manifest(peer,meta,message)
+      elseif message.type=="entity_manifest" then
+         handle_host_entity_manifest(peer,meta,message)
+      elseif message.type=="entity_remove" then
+         handle_entity_remove(peer,meta,message)
+      elseif message.type=="player_state" then
+         local manifest=session.player_manifests[meta.node]
+         local entry=manifest and session.players[manifest.entity]
+         if manifest and manifest.entity==message.entity and entry
+               and message.seq>(entry.state_sequence or -1) then
+            entry.state_sequence=message.seq
+            session.player_states[meta.node]=message
+            apply_player_record(message,now())
+            session._relay_player_state(message)
+         end
+      elseif message.type=="player_control" then
+         if message.owner~=meta.node then return end
+         local ok,err=apply_player_control_message(message)
+         if not ok and err=="absent" then
+            entity_absent(peer,message.target)
+         elseif ok then
+            host_reliable(canonical_copy(message))
+         end
+      elseif message.type=="craft_state" then
+         if message.owner~=meta.node then return end
+         local entry=session.craft[message.entity]
+         local record=unpack_state(message.state)
+         if entry and entry.owner==meta.node and record
+               and record.entity==message.entity
+               and message.seq>(entry.state_sequence or -1) then
+            entry.state_sequence=message.seq
+            entry.cached_state=record
+            apply_entity_record(record,now())
+         end
+      elseif message.type=="craft_order" then
+         if message.owner~=meta.node then return end
+         if message.target~="-" and not entity_pilot(message.target) then
+            entity_absent(peer,message.target)
+            return
+         end
+         apply_craft_order(message)
+         host_reliable(canonical_copy(message))
+      elseif message.type=="target_interest" then
+         if message.owner~=meta.node then return end
+         if message.target~="-"
+               and not entity_pilot(message.target) then
+            clear_interest(meta.node)
+            entity_absent(peer,message.target)
+         else
+            remember_interest(meta.node,message.target)
+            host_reliable(canonical_copy(message))
+         end
+      elseif message.type=="chat" and message.owner==meta.node then
+         show_chat(message.owner,message.text)
+         host_reliable(canonical_copy(message))
+      end
+      return
+   end
+
+   if session.machine.state~="guest" or meta.node~=session.machine.host
+         or message.epoch~=session.machine.claim then return end
+   if message.type=="player_manifest" then
+      session.player_manifests[message.owner]=message
+      session.manifest_queries[message.entity]=nil
+      if message.owner~=session.settings.node_id then
+         local known=session.identities:raw_name(message.owner)
+         if not known then session.identities:add(message.owner,message.name) end
+         if not spawn_player_manifest(message) then
+            reject_peer(peer,"unable to create remote player proxy")
+            return
+         end
+         local pending=take_pending_state(message.entity)
+         if pending and pending.kind=="player" then
+            apply_player_record(
+               pending.record,pending.stamp,pending.sequence)
+         end
+      end
+   elseif message.type=="entity_manifest" then
+      session.manifest_queries[message.entity]=nil
+      if not spawn_entity_manifest(message) then
+         reject_peer(peer,"unable to create remote "
+            ..tostring(message.kind).." replica")
+         return
+      end
+      local pending=take_pending_state(message.entity)
+      if pending and pending.kind=="entity" then
+         apply_entity_record(
+            pending.record,pending.stamp,pending.sequence)
+      end
+      if not session.incremental_replica_logged then
+         session.incremental_replica_logged=true
+         print("P2P: accepted authoritative "..tostring(message.kind)
+            .." manifest")
+      end
+   elseif message.type=="entity_remove" then
+      take_pending_state(message.entity)
+      handle_entity_remove(peer,meta,message)
+   elseif message.type=="player_control" then
+      apply_player_control_message(message)
+   elseif message.type=="craft_order"
+         and message.owner~=session.settings.node_id then
+      apply_craft_order(message)
+   elseif message.type=="target_interest"
+         and message.owner~=session.settings.node_id then
+      remember_interest(message.owner,message.target)
+   elseif message.type=="world" then
+      session.world_sequence_received=math.max(
+         message.seq,session.world_sequence_received or -1)
+      apply_world(message)
+      if not session.world_rx_logged then
+         session.world_rx_logged=true
+         print("P2P: receiving canonical world stream")
+      end
+   elseif message.type=="entity_absent" then
+      session.manifest_queries[message.entity]=nil
+      take_pending_state(message.entity)
+      remove_replica(message.entity,true)
+   elseif message.type=="chat"
+         and message.owner~=session.settings.node_id then
+      show_chat(message.owner,message.text)
+   end
+end
+
+local function disconnect_gameplay_peers ()
+   local peers={}
+   for peer,meta in pairs(session.peer_meta) do
+      if meta.protocol=="gameplay" then peers[#peers+1]=peer end
+   end
+   for _index,peer in ipairs(peers) do
+      reject_peer(peer,"system lifecycle reset",true)
+   end
+end
+
+local function service_transport ( stamp )
+   local processed=0
+   while processed<MAX_EVENTS_PER_FRAME do
+      local event=session.host:service(0)
+      if not event then break end
+      processed=processed+1
+      if event.type=="connect" then
+         local meta=session.peer_meta[event.peer]
+         if not meta then
+            session.peers[event.peer]=tostring(event.peer)
+            meta={
+               protocol="gameplay",outbound=false,verified=false,
+               connected_at=stamp,
+            }
+            session.peer_meta[event.peer]=meta
+         end
+         if meta.protocol=="directory" then directory_hello(event.peer)
+         else gameplay_hello(event.peer) end
+      elseif event.type=="receive" then
+         local meta=session.peer_meta[event.peer]
+         if meta then
+            local codec=meta.protocol=="directory"
+               and directory_codec or gameplay_codec
+            local message,err=codec.decode(event.data)
+            if not message then
+               reject_peer(event.peer,"malformed packet: "..tostring(err),true)
+            elseif meta.protocol=="directory" then
+               handle_directory_message(event.peer,message)
+            else
+               handle_gameplay_message(event.peer,message)
+            end
          end
       elseif event.type=="disconnect" then
          local endpoint=session.peers[event.peer]
          local meta=session.peer_meta[event.peer]
-         if meta and meta.node and session.player_peers[meta.node]==event.peer then
-            session.player_peers[meta.node]=nil
-            session.relay_topology_dirty=true
+         if meta and meta.protocol=="gameplay"
+               and session.machine.state=="guest"
+               and meta.node==session.machine.host then
+            session.needs_host_join=true
          end
          session.peers[event.peer]=nil
          session.peer_meta[event.peer]=nil
          if endpoint then session.endpoints[endpoint]=nil end
       end
-      if processed>=MAX_EVENTS_PER_FRAME then break end
-      event=session.host:service(0)
    end
-   service_npc_snapshot_prune()
-   for owner in pairs(session.pending_leader_owners) do
-      reconcile_craft_leaders(owner)
-      session.pending_leader_owners[owner]=nil
+end
+
+local function publish_claim ()
+   if not is_host() then return end
+   local claim=gameplay_base("claim")
+   claim.endpoint=session.endpoint
+   fanout_control(claim)
+   publish_directory_claim()
+   session.last_claim=now()
+end
+
+local function publish_heartbeat ( stamp )
+   if not current_system() then return end
+   session.heartbeat_sequence=(session.heartbeat_sequence or 0)+1
+   local heartbeat=gameplay_base("heartbeat")
+   heartbeat.seq=session.heartbeat_sequence
+   heartbeat.endpoint=session.endpoint
+   heartbeat.accepted_host=session.machine.host
+   heartbeat.accepted_epoch=session.machine.claim
+   fanout_control(heartbeat)
+   session.machine:observe_member(
+      session.settings.node_id,session.visit,
+      heartbeat.accepted_host,heartbeat.accepted_epoch,stamp)
+end
+
+local function redial_host_and_members ()
+   if not current_system() then return end
+   if session.machine.state=="guest" and session.machine.host then
+      local endpoint=session.member_endpoints[session.machine.host]
+      if endpoint and not connected_node(session.machine.host) then
+         connect_gameplay(endpoint,session.machine.host)
+      end
    end
-   if session.pending_npc_leaders then
-      reconcile_npc_leaders()
-      session.pending_npc_leaders=nil
+   for node,endpoint in pairs(session.member_endpoints) do
+      if node~=session.settings.node_id and not connected_node(node) then
+         connect_gameplay(endpoint,node)
+      end
    end
-   -- toggleSpawn(false) only closes Naev's ambient scheduler. Missions and
-   -- events can still add pilots directly, so non-authorities prune anything
-   -- outside the replica, owned-craft, and persistent-object sets at the same
-   -- bounded one-second cadence as the normal inventory diff.
-   if session.machine.system and session.machine.state~="host"
-         and not session.locally_claimed
-         and stamp-(session.last_inventory or -math.huge)>=INVENTORY_INTERVAL then
-      cached_inventory(stamp,false)
+   connect_known_peers()
+   directory_query()
+end
+
+local function audit_one_authority ()
+   local order=session.audit_order
+   local count=#order
+   if count==0 then return end
+   if session.audit_cursor>count then session.audit_cursor=1 end
+   local entity=order[session.audit_cursor]
+   session.audit_cursor=session.audit_cursor+1
+   local entry=session.authority[entity]
+   if entry and not exists(entry.pilot) then
+      session.pilot_departed(entry.pilot,"removed",entity)
    end
-   greet_host()
-   if stamp-(session.last_liveness or 0)>=1 then
-      session.last_liveness=stamp
-      if session.machine.state=="host" and not session.locally_claimed
-            and has_remote_member() and session.last_heartbeat>-math.huge
-            and stamp-session.last_heartbeat>core.HOST_LEASE then
-         session.machine:host_stale()
-         trace("host_pause_recovery",{gap=stamp-session.last_heartbeat})
+end
+
+local function reconcile_participant_liveness ( stamp )
+   local stale={}
+   for node in pairs(session.machine.members) do
+      if node~=session.settings.node_id
+            and stamp-(session.machine.member_seen[node] or -math.huge)
+               >core.MEMBER_LEASE then
+         stale[#stale+1]=node
       end
-      local stale_peers={}
-      for peer,meta in pairs(session.peer_meta) do
-         if not meta.verified
-               and stamp-(meta.connected_at or stamp)>=HANDSHAKE_TIMEOUT then
-            stale_peers[#stale_peers+1]=peer
-         elseif meta.verified and meta.cap=="player"
-               and stamp-(meta.last_receive or stamp)>=TRANSPORT_IDLE_TIMEOUT then
-            stale_peers[#stale_peers+1]=peer
-         elseif session.directory_probe_deadline
-               and stamp>=session.directory_probe_deadline
-               and meta.verified and meta.cap=="directory"
-               and has_feature(meta,"activity") then
-            stale_peers[#stale_peers+1]=peer
-         end
-      end
-      if session.directory_probe_deadline
-            and stamp>=session.directory_probe_deadline then
-         session.directory_probe_deadline=nil
-      end
-      for _index,peer in ipairs(stale_peers) do
-         reject_peer(peer,"application liveness timeout",true)
-      end
-      for entity in pairs(session.pending_npc_control_entities) do
-         local entry=session.npcs[entity]
-         if entry and exists(entry.pilot) and entry.pending_control then
-            apply_npc_control(entry,entry.pending_control)
-         end
-         if not entry or not entry.pending_control then
-            session.pending_npc_control_entities[entity]=nil
-         end
-      end
-      local receiving=session.receiving_npc_snapshot
-      if receiving and not receiving.pruning and stamp>=receiving.deadline then
-         session.receiving_npc_snapshot=nil
-         request_resync("npc")
-      end
-      for node,entry in pairs(session.departures) do
-         if not exists(entry.pilot) then session.departures[node]=nil end
-      end
-      local stale_nodes={}
-      local aggression_deadline
-      for node,entry in pairs(session.players) do
-         if entry.last_aggression and stamp-entry.last_aggression>=AGGRESSION_GRACE then
-            if exists(entry.pilot) then entry.pilot:setHostile(false) end
-            entry.last_aggression=nil
-            entry.p2p_hostile=nil
-            -- Fighter hostility is set only by explicit owner attack orders;
-            -- clearing it here is a rare timer transition, not per-frame work.
-            for _entity_id,craft in pairs(session.craft) do
-               if craft.owner==node and exists(craft.pilot) then
-                  craft.pilot:setHostile(false)
-               end
-            end
-         end
-         local member_seen=session.machine.member_seen[node]
-         local stale=not exists(entry.pilot) or not member_seen
-            or stamp-member_seen>core.MEMBER_LEASE
-         if stale then
-            stale_nodes[#stale_nodes+1]=node
-         elseif entry.last_aggression then
-            aggression_deadline=math.max(aggression_deadline or 0,
-               entry.last_aggression+AGGRESSION_GRACE)
-         end
-      end
-      session.indicators:reconcile_aggression(aggression_deadline,stamp)
-      for _index,node in ipairs(stale_nodes) do
-         disconnect_node_transports(node)
-         session.machine:remove_member(node)
-         session.direct_links[node]=nil
-         session.direct_link_signatures[node]=nil
-         session.relay_topology_dirty=true
-         session.npc_target_interests[node]=nil
-         session.pending_npc_manifests[node]=nil
-         owned.cleanup(session.craft,node,function(entry) remove_pilot(entry.pilot) end)
-         clear_owner_lifecycle(session.craft_lifecycle_sequences,node)
-         session.identities:remove(node)
-         remove_remote_player(node)
-         if node==session.machine.host then handle_host_loss() end
-      end
-      for entity,entry in pairs(session.npcs) do
-         if not exists(entry.pilot) then
-            session.npcs[entity]=nil
-            request_resync("npc",nil,entity)
-         end
-      end
-      for entity,entry in pairs(session.craft) do
-         if not exists(entry.pilot) then
-            session.craft[entity]=nil
-            request_resync("craft",entry.owner,entity)
-         end
-      end
-      refresh_time_controls(stamp)
    end
-   smooth_replicas(dt,stamp)
-   if session.machine.system and stamp-(session.last_heartbeat or -math.huge)>=1 then
-      session.last_heartbeat=stamp
-      session.heartbeat_seq=(session.heartbeat_seq or 0)+1
-      local heartbeat=base("member_heartbeat")
-      heartbeat.seq=session.heartbeat_seq
-      heartbeat.endpoint=session.endpoint
-      heartbeat.links=session.local_direct_links()
-      heartbeat.accepted_host=session.machine.host
-      heartbeat.accepted_claim=session.machine.claim
-      session.machine:observe_member(session.settings.node_id,session.visit,
-         heartbeat.accepted_host,heartbeat.accepted_claim,stamp)
-      broadcast(heartbeat,true)
-   end
-   local was_host=session.machine.state=="host"
-   local action=session.machine:tick()
-   if stamp-(session.last_activity_query or 0)>=ACTIVITY_QUERY_INTERVAL then
-      session.request_activity()
-   end
-   if stamp-(session.last_seed_connect or 0)>=5 then
-      connect_configured()
-      query_rendezvous()
-      for node,endpoint in pairs(session.member_endpoints) do
-         if node~=session.settings.node_id and not connected_node(node)
-               and endpoint_valid(endpoint) then connect(endpoint,node) end
+   for _index,node in ipairs(stale) do
+      session.machine:remove_member(node)
+      announce_player_leave(node)
+      remove_owner_population(node,false)
+      session.identities:remove(node)
+      if is_host() then
+         session.sequence=session.sequence+1
+         local leave=gameplay_base("leave")
+         leave.owner=node
+         host_reliable(leave)
       end
-      session.last_seed_connect=stamp
    end
+   local aggression_deadline
+   for _entity,entry in pairs(session.players) do
+      if entry.last_aggression
+            and stamp-entry.last_aggression>=AGGRESSION_GRACE then
+         if exists(entry.pilot) then entry.pilot:setHostile(false) end
+         entry.last_aggression=nil
+         entry.hostile=nil
+      elseif entry.last_aggression then
+         aggression_deadline=math.max(aggression_deadline or 0,
+            entry.last_aggression+AGGRESSION_GRACE)
+      end
+   end
+   session.indicators:reconcile_aggression(aggression_deadline,stamp)
+end
+
+local function liveness_tick ( stamp )
+   local stale={}
+   for peer,meta in pairs(session.peer_meta) do
+      if not meta.verified
+            and stamp-(meta.connected_at or stamp)>=HANDSHAKE_TIMEOUT then
+         stale[#stale+1]=peer
+      elseif meta.verified and meta.protocol=="gameplay"
+            and stamp-(meta.last_receive or stamp)>=TRANSPORT_IDLE_TIMEOUT then
+         stale[#stale+1]=peer
+      end
+   end
+   for _index,peer in ipairs(stale) do
+      reject_peer(peer,"application liveness timeout",true)
+   end
+   reconcile_participant_liveness(stamp)
+   audit_one_authority()
+   session.indicators:update(stamp)
+   refresh_time_controls(stamp)
+   session.enforce_time_controls()
+   if session.directory_probe_deadline
+         and stamp>=session.directory_probe_deadline then
+      session.directory_probe_deadline=nil
+   end
+end
+
+local function election_tick ( stamp )
+   local old_state=session.machine.state
+   local old_host=session.machine.host
+   local action=session.machine:tick(stamp)
    if action=="claim" then
-      session.relay_topology_dirty=true
-      if not was_host then promote_guest_population() end
-      print(fmt.f("P2P: claimed local system host in {syst}",{syst=system.cur()}))
-      session.machine.topology:remember_hint(session.machine.system,session.settings.node_id,session.endpoint,session.machine.claim,stamp+60)
-      broadcast(claim_message(),true)
-      if has_remote_member() then publish_player(true); publish_entities(true) end
-      session.last_claim=stamp
+      local departed=old_host or session.recovering_from
+      if departed and departed~=session.settings.node_id then
+         announce_player_leave(departed)
+         remove_owner_population(departed,false)
+      end
+      session.recovering_from=nil
+      become_host(old_state=="recovering")
+      publish_claim()
       refresh_time_controls(stamp)
    elseif action=="recover" or action=="query" then
-      session.sequence=session.sequence+1
-      local query=base("host_query"); query.seq=session.sequence
-      broadcast(query,true)
-      local winner=session.machine.recovery_candidate or session.machine.host
-      if winner and session.member_endpoints[winner] then
-         connect(session.member_endpoints[winner],winner)
+      if action=="recover" then session.recovering_from=old_host end
+      local query=gameplay_base("query")
+      query.epoch=nil
+      for peer,meta in pairs(session.peer_meta) do
+         if meta.protocol=="gameplay" and meta.verified then
+            send_game(peer,query,true)
+         end
+      end
+      redial_host_and_members()
+      refresh_time_controls(stamp)
+   end
+end
+
+local function reset_runtime_tables ()
+   session.players={}
+   session.npcs={}
+   session.craft={}
+   session.player_manifests={}
+   session.player_states={}
+   session.present_players={}
+   session.authority={}
+   session.authority_by_local={}
+   session.origins={}
+   session.replica_by_local={}
+   session.manifest_cache={}
+   session.manifest_order={}
+   session.manifest_cursor=1
+   session.manifest_queries={}
+   session.pending_states={}
+   session.pending_state_count=0
+   session.npc_announcement_queue={}
+   session.npc_announcement_seen={}
+   session.npc_order={}
+   session.npc_cursor=1
+   session.craft_order={}
+   session.craft_cursor=1
+   session.local_craft_cursor=1
+   session.world_craft_order={}
+   session.world_craft_cursor=1
+   session.audit_order={}
+   session.audit_cursor=1
+   session.priority_queues={{},{},{}}
+   session.priority_seen={{},{},{}}
+   session.priority_cursor={1,1,1}
+   session.target_interests={}
+   session.interest_entities={}
+   session.interest_order={}
+   session.interest_seen={}
+   session.interest_cursor=1
+   session.active_npcs={}
+   session.active_order={}
+   session.waiting_leaders={}
+   session.pending_creations={}
+   session.creation_safe_pending=nil
+   session.incremental_creation_logged=nil
+   session.incremental_replica_logged=nil
+   session.world_tx_logged=nil
+   session.world_rx_logged=nil
+   session.needs_host_join=nil
+   session.local_control_signature=nil
+   session.last_control_publish=nil
+   session.local_active=nil
+   session.local_active_at=nil
+   session.control_sequence=0
+   session.heartbeat_sequence=0
+   session.world_tick=0
+   session.world_sequence_received=-1
+   session.recovering_from=nil
+   session.host_inventory_scanned=nil
+   session.guest_population_pruned=nil
+   session.promoted_visit=nil
+   session.encode_errors={}
+   craft_factions={}
+end
+
+local function clear_authority_hooks ()
+   for _entity,entry in pairs(session.authority) do
+      remove_authority_hooks(entry)
+   end
+end
+
+local function clear_replicas ()
+   local entities={}
+   for entity in pairs(session.players) do entities[#entities+1]=entity end
+   for entity in pairs(session.npcs) do entities[#entities+1]=entity end
+   for entity in pairs(session.craft) do entities[#entities+1]=entity end
+   for _index,entity in ipairs(entities) do remove_replica(entity,false) end
+end
+
+function session.start ( settings )
+   if session.running then return true end
+   clear_local_controls()
+   session.settings=session.defaults(settings)
+   local ok,host=pcall(
+      enet.host_create,"*:"..tostring(session.settings.listen_port),
+      64,CANONICAL_CHANNEL+1)
+   if not ok or not host then
+      return nil,"unable to create P2P host: "..tostring(host)
+   end
+   session.host=host
+   session.endpoint=tostring(host:get_socket_address())
+   session.machine=core.new(session.settings.node_id,now)
+   session.machine:start()
+   session.machine.topology:load_peers(session.settings.recent)
+   session.identities=identity.new(
+      session.settings.node_id,local_player_name())
+   session.member_endpoints={}
+   session.running=true
+   session.ambient_spawning=true
+   session.activity={}
+   session.activity_received=0
+   session.last_activity_query=0
+   session.sequence=0
+   session.generation=0
+   session.lifecycle_generation=0
+   session.objects=ObjectRuntime.new{
+      settings=session.settings,
+      now=now,
+      player_name=local_player_name,
+      current_system=current_system,
+   }
+   session.objects:start()
+   reset_runtime_tables()
+   connect_known_peers()
+   local stamp=now()
+   session.next_world=stamp
+   session.next_heartbeat=stamp
+   session.next_election=stamp
+   session.next_liveness=stamp
+   session.next_redial=stamp
+   session.next_manifest=stamp
+   session.next_activity=stamp
+   session.last_claim=-math.huge
+   print("P2P: MP2G/2 listener started")
+   return true
+end
+
+function session.stop ()
+   clear_local_controls()
+   if not session.running then
+      session.indicators:clear()
+      lock_autonav(false)
+      naev.cache().multiplayer_p2p_objects=false
+      return
+   end
+   local leaving=current_system()
+   if leaving then session.leave() end
+   if session.objects then session.objects:stop() end
+   for peer in pairs(session.peers) do peer:disconnect_now() end
+   session.settings.recent=session.machine.topology:serialize_peers()
+   session.machine:stop()
+   session.running=false
+   session.host=nil
+   session.objects=nil
+   session.peers={}
+   session.endpoints={}
+   session.peer_meta={}
+   session.indicators:clear()
+   lock_autonav(false)
+end
+
+local function locally_claimed ()
+   return not naev.claimTest(system.cur())
+end
+
+function session.enter ( system_name )
+   if not session.running then return nil,"not running" end
+   if current_system()==system_name then
+      refresh_time_controls()
+      return true
+   end
+   session.leave()
+   reset_runtime_tables()
+   session.lifecycle_generation=session.lifecycle_generation+1
+   session.visit_generation=(session.visit_generation or 0)+1
+   session.visit=random_id()
+      ..string.format("%x",session.visit_generation)
+   session.machine:enter(system_name,session.visit)
+   session.solo_since=nil
+   session.local_weapset=1
+   session.skip_host_grace=session.skip_next_host_grace==true
+   session.skip_next_host_grace=nil
+   set_ambient_spawning(false)
+   session.objects:enter(system_name)
+   connect_known_peers()
+   directory_query()
+   local query=gameplay_base("query")
+   query.epoch=nil
+   for peer,meta in pairs(session.peer_meta) do
+      if meta.protocol=="gameplay" and meta.verified then
+         send_game(peer,query,true)
       end
    end
-   if session.machine.state=="host" and stamp-session.last_claim>=5 then
-      session.machine.topology:remember_hint(session.machine.system,session.settings.node_id,session.endpoint,session.machine.claim,stamp+60)
-      broadcast(claim_message(),true); session.last_claim=stamp
+   local stamp=now()
+   session.next_world=stamp
+   session.next_heartbeat=stamp
+   session.next_election=stamp
+   session.next_liveness=stamp
+   session.next_redial=stamp
+   session.next_manifest=stamp
+   session.next_activity=stamp
+   print("P2P: discovering MP2G/2 system host")
+   if locally_claimed() then
+      session.machine:new_claim()
+      become_host(false)
+      publish_claim()
    end
-   local active_session=has_remote_member()
-   if active_session then publish_pending_entity_removals() end
-   if active_session and session.machine.state=="host" then
-      publish_next_npc_manifest_batch(stamp)
+   refresh_time_controls(stamp)
+   return true
+end
+
+function session.leave ()
+   clear_local_controls()
+   if not session.machine or not current_system() then
+      session.indicators:clear()
+      lock_autonav(false)
+      return
    end
-   if active_session and session.machine.system
-         and stamp-session.last_player>=1/15 then
-      publish_player(false); session.last_player=stamp
+   local system_name=current_system()
+   local was_host=is_host()
+   local leave=gameplay_base("leave")
+   leave.owner=session.settings.node_id
+   fanout_control(leave)
+   if was_host then publish_directory_leave(system_name) end
+   session.skip_next_host_grace=was_host
+      and no_other_players_discovered(system_name)
+   session.objects:leave()
+   clear_authority_hooks()
+   clear_replicas()
+   disconnect_gameplay_peers()
+   session.machine:leave()
+   session.visit=nil
+   session.lifecycle_generation=session.lifecycle_generation+1
+   reset_runtime_tables()
+   session.solo_since=nil
+   session.indicators:clear()
+   set_ambient_spawning(true)
+   lock_autonav(false)
+end
+
+publish_target_interest = function ( record, stamp )
+   local target=record.target or "-"
+   if target==session.local_interest
+         and stamp-(session.last_interest or -math.huge)<2 then return end
+   session.local_interest=target
+   session.last_interest=stamp
+   session.sequence=session.sequence+1
+   local message=gameplay_base("target_interest")
+   message.owner=session.settings.node_id
+   message.seq=session.sequence
+   message.target=target
+   remember_interest(session.settings.node_id,target)
+   if is_host() then
+      return host_reliable(message)
    end
-   if active_session and session.machine.system and session.machine.state=="host"
-         and stamp-session.last_npc>=NPC_STATE_INTERVAL then
-      publish_entities(false,true,false)
-      session.last_npc=stamp
+   if session.machine.state~="guest" then return end
+   send_host(message,true)
+end
+
+function session.send_chat ( text )
+   if not session.running or not current_system()
+         or type(text)~="string" or text=="" then return nil end
+   session.sequence=session.sequence+1
+   local message=gameplay_base("chat")
+   message.owner=session.settings.node_id
+   message.seq=session.sequence
+   message.text=text:sub(1,1024)
+   show_chat(message.owner,message.text)
+   if is_host() then host_reliable(message)
+   else send_host(message,true) end
+   return true
+end
+
+function session.request_activity ()
+   if not session.running then return false end
+   return request_activity_from_directory()
+end
+
+function session.recent_activity ()
+   local stamp=now()
+   local activity={}
+   local fresh=stamp-(session.activity_received or 0)
+      <=2*ACTIVITY_QUERY_INTERVAL
+   for _index,entry in ipairs(session.activity or {}) do
+      local age=math.max(0,math.floor(stamp-entry.seen))
+      if age<=ACTIVITY_RETENTION then
+         activity[#activity+1]={
+            system=entry.system,active=entry.active and fresh,age=age,
+         }
+      end
    end
-   if active_session and session.machine.system and session.machine.state=="host"
-         and stamp-session.last_npc_focus>=NPC_FOCUS_INTERVAL then
-      session.publish_focus_entities(stamp)
-      session.last_npc_focus=stamp
+   return activity
+end
+
+function session.create_message_buoy ( text, slot )
+   if not session.objects then
+      return nil,_("The persistent-object service is unavailable.")
    end
-   if active_session and session.machine.system and stamp-session.last_craft>=1 then
-      publish_entities(false,false,true)
-      session.last_craft=stamp
+   return session.objects:create_message_buoy(text,slot)
+end
+
+function session.message_buoy_destroyed ( object_id, destroyed_pilot )
+   return session.objects
+      and session.objects:message_buoy_destroyed(object_id,destroyed_pilot)
+      or false
+end
+
+function session.update_object_client ()
+   return session.objects and session.objects:update() or false
+end
+
+function session.object_service_pending ()
+   return session.objects and session.objects:pending() or false
+end
+
+function session.publish_focus_entities ()
+   -- Target interest is part of the one 15 Hz host scheduler in MP2G/2.
+   return false
+end
+
+function session.input ( input_name, input_pressed )
+   if not session.running then return end
+   session.keep_simulation_live()
+   if input_name=="speed" then
+      if session.autonav_locked then session.enforce_time_controls() end
+      return
+   end
+   local selected=input_name:match("^weapset([0-9])$")
+   if selected then
+      if input_pressed then
+         session.local_weapset=tonumber(selected)
+         if session.local_weapset==0 then session.local_weapset=10 end
+         publish_local_control(true)
+      end
+      return
+   end
+   if input_pressed and (input_name=="e_attack" or input_name=="e_hold"
+         or input_name=="e_return" or input_name=="e_clear") then
+      local target=target_entity(player.pilot():target())
+      if input_name=="e_attack" and target=="-" then return end
+      session.sequence=session.sequence+1
+      local message=gameplay_base("craft_order")
+      message.owner=session.settings.node_id
+      message.seq=session.sequence
+      message.order=input_name
+      message.target=target
+      if is_host() then
+         host_reliable(message)
+      else
+         send_host(message,true)
+      end
+      return
+   end
+   local key
+   if input_name=="accel" then key="accel"
+   elseif input_name=="left" then key="left"
+   elseif input_name=="right" then key="right"
+   elseif input_name=="reverse" then key="reverse"
+   elseif input_name=="primary" then key="primary"
+   elseif input_name=="secondary" then key="secondary"
+   else return end
+   naev.cache()[key]=input_pressed and 1 or 0
+   if (key=="primary" or key=="secondary") and input_pressed then
+      local target=player.pilot():target()
+      for _entity,entry in pairs(session.players) do
+         if entry.pilot==target then
+            mark_player_aggression(entry.owner)
+            break
+         end
+      end
+   end
+   publish_local_control(true)
+end
+
+function session.enforce_time_controls ()
+   if not session.autonav_locked then return end
+   local _autonav,autonav_speed=player.autonav()
+   if autonav_speed~=1 or player.speed()~=1 then
+      player.autonavSetSpeed(1,1)
+      player.setSpeed(1,1)
+   end
+end
+
+function session.keep_simulation_live ()
+   if not session.running or not current_system() or player.isLanded() then
+      return false
+   end
+   local shared=has_remote_member()
+      or session.machine.state=="guest"
+      or session.machine.state=="recovering"
+   if not shared then return false end
+   naev.unpause()
+   session.enforce_time_controls()
+   return true
+end
+
+function session.update ( _dt )
+   if not session.running then return end
+   local stamp=now()
+   -- Naev's autonav controller can raise its multiplier every frame without
+   -- going through the speed input. Correct only while a shared visit is
+   -- locked, before servicing the scheduled networking jobs.
+   session.enforce_time_controls()
+   service_transport(stamp)
+
+   if stamp>=session.next_election then
+      session.next_election=stamp+0.1
+      election_tick(stamp)
+   end
+   if stamp>=session.next_manifest then
+      session.next_manifest=stamp+MANIFEST_INTERVAL
+      if is_host() and has_remote_member() then publish_manifest_tick() end
+   end
+   if stamp>=session.next_heartbeat then
+      session.next_heartbeat=stamp+HEARTBEAT_INTERVAL
+      publish_heartbeat(stamp)
+   end
+   if stamp>=session.next_world then
+      session.next_world=stamp+WORLD_INTERVAL
+      if is_host() then
+         if has_remote_member() then host_world_tick(stamp) end
+      elseif session.machine.state=="guest" then
+         guest_world_tick(stamp)
+      end
+   end
+   if stamp>=session.next_liveness then
+      session.next_liveness=stamp+LIVENESS_INTERVAL
+      liveness_tick(stamp)
+   end
+   if stamp>=session.next_redial then
+      session.next_redial=stamp+REDIAL_INTERVAL
+      redial_host_and_members()
+   end
+   if is_host() and stamp-session.last_claim>=CLAIM_INTERVAL then
+      publish_claim()
+   end
+   if stamp>=session.next_activity then
+      session.next_activity=stamp+ACTIVITY_QUERY_INTERVAL
+      request_activity_from_directory()
    end
 end
 

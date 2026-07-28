@@ -1,25 +1,33 @@
 package.path = "scripts/?.lua;scripts/?/init.lua;" .. package.path
 
 local codec=require "multiplayer.p2p.codec"
+local gameplay=require "multiplayer.p2p.gameplay_codec"
 local topology=require "multiplayer.p2p.topology"
 local reconcile=require "multiplayer.p2p.reconcile"
 local owned=require "multiplayer.p2p.owned"
 local core=require "multiplayer.p2p.core"
 local identity=require "multiplayer.p2p.identity"
-local mesh=require "multiplayer.p2p.mesh"
+package.preload["ai.core.setup"]=function()
+   return {setup=function () end}
+end
+local session=require "multiplayer.p2p.session"
 
 local tests={}
 local function test(name, fn) tests[#tests+1]={name,fn} end
 local function eq(a,b) assert(a==b, tostring(a).." != "..tostring(b)) end
 
-test("protocol escaping and validation", function()
-   local packet=assert(codec.encode{type="chat",node="a1",system="A=B% C",seq=1,text="hi\nthere?"})
+test("directory protocol escaping and validation", function()
+   local packet=assert(codec.encode{
+      type="query",node="a1",system="A=B% C",
+   })
    local msg=assert(codec.decode(packet))
-   eq(msg.system,"A=B% C"); eq(msg.text,"hi\nthere?"); eq(msg.seq,1)
-   assert(not codec.decode("MP2P/9 chat\nnode=a1\n"))
+   eq(msg.system,"A=B% C")
+   assert(not codec.decode("MP2P/9 query\nnode=a1\nsystem=X\n"))
    assert(not codec.decode(string.rep("x",codec.MAX_PACKET+1)))
-   assert(not codec.decode("MP2P/1 chat\nnode=a1\nnode=b2\nsystem=x\nseq=1\ntext=x\n"))
-   assert(not codec.decode("MP2P/1 chat\nnode=a1\nsystem=x\nseq=1\ntext=bad%A\n"))
+   assert(not codec.decode(
+      "MP2P/1 query\nnode=a1\nnode=b2\nsystem=x\n"))
+   assert(not codec.decode(
+      "MP2P/1 query\nnode=a1\nsystem=bad%A\n"))
    assert(codec.encode{type="hello",node="a1",cap="player",name="Jane"})
    assert(not codec.encode{type="hello",node="a1",cap="player"})
    assert(codec.encode{type="hello",node="a1",cap="directory",features="activity,contestants"})
@@ -40,57 +48,152 @@ test("protocol escaping and validation", function()
       endpoint="host:9",claim="c",ttl=60})
    assert(not codec.encode{type="hint",node="d1",system="X",host="a1",
       endpoint="host:9",claim="c",ttl=61})
-   assert(codec.encode{type="craft_order",node="a1",system="X",owner="a1",
-      seq=2,order="e_hold"})
-   assert(not codec.encode{type="craft_order",node="a1",system="X",owner="a1",
-      seq=3,order="self_destruct"})
    assert(codec.encode{type="punch",node="d1",system="X",peer="a1",
       endpoint="198.51.100.2:4567"})
    assert(not codec.encode{type="punch",node="d1",system="X",peer="not-a-node",
       endpoint="198.51.100.2:4567"})
-   assert(codec.encode{type="player_manifest",node="a1",system="X",entity="a1",
-      ship="Llama",name="Jane"})
-   assert(not codec.encode{type="player_manifest",node="a1",system="X",entity="b2",
-      ship="Llama",name="Jane"})
-   assert(not codec.encode{type="player_state",node="a1",system="X",entity="b2",
-      seq=4,x=0,y=0,vx=0,vy=0,dir=0})
-   assert(codec.encode{type="player_state",node="a1",system="X",entity="a1",
-      seq=4,x=0,y=0,vx=0,vy=0,dir=0,armour=75,shield=20,stress=5})
-   assert(codec.encode{type="resync",node="a1",system="X",seq=5,
-      scope="craft",owner="b2",entity="b2:7"})
-   assert(codec.encode{type="npc_add",node="a1",system="X",claim="c",
-      entity="a1:7",seq=6,ship="Llama",name="NPC",faction="Independent",
-      ai="trader",task="hyperspace",goal="jump:Gamma Polaris"})
-   assert(codec.encode{type="npc_control",node="a1",system="X",claim="c",
-      seq=7,entities="va1%253A7,vtrader,vhyperspace,vjump%253AGamma%2520Polaris"})
-   assert(not codec.encode{type="npc_add",node="a1",system="X",claim="c",
-      entity="a1:7",seq=7,ship="Llama",name="NPC",faction="Independent",
-      ai="bad ai"})
-   assert(not codec.encode{type="resync",node="a1",system="X",seq=6,
-      scope="everything"})
-   assert(not codec.encode{type="resync",node="a1",system="X",seq=7,
-      scope="craft",owner="not-a-node"})
 end)
 
-test("bounded flood-once routing", function()
-   local now=0
-   local a=mesh.new("a1",function() return now end)
-   local b=mesh.new("b2",function() return now end)
-   local message={type="player_control",node="a1",system="X",entity="a1",
-      seq=1,target="-",primary=1,secondary=0,x=0,y=0,vx=0,vy=0,dir=0}
-   a:origin(message,"aa")
-   eq(message.via,"a1"); eq(message.hops,0)
-   assert(b:accept(message,"a1"))
-   assert(not b:accept(message,"a1"))
-   local forwarded=assert(b:forward(message))
-   eq(forwarded.via,"b2"); eq(forwarded.hops,1)
-   assert(not b:accept(forwarded,"a1"))
-   assert(not b:accept({
-      type="player_control",node="a1",visit="aa",route_seq=2,hops=9,via="a1",
-   },"a1"))
-   now=31
-   a:prune(now)
-   assert(a:mark(message))
+test("gameplay world carries bounded object state separately", function()
+   local packet=assert(gameplay.encode{
+      type="world",node="a1",system="X",visit="a1",
+      epoch="a1:a1:1",seq=1,players="-",entities="-",
+      objects="a1_buoy,1,2,3,4,5,250,300,0",
+   })
+   local message=assert(gameplay.decode(packet))
+   eq(message.objects,"a1_buoy,1,2,3,4,5,250,300,0")
+   assert(not gameplay.encode{
+      type="world",node="a1",system="X",visit="a1",
+      epoch="a1:a1:1",seq=1,players="-",entities="-",
+   })
+end)
+
+test("gameplay control carries complete held visual state", function()
+   local packet=assert(gameplay.encode{
+      type="player_control",node="a1",system="X",visit="a1",
+      epoch="a1:a1:1",owner="b2",entity="b2.a1.player",seq=2,
+      x=1,y=2,vx=3,vy=4,dir=5,energy=90,target="-",
+      weapset=1,accel=1,turn=-1,reverse=0,
+      primary=0,secondary=0,active="-",
+   })
+   local message=assert(gameplay.decode(packet))
+   eq(message.turn,-1)
+   eq(message.reverse,0)
+   eq(message.active,"-")
+   assert(not gameplay.encode{
+      type="player_control",node="a1",system="X",visit="a1",
+      epoch="a1:a1:1",owner="b2",entity="b2.a1.player",seq=2,
+      x=1,y=2,vx=3,vy=4,dir=5,energy=90,target="-",
+      weapset=1,accel=1,primary=0,secondary=0,active="-",
+   })
+end)
+
+test("gameplay entity queries request unknown descriptions", function()
+   local packet=assert(gameplay.encode{
+      type="entity_query",node="b2",system="X",visit="b2",
+      epoch="a1:a1:1",entity="a1.a1.n.2.9",seq=3,
+   })
+   local message=assert(gameplay.decode(packet))
+   eq(message.entity,"a1.a1.n.2.9")
+   eq(message.seq,3)
+   assert(not gameplay.encode{
+      type="entity_manifest",node="a1",system="X",visit="a1",
+      epoch="a1:a1:1",kind="npc",owner="a1",
+      entity="a1.a1.n.2.9",origin="a1.a1.npc.9",
+      ship="Lancelot",name="Raider",faction="Pirate",ai="pirate",
+      outfits="-",slots="-",
+   })
+end)
+
+test("gameplay world batches stay below unreliable ENet budget", function()
+   local host=string.rep("a",32)
+   local visit=string.rep("d",32)
+   local function entity(node,kind,index)
+      if kind=="player" then return node.."."..visit..".player" end
+      return node.."."..visit.."."..kind.."."..index.."."..(1000+index)
+   end
+   local function state(id,target)
+      return table.concat({
+         id,"12345.678901234","-12345.678901234",
+         "145.678901234","-89.123456789","3.1415926535",
+         "100","100","0","100",target,"1","1","0","0","0","0","-",
+      },",")
+   end
+   local nodes={host,string.rep("b",32),string.rep("c",32)}
+   local target=entity(host,"n",1)
+   local players={}
+   for _index,node in ipairs(nodes) do
+      players[#players+1]=state(entity(node,"player"),target)
+   end
+   local entities={}
+   for index=1,3 do
+      entities[#entities+1]=state(
+         entity(host,index==3 and "c" or "n",index),players[index] and
+            entity(nodes[index],"player") or "-")
+   end
+   local object=host.."_buoy_"..visit
+      ..",12345.678901234,-12345.678901234,145.678901234"
+      ..",-89.123456789,3.1415926535,100,100,0"
+   local batches=assert(gameplay.encode_world_batches({
+      type="world",node=host,system="Gamma Polaris",visit=visit,
+      epoch=host..":"..visit..":1",seq=1,
+   },{
+      players=players,entities=entities,objects={object},
+   },1200))
+   assert(#batches>1)
+   local seen={players=0,entities=0,objects=0}
+   for _index,batch in ipairs(batches) do
+      assert(#batch.packet<=1200)
+      local decoded=assert(gameplay.decode(batch.packet))
+      for _field in pairs(seen) do
+         if decoded[_field]~="-" then
+            for _line in decoded[_field]:gmatch("([^;]+)") do
+               seen[_field]=seen[_field]+1
+            end
+         end
+      end
+   end
+   eq(seen.players,#players)
+   eq(seen.entities,#entities)
+   eq(seen.objects,1)
+end)
+
+test("oversized NPC announcements preserve the bounded world stream", function()
+   local player_state=table.concat({
+      "a1.a1.player",0,0,0,0,0,100,100,0,100,"-",1,0,0,0,0,0,"-",
+   },",")
+   local oversized="n,"..player_state..","..string.rep("x",1400)
+   local batches,err,fallbacks=gameplay.encode_world_batches({
+      type="world",node="a1",system="X",visit="a1",
+      epoch="a1:a1:1",seq=1,
+   },{
+      players={player_state},entities={oversized},objects={},
+   },1200)
+   assert(batches,err)
+   eq(#batches,1)
+   assert(#batches[1].packet<=1200)
+   eq(#fallbacks,1)
+   eq(fallbacks[1],oversized)
+end)
+
+test("complete NPC announcements round trip packed state", function()
+   local record={
+      entity="a1.b2.n.1.9",x=1,y=2,vx=0,vy=0,dir=1,
+      armour=100,shield=50,stress=0,energy=90,target="-",
+      weapset=1,accel=0,turn=0,reverse=0,
+      primary=0,secondary=0,active="",
+   }
+   local entry={description={
+      owner="a1",origin="a1.b2.npc.9",ship="Lancelot",
+      name="Raider One",faction="Pirate",ai="pirate",
+      outfits="Laser Cannon",slots="1:Laser%20Cannon",leader="-",
+   }}
+   local packed=assert(session._pack_npc_announcement(entry,record))
+   local decoded,description=session._unpack_npc_announcement(packed)
+   assert(decoded and description)
+   eq(decoded.vx,0); eq(decoded.vy,0)
+   eq(description.name,"Raider One")
+   eq(description.slots,"1:Laser%20Cannon")
 end)
 
 test("local-only player name aliases", function()
@@ -119,7 +222,7 @@ test("peer cache persistence and bound", function()
    eq(#t2.peers,32)
 end)
 
-test("stale hints and peer-to-peer forwarding", function()
+test("stale host hints", function()
    local now=100
    local a=topology.new("a",function() return now end)
    local b=topology.new("b",function() return now end)
@@ -136,6 +239,24 @@ end)
 test("split brain and election order", function()
    eq(topology.resolve_claim("20","10"),"10")
    eq(topology.elect{"30","10","20"},"10")
+end)
+
+test("simultaneous discovery claims converge", function()
+   local now=0
+   local a=core.new("10",function() return now end)
+   local b=core.new("20",function() return now end)
+   assert(a:start()); assert(b:start())
+   assert(a:enter("X","a1")); assert(b:enter("X","b1"))
+   now=2.1
+   eq(a:tick(),"claim"); eq(b:tick(),"claim")
+   assert(not a:accept_claim{
+      system="X",node="20",visit="b1",claim=b.claim,
+   })
+   assert(b:accept_claim{
+      system="X",node="10",visit="a1",claim=a.claim,
+   })
+   eq(a.state,"host"); eq(a.host,"10")
+   eq(b.state,"guest"); eq(b.host,"10"); eq(b.claim,a.claim)
 end)
 
 test("session transitions and host loss", function()
@@ -169,8 +290,23 @@ test("capped reconciliation", function()
    local turned=math.abs((turn.dir+math.pi)%(2*math.pi)-math.pi)
    assert(math.abs(turned-0.15)<1e-9,
       "direction correction exceeded its angular speed cap")
-   local replicas={a={native_ai=true}}; reconcile.host_lost(replicas)
-   assert(replicas.a.native_ai and replicas.a.authoritative)
+   local resting=reconcile.steer(
+      {x=0.5,y=0,vx=0.5,vy=0,dir=0},
+      {x=0,y=0,vx=0,vy=0,dir=0},1/15,0,
+      {
+         position_gain=2.5,correction_speed=600,velocity_rate=12,
+         acceleration=2400,rest_source_speed=0.25,
+         rest_position=1,rest_replica_speed=8,
+      })
+   eq(resting.vx,0); eq(resting.vy,0)
+   local declared_stop=reconcile.steer(
+      {x=500,y=0,vx=300,vy=-20,dir=0},
+      {x=0,y=0,vx=0,vy=0,dir=0},1/15,0,
+      {
+         position_gain=1.5,correction_speed=400,
+         rest_source_speed=0.25,follow_velocity=true,
+      })
+   eq(declared_stop.vx,0); eq(declared_stop.vy,0)
 end)
 
 test("owned craft nesting and cleanup", function()

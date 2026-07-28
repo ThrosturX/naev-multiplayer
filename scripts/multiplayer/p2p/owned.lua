@@ -1,4 +1,4 @@
--- Owned-craft graph traversal and relay bookkeeping.
+-- Owned-craft graph traversal and cleanup.
 local owned = {}
 
 function owned.classify ( roots, relationships )

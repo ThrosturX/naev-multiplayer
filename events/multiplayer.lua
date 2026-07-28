@@ -19,7 +19,14 @@ local p2psession    = require "multiplayer.p2p.session"
 local space_objects = require "multiplayer.p2p.space_objects"
 local luatk         = require "luatk"
 local vn = require "vn"
--- luacheck: globals load startMultiplayerServer P2P_SESSION_UPDATE P2P_OBJECT_UPDATE P2P_SESSION_INPUT P2P_SESSION_HAIL P2P_SESSION_ENTER P2P_SESSION_LEAVE P2P_SESSION_PILOT_DEATH P2P_BUOY_CONSUME P2P_OBJECT_DESTROYED (Hook functions passed by name)
+-- luacheck: globals load startMultiplayerServer
+-- luacheck: globals P2P_SESSION_UPDATE P2P_SESSION_INPUT P2P_SESSION_HAIL
+-- luacheck: globals P2P_SESSION_ENTER P2P_SESSION_LEAVE
+-- luacheck: globals P2P_SESSION_PILOT_CREATION
+-- luacheck: globals P2P_SESSION_PILOT_DEFERRED P2P_SESSION_PILOT_DEATH
+-- luacheck: globals P2P_SESSION_PILOT_JUMP P2P_SESSION_PILOT_LAND
+-- luacheck: globals P2P_OBJECT_UPDATE P2P_OBJECT_TIMER
+-- luacheck: globals P2P_BUOY_CONSUME P2P_OBJECT_DESTROYED
 
 local function pick_one ( ipair )
     return ipair[ rnd.rnd( 1, #ipair ) ]
@@ -48,7 +55,7 @@ end
 local function p2p_install_pilot_hooks ()
     p2p_clear_pilot_hooks()
     p2p_pilot_hooks = {
-        hook.pilot(nil, "death", "P2P_SESSION_PILOT_DEATH"),
+        hook.pilot(nil, "creation", "P2P_SESSION_PILOT_CREATION"),
     }
 end
 
@@ -73,7 +80,6 @@ end
 local function p2p_pump ( dt, modal )
     if modal then p2psession.keep_simulation_live() end
     p2psession.update(dt or 0)
-    space_objects.pump()
 end
 
 local function p2p_keep_hail_live ()
@@ -195,8 +201,8 @@ local function p2p_start ()
     if not player.isLanded() then
         p2psession.enter(system.cur():nameRaw())
         p2p_install_pilot_hooks()
+        space_objects.start(p2psession)
     end
-    space_objects.start(p2psession)
     p2p_publish_config()
 end
 
@@ -206,6 +212,7 @@ local function p2p_run_buoy_prompt ( request )
         local window = luatk.msgInput(_("MESSAGE BUOY"), _("Message:"), 96, function(msg)
             if not msg then return end
             local ok, err = p2psession.create_message_buoy(msg, request.slot)
+            space_objects.wake()
             if not ok and err then player.msg("#r"..tostring(err).."#0") end
         end)
         p2p_size_chat(window)
@@ -226,7 +233,10 @@ end
 function P2P_OBJECT_UPDATE ( generation )
     space_objects.update(generation)
 end
-function P2P_BUOY_CONSUME ( slot, _object_id )
+function P2P_OBJECT_TIMER ( generation )
+    space_objects.timer(generation)
+end
+function P2P_BUOY_CONSUME ( slot )
     local p = player.pilot()
     slot = tonumber(slot)
     local fitted = p and slot and p:outfitSlot(slot)
@@ -236,9 +246,22 @@ function P2P_BUOY_CONSUME ( slot, _object_id )
 end
 function P2P_OBJECT_DESTROYED ( p, _attacker, object_id )
     p2psession.message_buoy_destroyed(object_id, p)
+    space_objects.wake()
 end
-function P2P_SESSION_PILOT_DEATH ( p, _attacker )
-    p2psession.pilot_departed(p, "death")
+function P2P_SESSION_PILOT_CREATION ( p )
+    p2psession.pilot_created(p)
+end
+function P2P_SESSION_PILOT_DEFERRED ( generation )
+    p2psession.pilot_created_deferred(generation)
+end
+function P2P_SESSION_PILOT_DEATH ( p, _attacker, entity )
+    p2psession.pilot_departed(p, "death", entity)
+end
+function P2P_SESSION_PILOT_JUMP ( p, _jump, entity )
+    p2psession.pilot_departed(p, "jump", entity)
+end
+function P2P_SESSION_PILOT_LAND ( p, _spob, entity )
+    p2psession.pilot_departed(p, "land", entity)
 end
 function P2P_SESSION_HAIL () p2p_keep_hail_live() end
 function P2P_SESSION_INPUT ( input_name, input_pressed )
@@ -263,12 +286,15 @@ function P2P_SESSION_INPUT ( input_name, input_pressed )
     p2p_run_chat()
 end
 function P2P_SESSION_ENTER ()
+    space_objects.stop()
     p2psession.enter(system.cur():nameRaw())
     p2p_install_pilot_hooks()
+    space_objects.start(p2psession)
 end
 function P2P_SESSION_LEAVE ()
     p2p_hail_pressed=nil
     p2p_clear_pilot_hooks()
+    space_objects.stop()
     p2psession.leave()
 end
 

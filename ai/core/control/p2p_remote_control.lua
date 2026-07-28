@@ -7,7 +7,17 @@ local atk = require "ai.core.attack.util"
 control_rate = 0.05
 
 function control ()
-   ai.accel(mem.p2p_accel or 0)
+   local p=ai.pilot()
+   if mem.p2p_reverse and not p:shipstat("misc_reverse_thrust")
+         and p:vel():mod()>1 then
+      ai.face(p:vel():angle()+math.pi)
+      ai.accel(0)
+   else
+      -- Player input uses right-positive, while ai.turn writes Naev's
+      -- left-positive pilot turn directly.
+      ai.turn(-(mem.p2p_turn or 0))
+      ai.accel(mem.p2p_reverse and 0 or (mem.p2p_accel or 0))
+   end
    if mem.p2p_weapset~=nil and mem.p2p_applied_weapset~=mem.p2p_weapset then
       ai.weapset(mem.p2p_weapset)
       mem.p2p_applied_weapset=mem.p2p_weapset
@@ -33,6 +43,8 @@ end
 
 function create ()
    mem.p2p_accel=0
+   mem.p2p_turn=0
+   mem.p2p_reverse=false
    mem.p2p_primary=false
    mem.p2p_secondary=false
    mem.p2p_primary_ticks=0

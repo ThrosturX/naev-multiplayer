@@ -1,10 +1,8 @@
 -- Event-facing service adapter for optional persistent space objects.
 --
--- The object transport is independent from gameplay peers. Normal and modal
--- multiplayer updates service it at a bounded real-time cadence. A safe hook
--- remains armed only while an acknowledgement, initial subscription, delete,
--- or reconnect is pending, so paused requests remain live without permanent
--- per-frame hook churn.
+-- The object transport is independent from gameplay peers. A one-second timer
+-- maintains subscriptions; a safe hook remains armed only while an
+-- acknowledgement, delete, or reconnect is pending so paused requests live.
 local space_objects = {}
 
 local SERVICE_INTERVAL = 1
@@ -12,13 +10,14 @@ local generation = 0
 local scheduled = false
 local last_service = -math.huge
 local runtime
+local timer_hook
 
 local function dispatch_consumption ()
    local cache=naev.cache()
    local consume=cache.multiplayer_buoy_consume
    if not consume then return end
    cache.multiplayer_buoy_consume=nil
-   hook.safe("P2P_BUOY_CONSUME",consume.slot,consume.object_id)
+   hook.safe("P2P_BUOY_CONSUME",consume.slot)
 end
 
 local function service_pending ()
@@ -32,18 +31,26 @@ local function schedule_if_pending ()
    hook.safe("P2P_OBJECT_UPDATE",generation)
 end
 
+local function schedule_timer ()
+   if timer_hook or not runtime then return end
+   timer_hook=hook.timer(SERVICE_INTERVAL,"P2P_OBJECT_TIMER",generation)
+end
+
 function space_objects.start ( session )
    generation=generation+1
    scheduled=false
    last_service=-math.huge
    runtime=session
    schedule_if_pending()
+   schedule_timer()
 end
 
 function space_objects.stop ()
    generation=generation+1
    scheduled=false
    last_service=-math.huge
+   if timer_hook then hook.rm(timer_hook) end
+   timer_hook=nil
    runtime=nil
 end
 
@@ -64,9 +71,16 @@ function space_objects.update ( expected_generation )
    schedule_if_pending()
 end
 
-function space_objects.pump ()
+function space_objects.wake ()
+   schedule_if_pending()
+end
+
+function space_objects.timer ( expected_generation )
+   if expected_generation~=generation then return end
+   timer_hook=nil
    service_if_due()
    schedule_if_pending()
+   schedule_timer()
 end
 
 return space_objects

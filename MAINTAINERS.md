@@ -1,157 +1,235 @@
-# Maintainer Guide
+# Multiplayer Maintainer Notes
 
-## Runtime boundaries
+## Protocol boundary
 
-`events/multiplayer.lua` owns the Info-menu adapter and P2P lifecycle hooks.
-Arena behavior remains in `scripts/multiplayer/client.lua` and `server.lua`.
-The isolated P2P implementation is:
+Player gameplay uses one wire format: `MP2G/2`, implemented by
+`scripts/multiplayer/p2p/gameplay_codec.lua`. All gameplay participants must run
+the same version. There is no gameplay version advertisement, capability
+exchange, compatibility branch, or fallback decoder.
 
-- `p2p/session.lua`: one ENet host, non-blocking event pump, Naev lifecycle,
-  player proxies, host NPC inventory, and owned-craft publication.
-- `p2p/codec.lua`: `MP2P/1` framing, escaping, size limits, and field checks.
-- `p2p/topology.lua`: bounded peer cache, expiring hints, and election.
-- `p2p/core.lua`: session state transitions.
-- `p2p/reconcile.lua`: sequence rejection and capped drift correction.
-- `p2p/owned.lua`: nested craft classification, relay, and cleanup rules.
-- `p2p/identity.lua`: stable wire names and unique local-only proxy aliases.
-- `p2p/directory.lua`: bounded, in-memory directory claim and query logic.
+`MP2P/1` remains only for directory rendezvous, activity, contestant records,
+and persistent objects. Directory capability strings describe directory
+services; they are not gameplay negotiation.
 
-`directory/main.lua` is the standalone blocking lua-enet adapter. It is not
-loaded by Naev. The directory never joins a system or relays gameplay data;
-its reliable `punch` introductions only make both players dial one another.
-The session shares one ENet host with directory and player connections for NAT
-mapping, but generic gameplay broadcasts must target verified player peers
-only. Directory peers receive explicit directory requests plus the `claim` and
-`leave` lifecycle messages they consume; routing manifests or state packets to
-them can queue object control traffic behind an entire system population.
+Gameplay is a direct host star:
 
-Death Race is deliberately outside the persistent P2P session.
-`events/pod_racing_roster.lua` loads only on entering Alteris and owns a bounded,
-short-lived directory client. It publishes a plain roster snapshot through
-`naev.cache()` and exits after one response or timeout. If that prefetch did
-not run, such as when loading a save already landed on Darkshed, the mission
-services the same bounded client while its directory-contact message is visible.
-The mission and its AI must not be imported by `events/multiplayer.lua` or
-`p2p/session.lua`.
+- Guests send state and actions only to the current host.
+- The host broadcasts one canonical world stream directly to gameplay peers;
+  only guests that accepted that host and epoch apply it.
+- Direct guest connections carry only discovery, claims, heartbeats, and
+  leaves needed for deterministic election.
+- A missing host path stops gameplay publication. The guest redials the host
+  directly while the five-second lease and two-second election recovery run.
+- Gameplay is never forwarded through another guest.
 
-Only plain settings are persisted. ENet hosts/peers, ownership claims, hooks,
-pilots, and other runtime handles must never enter event memory.
+The gameplay ENet host also contains the directory peer. Gameplay connections
+negotiate three ENet channels, while the directory connection negotiates only
+channel 0. Discovery, election, guest submissions, and targeted replies use
+channel 0. Host world publication encodes each MTU-bounded datagram once and
+uses native `host:broadcast` on unreliable channel 1. Reliable canonical
+player/craft descriptions, lifecycle, and actions use native broadcast on
+channel 2 so they do not head-of-line block motion. ENet reuses each packet
+across gameplay peers and cannot queue channels 1 or 2 to the directory.
 
-## Protocol and lifecycle
+## Authority and epochs
 
-`MP2P/1` uses one packet per message: an ASCII version/type header followed by
-percent-escaped `key=value` lines. Packets are limited to 16 KiB. Keep control,
-manifests, additions, removals, chat, and claims reliable; player/NPC/craft
-state is replaceable and unreliable. Validate peer values before resolving
-ships, factions, outfits, pilots, or UI.
+Every system packet carries a system visit. Authoritative packets and guest
+gameplay submissions also carry the accepted host epoch. Entity identifiers
+contain an owner, visit/generation, kind, generation counter, and local pilot
+ID. NPC announcements and player/craft descriptions supply a stable origin
+key. A different entity generation for the same origin explodes and replaces
+the old replica.
 
-Contestant registration, queries, entries, and completion markers are reliable
-directory-only messages. The directory retains bounded latest-profile and
-track-specific pools for 90 days in its systemd state directory. Track queries
-prefer the matching track and ship division, then fill from the most recently
-registered profiles in that division. Clients must validate the advertised
-ship division and every resource locally; missing or malformed directory
-profiles are discarded and may produce a smaller field, never a synthetic
-player.
+Each player owns their real ship's movement and health. Network health is
+applied only to disposable player proxies; it must never be written to
+`player.pilot()`.
 
-Reliable add/remove manifests are the normal entity lifecycle. Initial and
-full-resync NPC manifests use bounded reliable batches, with at most one batch
-serialized per update; incremental additions and removals remain immediate
-singular messages. Do not restore periodic
-full-manifest broadcasts. A joining peer sends a reliable `resync` request.
-State that races ahead of manifests is coalesced into one resync per authority,
-not one request per missing entity; suppress this feedback during the initial
-synchronization window. Known targeted requests must use the authoritative
-inventory index instead of rescanning `pilot.get()`.
-Static manifest collection and high-frequency state collection must remain
-separate; state collection must not inspect ship, name, faction, outfits, or
-leader. The update hook drains at most 48 ENet events per rendered frame so a
-packet backlog cannot monopolize simulation.
+The host owns ambient NPC identity, AI, lifecycle, health, and launched
+fighters. Guests disable ambient spawning immediately and remove speculative
+ambient pilots once they accept a host. Guest NPCs use
+`p2p_replica_passive`; it performs no movement, targeting, task, firing, or
+spawning work. At most eight replicas may be promoted to
+`p2p_replica_active`, whose only job is to reproduce the host-selected target,
+weapon set, and inferred firing intent.
 
-Each participant is authoritative for the health of their real local player.
-Publish that health in `player_state` and apply it only to disposable remote
-proxies. Never apply any network health value to `player.pilot()`. Connected
-remote proxies must have no-death protection so unrelated local simulation
-cannot remove them; clear that protection when the owner disconnects and the
-proxy begins its inferred land, jump, or disabled departure.
+Non-owning player, craft, and NPC replicas remain damageable. They use
+no-death only to prevent local combat from deciding lifecycle before a fresh
+authoritative record arrives; do not make them invincible. Persistent objects
+are the exception to no-death: they are peer-trusted, fully killable on every
+participant, and directory deletion converges their lifecycle.
 
-Time-control and hostility grace periods piggyback on the existing one-second
-liveness maintenance. A host must remain the only system member for ten
-seconds before restoring normal autonav/time compression; any joining member
-locks it again immediately. Player aggression records only actual hostile
-actions and clears local proxy/craft hostility after twenty quiet seconds.
-The local player receives stat-neutral status effects for the host-alone and
-latest aggression deadlines. Refresh the aggression effect at most once per
-second and derive its expiry from the latest live player deadline so it clears
-with the final aggression timer. Do not turn either timer into a per-frame
-pilot or membership scan.
+Player-owned craft and their nested fighters remain owner-authoritative. A
+guest sends at most one owned-craft record per 15 Hz tick. The host applies it
+to the owner's host-side proxy and includes craft through the canonical bounded
+world scheduler.
 
-Do not wrap ordinary ENet or pilot operations in `pcall`. The P2P runtime uses
-protected calls only to validate untrusted Naev resource names (whose getters
-throw when absent) and to convert an expected listener bind failure into a
-startup error. Everything else must validate its invariant explicitly and let
-programming errors surface.
+## Population lifecycle
 
-Player-capability `hello` messages include the player's unchanged Naev name.
-Names are not global network identifiers; node IDs are. If names collide, keep
-the local player's name untouched and suffix only remote proxy display names.
-Never rewrite the name in a relayed manifest.
+Population discovery is event driven:
 
-Directory and bootstrap settings share the same outbound connection path; the
-remote `hello.cap` is authoritative. Never infer capability from which setting
-supplied an endpoint. Reject loopback-to-own-listener endpoints before dialing
-and reject the local node ID again during `hello` to cover address aliases.
-Naev's text input uses `address port`; settings normalize that to the
-`address:port` form required by ENet and the wire protocol.
-Directory hints carry a receiver-relative TTL capped at 60 seconds; never put
-one process's monotonic or wall-clock timestamp on the wire as an expiry.
-The TTL bounds each client's hint cache, not directory claim lifetime. Active
-claims follow connection liveness. Disconnected claims remain as bounded stale
-hints and are immediately superseded by any new live claimant. The directory
-stores the latest verified claim for each system; deterministic node ordering
-belongs only to client-side resolution of hosts that independently claimed.
-For live claims, use the directory connection's observed endpoint as the
-primary candidate and retain the advertised listen port as a fallback. Send
-both peers reliable `punch` introductions so their shared ENet sockets emit
-traffic simultaneously. Same-public-IP peers also receive loopback candidates
-for convenient two-instance local testing. A verified player `hello` remains
-mandatory before any introduced peer can affect session state.
+1. The initial host performs one `pilot.get()` inventory scan.
+2. The global creation hook stores new pilot handles in a runtime-only queue.
+   Since `hook.safe` supports one custom argument, it passes only the visit
+   generation to one deferred callback, which drains the queue after outfits
+   and leaders are complete.
+3. Each authoritative pilot receives explicit death, jump, and land hooks.
+4. A scheduled invalid-handle audit checks one cached authority entry at a
+   time.
 
-The update hook must call `service(0)` and drain only immediately available
-events. Remove update, enter, takeoff, landing, and jump hooks when disabling
-P2P. Guests disable ambient spawning only after a host is directly verified,
-and re-enable it when leaving or stopping.
+Do not introduce a periodic population scan. All authority hooks are removed
+when the pilot departs, authority changes, the system visit ends, or the
+session stops.
 
-Persistent space objects use a separate ENet client from gameplay. Naev stops
-`hook.update` while a solo host is paused, so `space_objects.lua` services the
-bounded object client through safe hooks while object work is pending, and
-stops arming them once the current subscription is confirmed and the request
-queues are empty. Do not move object
-acknowledgements, retries, subscriptions, or reconnects back onto the gameplay
-host; buoy deployment and deletion must remain live without simulation ticks.
+World publication never waits for a population acknowledgement. NPCs have no
+separate manifest lifecycle: every selected round-robin NPC announcement
+contains both its cached creation description and its current dynamic state.
+A guest that does not know the ID creates it directly from that announcement;
+a guest that already knows it applies the fresh state. Newly created NPCs and
+explicit `entity_query` requests are placed in the next bounded announcement
+slots, and the answer is broadcast to every guest.
 
-Player health is never imported. Remote player proxies are invincible locally,
-but their locally simulated weapons may damage the real player. NPC and owned
-craft existence/health are authoritative at the host/owner respectively;
-motion uses capped correction after spawn and native NPC AI remains active.
-When a guest becomes system authority, its inherited snapshot remains the
-authoritative population and ambient spawning stays disabled for that system
-visit. Snapshot-created pilots do not consume Naev scheduler presence, so
-re-enabling it would create a second full population.
+Player and owner-controlled craft descriptions remain reliable because those
+records enter through their owners rather than the host NPC ring. Unknown
+player/craft dynamic state is held only as one latest bounded record while its
+description is requested. If an ID does not exist, the host returns targeted
+reliable `entity_absent` and the requester explodes any stale replica.
+Reliable incremental removals remain the immediate lifecycle path. There are
+no snapshot boundaries, ready acknowledgements, or parallel repair protocol.
 
-## Validation
+## World publication and reconciliation
 
-Before hand-off, run the parser commands in `AGENTS.md` and
-`lua tests/test_p2p.lua`. For an engine smoke test record:
+Players publish at 15 Hz. A host world frame contains cached player records plus
+only bounded entity records:
 
-1. Naev versions and confirmation that `lua_enet` is enabled.
-2. Local/routed topology, fixed or ephemeral UDP ports, and host/client count.
-3. A→B→host discovery with no directory and split-claim resolution.
-4. Host mission-NPC replacement, abrupt host loss, election, and reconnect.
-5. Player movement/fire/outfits/chat/damage and confirmation local health and
-   god mode are not overwritten.
-6. Jumping, landing, saving, toggling P2P, and mission limitation behavior.
-7. Nested escorts and deployed craft on all peers, including owner departure.
-8. A separate two-process arena host/client smoke test.
+- one priority NPC, newly announced NPC, or ambient ring NPC every tick;
+- at most one additional ambient NPC every third tick;
+- at most one craft record;
+- at most one persistent-object dynamic record.
 
-Passing parsers and mocks does not prove ENet or Naev lifecycle integration.
+Naev's ENet binding cannot request unreliable fragmentation. A world frame is
+therefore encoded into one or more canonical datagrams capped below ENet's
+default MTU, and each encoded buffer is passed once to native ENet broadcast.
+Packed world fields are carried raw inside the validated MP2G/2 envelope to
+avoid escaping the same record twice. A complete NPC announcement that still
+exceeds the unreliable budget is broadcast as an otherwise identical reliable
+world record, while the bounded player/world datagrams continue normally.
+Receivers reject stale records per entity so separately replaceable datagrams
+remain safe when lost or reordered. Never rebuild a monolithic world packet;
+ENet rejects an oversized unreliable packet instead of fragmenting it.
+
+This limits host NPC dynamic collection to 20 records per second regardless of
+population. Ambient selection inspects at most four ring candidates and skips
+pilots undetectable by the local player and the bounded participant-proxy
+check. Participant attackers, participant targets, and owned-craft engagements
+feed deterministic priority rings.
+
+NPC ship, faction, name, outfit, AI, and leader fields are collected once and
+cached, then accompany that NPC's selected round-robin announcement. Dynamic
+motion, health, energy, target, weapon set, and control fields are sampled only
+for the selected records. Never rebuild static NPC data on a world tick.
+
+Reconciliation runs only when a fresh record arrives. Initial `pilot.add`
+chooses position; subsequent updates never call `setPos`. Position error
+becomes capped velocity bias, and direction changes use a capped angular step
+based on elapsed record time. Health, energy, target, weapon set, controls, and
+active outfits avoid redundant setters. Because replicas are damageable,
+health and energy compare the live pilot value on each fresh bounded record;
+otherwise unchanged authoritative values could not repair unrelated local
+damage. There is no population-wide smoothing update.
+
+Players still publish ordinary unreliable state at 15 Hz while idle. Guest
+state uses the motion channel and the host immediately rebroadcasts each
+accepted fresh record, in addition to retaining it for the canonical world
+tick. Unchanged held controls receive a reliable one-second refresh so packet
+loss cannot leave an old acceleration state behind. Player velocity in a fresh
+record is applied directly; when its ordinary `vx` and `vy` are zero, residual
+replica drift is zero as well. This is not a separate stopped state or edge.
+
+Guest steering, acceleration, reverse, target/fire/weapon edges, and active
+outfit state are reliable. The host applies them to the guest's
+`p2p_remote_control` player proxy, so weapons physically interact with host
+NPCs, craft, player proxies, and persistent-object pilots. The host broadcasts
+each canonical action to every gameplay peer; guests apply it only for their
+accepted host/epoch and ignore self-owned echoes.
+
+## Host recovery
+
+The host lease is five seconds and deterministic recovery lasts two seconds. A
+fresh, remotely acknowledged incumbent wins. If recovered claims conflict
+without a live incumbent, node ID resolves the winner.
+
+When a guest is elected:
+
+- every existing NPC replica becomes authoritative immediately;
+- its cached original AI is restored with `changeAI`;
+- normal AI setup runs, replica tasks are cleared, and no-death is removed;
+- ambient spawning remains disabled for the rest of that system visit;
+- entities receive the new authority generation and epoch;
+- other peers discard the departed host's population and rebuild it from the
+  new authority's complete round-robin NPC announcements.
+
+Recovery does not synthesize missing NPCs or wait for another complete
+population before promotion.
+
+## Persistent objects
+
+Persistent objects use `ObjectRuntime` and a dedicated ENet client. They never
+enter gameplay NPC/craft registries or manifests. The gameplay update does not
+service this client. `space_objects.lua` provides a one-second subscription
+timer and a pending safe hook for acknowledgements, deletes, and reconnects.
+
+Remembered objects are instantiated immediately after takeoff. The directory
+query is authoritative: omitted remembered objects are exploded locally.
+Message buoys remain visible and highlighted and keep anonymous local naming.
+Local pilot handles map to stable object IDs. Destroying a local copy on any
+peer reports that exact ID to the directory, whose idempotent deletion removes
+every copy. The gameplay host publishes at most one object record per world
+tick with motion and health. Live copies apply host health on arrival, but
+objects have neither invincibility nor no-death: a peer that kills its copy
+before the next record has killed the object, and a later record cannot revive
+it. Object motion uses the same capped packet-arrival velocity and direction
+reconciliation as NPCs. An `entity_absent` response from the gameplay host
+never removes an object. Directory coordinates are only spawn/reset positions;
+ordinary engine physics integrates object motion between host records.
+
+## Time and event loop
+
+Whenever discovery is unresolved or a remote participant is present, disable
+speed input and enforce both `player.autonavSetSpeed(1)` and
+`player.setSpeed(1)`. The update hook corrects autonav's own per-frame ramp;
+one-second maintenance and modal chat/hail pumping preserve the lock. Ordinary
+solo speed behavior returns only after the existing host-alone grace.
+
+The per-frame update may:
+
+- drain at most `MAX_EVENTS_PER_FRAME` immediately available ENet events with
+  `service(0)`;
+- inspect the two scalar player time multipliers while the shared-time lock is
+  active;
+- compare wall-clock due times;
+- run only the scheduled bounded job whose deadline is due.
+
+Do not add object servicing, `pilot.get()`, population traversal, manifest
+construction, or an unbounded ENet drain to the frame path.
+
+## Validation and manual smoke testing
+
+Before handoff, run:
+
+```sh
+while IFS= read -r file; do luac -p "$file"; done < <(rg --files -g '*.lua')
+while IFS= read -r file; do xmllint --noout "$file"; done < <(rg --files -g '*.xml')
+```
+
+Parser or mocked-module success is not evidence of playable networking.
+Protocol or lifecycle work must report the Naev versions, topology, host/client
+count, reproduction steps, disconnect/reconnect coverage, save restrictions,
+and whether time compression remained at 1x.
+
+The minimum three-instance manual matrix covers simultaneous undock, identical
+NPC identities, guest fire through host simulation, shared target priority,
+bounded NPC return fire, player/NPC fighters, guest destruction of a message
+buoy, dock/takeoff, jump/re-entry, reconnect, host pause/loss/return, authority
+promotion, and 1x autonav enforcement. Record host and guest FPS and visible
+spikes; acceptance is based on the structural workload bounds and observed
+playability, not a fixed numeric threshold.

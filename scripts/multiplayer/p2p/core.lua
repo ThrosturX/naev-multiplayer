@@ -1,5 +1,4 @@
 local topology = require "multiplayer.p2p.topology"
-local reconcile = require "multiplayer.p2p.reconcile"
 
 local core = {}
 core.__index = core
@@ -15,7 +14,6 @@ function core.new ( node_id, now )
    self.now=now or os.clock
    self.topology=topology.new(node_id,self.now)
    self.state="stopped"
-   self.sequences={}
    self.members={}
    self.member_seen={}
    self.member_visits={}
@@ -47,7 +45,6 @@ function core:enter ( system_name, visit )
    self.member_seen={[self.node_id]=self.now()}
    self.member_visits={[self.node_id]=self.visit}
    self.claim_support={}
-   self.sequences={}
    return true
 end
 
@@ -56,7 +53,6 @@ function core:leave ()
    self.host_seen=nil; self.deadline=nil
    self.members={}; self.member_seen={}; self.member_visits={}
    self.claim_support={}
-   self.sequences={}
    if self.state~="stopped" then self.state="idle" end
 end
 
@@ -70,7 +66,7 @@ function core:new_claim ()
    self.host_seen=self.now()
    self.recovery_candidate=nil
    self.claim_support[self.claim]=self.claim_support[self.claim] or {}
-   self.claim_support[self.claim][self.node_id]=true
+   self.claim_support[self.claim][self.node_id]=self.now()
    return self.claim
 end
 
@@ -82,7 +78,7 @@ function core:observe_member ( node, visit, accepted_host, accepted_claim, stamp
    if visit then self.member_visits[node]=visit end
    if accepted_host and accepted_claim then
       local support=self.claim_support[accepted_claim] or {}
-      support[node]=true
+      support[node]=stamp
       self.claim_support[accepted_claim]=support
    end
    if node==self.host and (not accepted_claim or accepted_claim==self.claim) then
@@ -103,18 +99,16 @@ function core:remove_member ( node )
    for _claim,support in pairs(self.claim_support) do support[node]=nil end
 end
 
-function core:reset_member_sequences ( node )
-   self.sequences["chat:"..node]=nil
-   self.sequences["resync:"..node]=nil
-   self.sequences["craft:"..node]=nil
-   self.sequences["craft_order:"..node]=nil
-end
-
 function core:claim_acknowledged ( claim )
    local support=self.claim_support[claim]
    if not support then return false end
-   for node in pairs(support) do
-      if node~=claim:match("^([^:]+)") then return true end
+   local stamp=self.now()
+   for node,seen in pairs(support) do
+      if node~=claim:match("^([^:]+)")
+            and stamp-(seen or -math.huge)<=MEMBER_LEASE
+            and stamp-(self.member_seen[node] or -math.huge)<=MEMBER_LEASE then
+         return true
+      end
    end
    return false
 end
@@ -128,7 +122,6 @@ end
 
 function core:accept_claim ( message )
    if message.system~=self.system or message.node==self.node_id then return false end
-   local old_host,old_claim=self.host,self.claim
    if self.state=="recovering" then
       local allowed=self.recovery_candidate
          and message.node==self.recovery_candidate
@@ -146,12 +139,6 @@ function core:accept_claim ( message )
       self.host_seen=self.now()
       self.deadline=nil
       self.recovery_candidate=nil
-      if old_host~=self.host or old_claim~=self.claim then
-         self.sequences.npc_manifest=nil
-         self.sequences.npc_done=nil
-         self.sequences.npc_control=nil
-         self.sequences.npc=nil
-      end
       return true
    end
 
@@ -159,10 +146,6 @@ function core:accept_claim ( message )
       if self.claim~=message.claim then
          self.claim=message.claim
          self.claim_support[message.claim]=self.claim_support[message.claim] or {}
-         self.sequences.npc_manifest=nil
-         self.sequences.npc_done=nil
-         self.sequences.npc_control=nil
-         self.sequences.npc=nil
       end
       self.host_seen=self.now()
       if self.state~="host" then self.state="guest" end
@@ -183,10 +166,6 @@ function core:accept_claim ( message )
       self.host_seen=self.now()
       self.deadline=nil
       self.recovery_candidate=nil
-      self.sequences.npc_manifest=nil
-      self.sequences.npc_done=nil
-      self.sequences.npc_control=nil
-      self.sequences.npc=nil
       return true
    end
    return false
@@ -203,8 +182,8 @@ local function live_nodes ( self, stamp )
    return nodes
 end
 
-function core:tick ()
-   local stamp=self.now()
+function core:tick ( stamp )
+   stamp=stamp or self.now()
    self.member_seen[self.node_id]=stamp
    if self.state=="discovering" and stamp>=self.deadline then
       self:new_claim()
@@ -254,10 +233,6 @@ function core:host_lost ()
    self.recovery_candidate=nil
    self.deadline=self.now()+RECOVERY_TIME
    return nil
-end
-
-function core:accept_sequence ( stream, seq )
-   return reconcile.accept(self.sequences,stream,seq)
 end
 
 core.DISCOVERY_TIME=DISCOVERY_TIME

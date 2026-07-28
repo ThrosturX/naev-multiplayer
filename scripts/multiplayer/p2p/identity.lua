@@ -46,7 +46,7 @@ function identity:add ( node, name )
    return display
 end
 
--- A relayed manifest can arrive before the node's direct hello. Allow that
+-- A cached manifest can precede a direct hello after host recovery. Allow the
 -- direct connection to refresh the raw name while preserving local uniqueness.
 function identity:update ( node, name )
    if node==self.local_node or not valid_name(name) then
