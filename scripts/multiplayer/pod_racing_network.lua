@@ -6,7 +6,7 @@ local enet = require "enet"
 local network = {}
 local TIMEOUT = 8
 local MAX_EVENTS_PER_UPDATE = 24
-local MAX_CONTESTANTS_PER_DIVISION = 11
+local MAX_CONTESTANTS_PER_DIVISION = 32
 local job
 
 local function now () return naev.ticks() end

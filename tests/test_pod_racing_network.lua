@@ -60,7 +60,7 @@ local requests={}
 for _index,packet in ipairs(sent) do
    local message=assert(codec.decode(packet))
    if message.type=="contestant_query" then
-      assert(message.limit==11)
+      assert(message.limit==32)
       assert(message.track=="death_knot")
       requests[message.division]=message.request
    elseif message.type=="contestant_register" then

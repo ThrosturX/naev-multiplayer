@@ -55,7 +55,7 @@ local required = {
 
 local numeric = {
    ttl={1,60},division={1,3},request={0,9007199254740991},
-   limit={1,11},count={0,4096},revision={1,9007199254740991},
+   limit={1,32},count={0,4096},revision={1,9007199254740991},
    ok={0,1},
 }
 
