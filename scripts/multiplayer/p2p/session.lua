@@ -7,6 +7,7 @@ local reconcile = require "multiplayer.p2p.reconcile"
 local identity = require "multiplayer.p2p.identity"
 local status = require "multiplayer.p2p.status"
 local ObjectRuntime = require "multiplayer.p2p.object_runtime"
+local communications = require "multiplayer.p2p.communications"
 local enet = require "enet"
 local ai_setup = require "ai.core.setup"
 
@@ -2976,7 +2977,15 @@ local function handle_gameplay_message ( peer, message )
       accept_claim_message(message)
       return
    end
-   if not current_system() or message.system~=current_system() then return end
+   local current=current_system()
+   if not current or message.system~=current then
+      if current and (message.type=="chat"
+            or message.type=="player_manifest" or message.type=="leave") then
+         local direct_name=message.owner==meta.node and meta.name or nil
+         communications.observe(message,direct_name)
+      end
+      return
+   end
    if message.type=="heartbeat" then
       host_replace_member_visit(message.node,message.visit,peer)
       session.machine:observe_member(
@@ -3587,6 +3596,8 @@ end
 
 function session.leave ()
    clear_local_controls()
+   communications.stop()
+   session.communications_active=nil
    if not session.machine or not current_system() then
       session.indicators:clear()
       lock_autonav(false)
@@ -3644,6 +3655,9 @@ function session.send_chat ( text )
    show_chat(message.owner,message.text)
    if is_host() then host_reliable(message)
    else send_host(message,true) end
+   if communications.send(message.text,session.settings) then
+      session.communications_active=true
+   end
    return true
 end
 
@@ -3806,6 +3820,10 @@ function session.update ( _dt )
    -- locked, before servicing the scheduled networking jobs.
    session.enforce_time_controls()
    service_transport(stamp)
+   if session.communications_active then
+      communications.update()
+      session.communications_active=communications.active()
+   end
 
    if stamp>=session.next_election then
       session.next_election=stamp+0.1
