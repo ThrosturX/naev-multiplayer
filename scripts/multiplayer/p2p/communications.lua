@@ -4,6 +4,7 @@ local fmt = require "format"
 local communications = {}
 
 local SHORT_RANGE = 2
+local EXTENDED_RANGE = 5
 local WIDE_SYSTEM_CAP = 8
 local TRANSMITTER_SHIP = "Distress Beacon"
 
@@ -11,6 +12,7 @@ local OUTFIT_SNIFFER = "Communications Sniffer"
 local OUTFIT_SHORT = "Short-Range Communications Sniffer"
 local OUTFIT_WIDE = "Wide-Area Communications Sniffer"
 local OUTFIT_SUITE = "Augmented Communications Suite"
+local OUTFIT_EXTENDED = "Extended Communications Suite"
 
 local wide_cache = {
    received=nil,
@@ -25,26 +27,29 @@ end
 
 local function fitted_capabilities ()
    local p=player.pilot()
-   if not p then return end
+   if not p or not p:exists() then return end
    local capabilities={}
    for _slot,o in pairs(p:outfits()) do
       local name=o and o:nameRaw()
       if name==OUTFIT_SNIFFER then
          capabilities.receive_any=true
       elseif name==OUTFIT_SHORT then
-         capabilities.receive_short=true
+         capabilities.receive_range=SHORT_RANGE
       elseif name==OUTFIT_WIDE then
          capabilities.receive_wide=true
       elseif name==OUTFIT_SUITE then
-         capabilities.receive_short=true
-         capabilities.send=true
+         capabilities.receive_range=SHORT_RANGE
+         capabilities.send_range=SHORT_RANGE
+      elseif name==OUTFIT_EXTENDED then
+         capabilities.receive_range=EXTENDED_RANGE
+         capabilities.send_range=EXTENDED_RANGE
       end
    end
    if next(capabilities) then return capabilities end
 end
 
-local function jump_distance ( source_name )
-   local origin=system.cur()
+local function jump_distance ( current_name, source_name )
+   local origin=system.exists(current_name)
    local source=system.exists(source_name)
    if not origin or not source then return end
    local distance=origin:jumpDist(source,false,true)
@@ -88,7 +93,7 @@ local function local_transmitter_owner ()
    if type(node)=="string" and node:match("^[%x]+$") then return node.."a" end
 end
 
-function communications.observe ( message, direct_name )
+function communications.observe ( message, direct_name, current_name )
    if type(message)~="table" then return false end
    local kind=message.type
    if kind~="chat" and kind~="player_manifest" and kind~="leave" then
@@ -116,14 +121,13 @@ function communications.observe ( message, direct_name )
 
    if message.owner==local_transmitter_owner() then return false end
 
-   local current=system.cur()
-   local current_name=current and current:nameRaw()
-   if not current_name or message.system==current_name then return false end
+   if type(current_name)~="string" or current_name==""
+         or message.system==current_name then return false end
 
    local accepted=capabilities.receive_any==true
-   if not accepted and capabilities.receive_short then
-      local distance=jump_distance(message.system)
-      accepted=distance~=nil and distance<=SHORT_RANGE
+   if not accepted and capabilities.receive_range then
+      local distance=jump_distance(current_name,message.system)
+      accepted=distance~=nil and distance<=capabilities.receive_range
    end
    if not accepted and capabilities.receive_wide then
       accepted=wide_receives(message.system,current_name)
@@ -149,7 +153,7 @@ local function gate_position ( origin_name, target_name )
    return final_jump:reverse():pos():get()
 end
 
-local function active_targets ( origin_name, active_systems )
+local function active_targets ( origin_name, active_systems, range )
    local targets={}
    local seen={}
    local origin=system.get(origin_name)
@@ -158,7 +162,7 @@ local function active_targets ( origin_name, active_systems )
          seen[system_name]=true
          local target=system.exists(system_name)
          local distance=target and origin:jumpDist(target,false,true)
-         if distance and distance<=SHORT_RANGE then
+         if distance and distance<=range then
             targets[#targets+1]={system=system_name,distance=distance}
          end
       end
@@ -179,7 +183,7 @@ end
 
 function communications.send ( text, settings )
    local capabilities=fitted_capabilities()
-   if not capabilities or not capabilities.send or Transient.active() then
+   if not capabilities or not capabilities.send_range or Transient.active() then
       return false
    end
    if player.isLanded() or type(text)~="string" or text==""
@@ -203,7 +207,7 @@ function communications.send ( text, settings )
       }),
       text=text:sub(1,1024),
       target_systems=function ( systems )
-         return active_targets(origin,systems)
+         return active_targets(origin,systems,capabilities.send_range)
       end,
       position=function ( target )
          return gate_position(origin,target.system)

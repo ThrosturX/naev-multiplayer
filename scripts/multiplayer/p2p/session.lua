@@ -2982,7 +2982,7 @@ local function handle_gameplay_message ( peer, message )
       if current and (message.type=="chat"
             or message.type=="player_manifest" or message.type=="leave") then
          local direct_name=message.owner==meta.node and meta.name or nil
-         communications.observe(message,direct_name)
+         communications.observe(message,direct_name,current)
       end
       return
    end

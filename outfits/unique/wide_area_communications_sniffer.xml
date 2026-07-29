@@ -2,15 +2,17 @@
  <general>
   <rarity>1</rarity>
   <unique/>
-  <typename>Communications Sniffer</typename>
+  <typename>Communication Package</typename>
   <slot>utility</slot>
   <size>medium</size>
   <mass>40</mass>
   <price>600000</price>
   <description>A passive long-range receiver that attempts to tap into communications originating outside of the solar system.</description>
-  <desc_extra>Passively monitors subspace frequencies containing chatter from up to eight solar systems at a time. It opens no connection and transmits nothing.</desc_extra>
+  <desc_extra>Discretely monitors subspace frequencies containing chatter from up to eight solar systems at a time.</desc_extra>
   <gfx_store>pipeline_conduit.avif</gfx_store>
-  <limit>wide_area_communications_sniffer</limit>
+  <limit>communication_package</limit>
  </general>
- <specific type="modification"/>
+ <specific type="modification">
+  <energy_regen_malus>2</energy_regen_malus>
+ </specific>
 </outfit>

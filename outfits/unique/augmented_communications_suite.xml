@@ -2,15 +2,17 @@
  <general>
   <rarity>1</rarity>
   <unique/>
-  <typename>Augmented Communications Suite</typename>
+  <typename>Communication Package</typename>
   <slot>utility</slot>
   <size>small</size>
   <mass>7</mass>
   <price>900000</price>
   <description>A two-jump receiver and transmitter for communication between solar systems.</description>
-  <desc_extra>Extends the range of communication broadcasts by two jumps, allowing the user to communicate with pilots in other systems without dedicated equipment. Bounty hunters and rescuers  alike consider it an invaluable tool.</desc_extra>
+  <desc_extra>Extends the range of communication broadcasts by two jumps, allowing the user to communicate with pilots in other systems without dedicated equipment. Bounty hunters and rescuers alike consider it an invaluable tool.</desc_extra>
   <gfx_store>jammer1.avif</gfx_store>
-  <limit>augmented_communications_suite</limit>
+  <limit>communication_package</limit>
  </general>
- <specific type="modification"/>
+ <specific type="modification">
+  <energy_regen_malus>1</energy_regen_malus>
+ </specific>
 </outfit>

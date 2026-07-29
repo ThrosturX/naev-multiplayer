@@ -19,7 +19,7 @@ local p2psession    = require "multiplayer.p2p.session"
 local space_objects = require "multiplayer.p2p.space_objects"
 local luatk         = require "luatk"
 local vn = require "vn"
--- luacheck: globals load startMultiplayerServer
+-- luacheck: globals load startMultiplayerServer resetMultiplayerCache
 -- luacheck: globals P2P_SESSION_UPDATE P2P_SESSION_INPUT
 -- luacheck: globals P2P_SESSION_ENTER P2P_SESSION_LEAVE
 -- luacheck: globals P2P_SESSION_PILOT_CREATION
@@ -38,13 +38,13 @@ function create ()
     mem.multiplayer = {
         servers = {},
         p2p = p2psession.defaults(),
+        p2p_hook_ids = {},
     }
     hook.load("load")
 end
 
 local mpbtn
 
-local p2p_hooks = {}
 local p2p_pilot_hooks = {}
 local p2p_hail_pressed
 
@@ -159,8 +159,8 @@ local function p2p_stop ()
     space_objects.stop()
     p2psession.stop()
     p2p_hail_pressed = nil
-    for _index, h in ipairs(p2p_hooks) do hook.rm(h) end
-    p2p_hooks = {}
+    for _index, h in ipairs(mem.multiplayer.p2p_hook_ids or {}) do hook.rm(h) end
+    mem.multiplayer.p2p_hook_ids = {}
     p2p_publish_config()
 end
 
@@ -168,7 +168,7 @@ local function p2p_start ()
     p2p_stop()
     local ok, err = p2psession.start(mem.multiplayer.p2p)
     if not ok then print("P2P: " .. tostring(err)); return end
-    p2p_hooks = {
+    mem.multiplayer.p2p_hook_ids = {
         hook.update("P2P_SESSION_UPDATE"),
         hook.input("P2P_SESSION_INPUT"),
         hook.enter("P2P_SESSION_ENTER"),
@@ -296,6 +296,13 @@ function startMultiplayerServer( hostport )
     evt.save()
 end
 
+function resetMultiplayerCache ()
+    p2p_stop()
+    player.infoButtonUnregister(mpbtn)
+    mpbtn = nil
+    evt.finish(false)
+end
+
 local function connectMultiplayer( hostname, hostport, localport )
     hostname = hostname or "localhost"
     hostport = hostport or "6789"
@@ -349,6 +356,7 @@ local GREETINGS = {
 }
 local function vnMultiplayer()
     if mem.multiplayer.p2p.enabled then p2psession.request_activity() end
+    local reset_cache = false
     local recent_activity = p2psession.recent_activity()
     local activity_lines = {}
     for _index, entry in ipairs(recent_activity) do
@@ -371,6 +379,7 @@ local function vnMultiplayer()
         { _("Connect"), "connect_menu" },
         { _("Host Server"), "host" },
         { _("P2P Session Settings"), "p2p_settings" },
+        { _("Reset Cache"), "reset_cache" },
     }
     if mem.multiplayer.last_server and not mem.multiplayer.p2p.enabled then
         table.insert( choices, { fmt.f( _("Reconnect to {nick}"), mem.multiplayer.last_server ), "reconnect" } )
@@ -435,6 +444,11 @@ local function vnMultiplayer()
 
     vn.label("p2p_activity")
     mpvn(activity_message)
+    vn.jump("end")
+
+    vn.label("reset_cache")
+    mpvn(_("This removes the multiplayer event and its registered hooks. Save and reload the game to start multiplayer again."))
+    vn.func(function() reset_cache = true end)
     vn.jump("end")
 
     local port
@@ -604,6 +618,11 @@ local function vnMultiplayer()
     vn.done()
     vn.run()
 
+    if reset_cache then
+        hook.safe("resetMultiplayerCache")
+        return
+    end
+
     evt.save()
 
     if target then
@@ -619,6 +638,7 @@ function load()
         }
     end
     mem.multiplayer.p2p = p2psession.defaults(mem.multiplayer.p2p)
+    mem.multiplayer.p2p_hook_ids = mem.multiplayer.p2p_hook_ids or {}
     p2p_publish_config()
     evt.save()
     mpbtn = player.infoButtonRegister( _("Multiplayer"), vnMultiplayer, 3 )
