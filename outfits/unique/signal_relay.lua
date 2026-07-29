@@ -1,4 +1,4 @@
-local OUTFIT_NAME = "Message Buoy"
+local OUTFIT_NAME = "Signal Relay"
 
 local function fitted_slot ( p )
    for _index,entry in ipairs(p:actives()) do
@@ -17,28 +17,28 @@ function init ( p, po )
    po:progress(0)
 end
 
-function ontoggle ( p, po, on )
+function ontoggle ( p, _po, on )
    if p~=player.pilot() or not on then return false end
    if player.isLanded() then
-      player.msg("#r".._("Message buoys can only be deployed in space.").."#0")
+      player.msg("#r".._("Signal relays can only be deployed in space.").."#0")
       return false
    end
    local cache=naev.cache()
    local config=cache.multiplayer_p2p_config
-   if type(config)~="table" or not config.enabled then
-      player.msg("#r".._("Enable P2P multiplayer before deploying a message buoy.").."#0")
+   if type(config)~="table" or config.enabled~=true then
+      player.msg("#r".._("Enable P2P multiplayer before deploying a signal relay.").."#0")
       return false
    end
    if cache.multiplayer_p2p_objects~=true then
-      player.msg("#r".._("The configured directory does not support persistent objects.").."#0")
+      player.msg("#r".._("Your systems need more time to calibrate.").."#0")
       return false
    end
    if cache.multiplayer_object_deploy then return false end
    local slot=fitted_slot(p)
    if not slot then
-      player.msg("#r".._("The fitted message buoy could not be found.").."#0")
+      player.msg("#r".._("The fitted signal relay could not be found.").."#0")
       return false
    end
-   cache.multiplayer_object_deploy={kind="message_buoy",slot=slot}
+   cache.multiplayer_object_deploy={kind="signal_relay",slot=slot}
    return false
 end

@@ -1,0 +1,18 @@
+<outfit name="Signal Relay">
+ <general>
+  <rarity>6</rarity>
+  <unique/>
+  <typename>Signal Relay</typename>
+  <slot>utility</slot>
+  <size>small</size>
+  <mass>2</mass>
+  <price>100000</price>
+  <description>Deploys a persistent multiplayer signal relay at the ship's current position.</description>
+  <desc_extra>Chat sent from a relay system is repeated into other active systems containing a signal relay. The fitted relay is consumed after confirmed deployment.</desc_extra>
+  <gfx_store>message_buoy.avif</gfx_store>
+  <limit>signal_relay</limit>
+ </general>
+ <specific type="modification">
+  <lua>outfits/unique/signal_relay.lua</lua>
+ </specific>
+</outfit>

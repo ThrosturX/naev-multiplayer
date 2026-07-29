@@ -20,7 +20,7 @@ local space_objects = require "multiplayer.p2p.space_objects"
 local luatk         = require "luatk"
 local vn = require "vn"
 -- luacheck: globals load startMultiplayerServer
--- luacheck: globals P2P_SESSION_UPDATE P2P_SESSION_INPUT P2P_SESSION_HAIL
+-- luacheck: globals P2P_SESSION_UPDATE P2P_SESSION_INPUT
 -- luacheck: globals P2P_SESSION_ENTER P2P_SESSION_LEAVE
 -- luacheck: globals P2P_SESSION_PILOT_CREATION
 -- luacheck: globals P2P_SESSION_PILOT_DEFERRED P2P_SESSION_PILOT_DEATH
@@ -28,7 +28,7 @@ local vn = require "vn"
 -- luacheck: globals P2P_SESSION_PILOT_ATTACKED
 -- luacheck: globals P2P_SESSION_PLAYER_DEATH
 -- luacheck: globals P2P_OBJECT_UPDATE P2P_OBJECT_TIMER
--- luacheck: globals P2P_BUOY_CONSUME P2P_OBJECT_DESTROYED
+-- luacheck: globals P2P_OBJECT_CONSUME P2P_OBJECT_DESTROYED
 
 local function pick_one ( ipair )
     return ipair[ rnd.rnd( 1, #ipair ) ]
@@ -47,7 +47,6 @@ local mpbtn
 local p2p_hooks = {}
 local p2p_pilot_hooks = {}
 local p2p_hail_pressed
-local p2p_hail_vn_run
 
 local function p2p_clear_pilot_hooks ()
     for _index, h in ipairs(p2p_pilot_hooks) do hook.rm(h) end
@@ -76,33 +75,9 @@ local function p2p_publish_config ()
     }
 end
 
-local function p2p_restore_hail_vn ()
-    if not p2p_hail_vn_run then return end
-    vn.run = p2p_hail_vn_run
-    p2p_hail_vn_run = nil
-end
-
 local function p2p_pump ( dt, modal )
     if modal then p2psession.keep_simulation_live() end
     p2psession.update(dt or 0)
-end
-
-local function p2p_keep_hail_live ()
-    if p2p_hail_vn_run then return end
-    local vn_run = vn.run
-    p2p_hail_vn_run = vn_run
-    vn.run = function(...)
-        vn.run = vn_run
-        p2p_hail_vn_run = nil
-        local vn_update = vn.update
-        vn.update = function(dt)
-            p2p_pump(dt, true)
-            vn_update(dt)
-        end
-        local ok, err = pcall(vn_run, ...)
-        vn.update = vn_update
-        if not ok then error(err, 0) end
-    end
 end
 
 local function p2p_chat_available ()
@@ -110,7 +85,7 @@ local function p2p_chat_available ()
     local pp = player.pilot()
     local nav_spob = pp:nav()
     local target = pp:target()
-    if target then
+    if target and target:ship():nameRaw() ~= "Signal Relay" then
         local ok, disabled = pcall(function() return target:disabled() end)
         if not ok or not disabled then return false end
     end
@@ -180,7 +155,6 @@ local function p2p_run_chat ()
 end
 
 local function p2p_stop ()
-    p2p_restore_hail_vn()
     p2p_clear_pilot_hooks()
     space_objects.stop()
     p2psession.stop()
@@ -197,7 +171,6 @@ local function p2p_start ()
     p2p_hooks = {
         hook.update("P2P_SESSION_UPDATE"),
         hook.input("P2P_SESSION_INPUT"),
-        hook.hail("P2P_SESSION_HAIL"),
         hook.enter("P2P_SESSION_ENTER"),
         hook.land("P2P_SESSION_LEAVE"),
         hook.takeoff("P2P_SESSION_ENTER"),
@@ -229,10 +202,16 @@ end
 function P2P_SESSION_UPDATE ( dt )
     p2p_pump(dt)
     local cache = naev.cache()
-    local request = cache.multiplayer_buoy_prompt
+    local request = cache.multiplayer_object_deploy
     if request then
-        cache.multiplayer_buoy_prompt = nil
-        p2p_run_buoy_prompt(request)
+        cache.multiplayer_object_deploy = nil
+        if request.kind == "message_buoy" then
+            p2p_run_buoy_prompt(request)
+        elseif request.kind == "signal_relay" then
+            local ok, err = p2psession.create_signal_relay(request.slot)
+            space_objects.wake()
+            if not ok and err then player.msg("#r"..tostring(err).."#0") end
+        end
     end
 end
 function P2P_OBJECT_UPDATE ( generation )
@@ -241,17 +220,11 @@ end
 function P2P_OBJECT_TIMER ( generation )
     space_objects.timer(generation)
 end
-function P2P_BUOY_CONSUME ( slot )
-    local p = player.pilot()
-    slot = tonumber(slot)
-    local fitted = p and slot and p:outfitSlot(slot)
-    if fitted and fitted:nameRaw() == "Message Buoy" then
-        p:outfitRmSlot(slot)
-    end
+function P2P_OBJECT_CONSUME ( generation )
+    space_objects.consume(generation)
 end
 function P2P_OBJECT_DESTROYED ( p, _attacker, object_id )
-    p2psession.message_buoy_destroyed(object_id, p)
-    space_objects.wake()
+    space_objects.object_destroyed(object_id, p)
 end
 function P2P_SESSION_PILOT_CREATION ( p )
     p2psession.pilot_created(p)
@@ -274,9 +247,7 @@ end
 function P2P_SESSION_PLAYER_DEATH ( p, _attacker )
     p2psession.player_died(p)
 end
-function P2P_SESSION_HAIL () p2p_keep_hail_live() end
 function P2P_SESSION_INPUT ( input_name, input_pressed )
-    if input_name == "hail" then p2p_restore_hail_vn() end
     p2psession.input(input_name, input_pressed)
     if input_name ~= "hail" then return end
     if input_pressed then
@@ -289,7 +260,9 @@ function P2P_SESSION_INPUT ( input_name, input_pressed )
     vn.reset()
     local chat_state = luatk.vn(function()
         local window = luatk.msgInput(_("COMMUNICATION"), _("Broadcast:"), 96, function(msg)
-            if msg and #msg > 0 then p2psession.send_chat(msg) end
+            if msg and #msg > 0 and p2psession.send_chat(msg) then
+                space_objects.chat(msg)
+            end
         end)
         p2p_size_chat(window)
     end)

@@ -13,6 +13,7 @@ local kinds = {
    one_way_wormhole=true,
    two_way_wormhole=true,
    registration_post=true,
+   signal_relay=true,
 }
 
 local function plain_string ( value, maximum, pattern )
@@ -72,7 +73,8 @@ local function validate_relationships ( object, endpoints )
       end
    end
 
-   if object.kind=="message_buoy" or object.kind=="registration_post" then
+   if object.kind=="message_buoy" or object.kind=="registration_post"
+         or object.kind=="signal_relay" then
       local endpoint=object.endpoints[1]
       if #object.endpoints~=1 or endpoint.role~="physical"
             or endpoint.visible~=true or endpoint.target then
@@ -268,7 +270,9 @@ function objects.policy_create ( object, node, existing )
 end
 
 function objects.policy_delete ( object, node )
-   if object.kind=="message_buoy" then return true end
+   if object.kind=="message_buoy" or object.kind=="signal_relay" then
+      return true
+   end
    if object.owner~=node then return nil,"owner required" end
    return true
 end

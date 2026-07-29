@@ -3,6 +3,8 @@
 local codec = require "multiplayer.p2p.codec"
 local Object = require "multiplayer.p2p.objects"
 local ObjectClient = require "multiplayer.p2p.object_client"
+local Transient = require "multiplayer.p2p.transient"
+local fmt = require "format"
 
 local Runtime = {}
 Runtime.__index = Runtime
@@ -12,8 +14,10 @@ local QUERY_TIMEOUT = 4
 local RECONCILE_TIMEOUT = 30
 local SUBSCRIPTION_REFRESH = 30
 local BUOY_BROADCAST_INTERVAL = 30
+local MAX_RELAY_QUEUE = 16
 
 local buoy_faction
+local relay_faction
 
 local function exists ( p )
    return p~=nil and p:exists()
@@ -38,6 +42,8 @@ function Runtime.new ( options )
       known_by_system={},
       pending_requests={},
       pending_deletes={},
+      consumptions={},
+      relay_queue={},
       request_sequence=0,
       subscription_system=nil,
       confirmed_system=nil,
@@ -68,9 +74,10 @@ function Runtime:send ( message )
    return true
 end
 
-function Runtime:message_buoy_endpoint ( object )
+function Runtime:physical_endpoint ( object )
    local system_name=self:current_system()
-   if object.kind~="message_buoy" or not system_name then return end
+   if not system_name or (object.kind~="message_buoy"
+         and object.kind~="signal_relay") then return end
    for _index,endpoint in ipairs(object.endpoints) do
       if endpoint.visible and endpoint.system==system_name then
          return endpoint
@@ -135,17 +142,34 @@ function Runtime:clear_local ()
 end
 
 function Runtime:spawn ( object )
-   local endpoint=self:message_buoy_endpoint(object)
+   local endpoint=self:physical_endpoint(object)
    if not endpoint then return false end
    local old=self.local_objects[object.id]
-   if old and old.object.revision>=object.revision then return true end
+   if old and old.object.revision>=object.revision
+         and exists(old.pilot) then return true end
    if old then self:remove_local(object.id,false) end
-   if not buoy_faction then
-      buoy_faction=faction.dynAdd(nil,"P2P Message Buoys","Message Buoys",
-         {ai="dummy",clear_allies=true,clear_enemies=true})
+   local ship_name,display_name,fac
+   if object.kind=="message_buoy" then
+      ship_name="Message Buoy"
+      display_name="Message Buoy"
+      if not buoy_faction then
+         buoy_faction=faction.dynAdd(nil,"P2P Message Buoys","Message Buoys",
+            {ai="dummy",clear_allies=true,clear_enemies=true})
+      end
+      fac=buoy_faction
+   elseif object.kind=="signal_relay" then
+      ship_name="Signal Relay"
+      display_name="Signal Relay"
+      if not relay_faction then
+         relay_faction=faction.dynAdd(nil,"P2P Signal Relays","Signal Relays",
+            {ai="dummy",clear_allies=true,clear_enemies=true})
+      end
+      fac=relay_faction
+   else
+      return false
    end
-   local p=pilot.add("Message Buoy",buoy_faction,
-      vec2.new(endpoint.x,endpoint.y),"Message Buoy",
+   local p=pilot.add(ship_name,fac,
+      vec2.new(endpoint.x,endpoint.y),display_name,
       {ai="dummy",naked=true})
    if not p then return false end
    p:setDir(endpoint.dir)
@@ -158,7 +182,7 @@ function Runtime:spawn ( object )
    local local_id=tostring(p:id())
    local entry={
       object=object,pilot=p,local_id=local_id,
-      announce_at=self.now()+1,
+      announce_at=object.kind=="message_buoy" and self.now()+1 or nil,
    }
    self.local_objects[object.id]=entry
    self.local_pilot_ids[local_id]=object.id
@@ -181,6 +205,27 @@ end
 function Runtime:pilot_for_id ( object_id )
    local entry=self.local_objects[object_id]
    if entry and exists(entry.pilot) then return entry.pilot end
+end
+
+function Runtime:signal_relay_pilot ()
+   local selected_id,selected
+   for object_id,entry in pairs(self.local_objects) do
+      if entry.object.kind=="signal_relay" and exists(entry.pilot)
+            and not entry.pilot:disabled()
+            and (not selected_id or object_id<selected_id) then
+         selected_id=object_id
+         selected=entry.pilot
+      end
+   end
+   return selected
+end
+
+function Runtime:chat_pilot ( manifest )
+   if manifest and manifest.ship=="Signal Relay"
+         and type(manifest.origin)=="string"
+         and manifest.origin:match("%.relay$") then
+      return self:signal_relay_pilot()
+   end
 end
 
 function Runtime:state_entry ( object_id )
@@ -206,15 +251,30 @@ function Runtime:complete_create ( request, pending, object_id )
       self:spawn(pending.object)
    end
    self.pending_requests[request]=nil
-   naev.cache().multiplayer_buoy_consume={
-      slot=pending.slot,object_id=object_id,
-   }
-   player.msg("#g".._("Message buoy deployed.").."#0")
+   if pending.consume_outfit then
+      self.consumptions[#self.consumptions+1]={
+         slot=pending.slot,outfit=pending.consume_outfit,
+      }
+   end
+   local relay=pending.object and pending.object.kind=="signal_relay"
+   player.msg("#g"..(relay
+      and _("Signal relay deployed.")
+      or _("Message buoy deployed.")).."#0")
 end
 
 function Runtime:fail_create ( request, code )
+   local pending=self.pending_requests[request]
    self.pending_requests[request]=nil
-   local reasons={
+   local relay=pending and pending.object
+      and pending.object.kind=="signal_relay"
+   local reasons=relay and {
+      capacity=_("The directory cannot accept more persistent objects."),
+      duplicate=_("That object ID is already in use."),
+      forbidden=_("The directory rejected the signal relay."),
+      invalid=_("The directory rejected invalid signal relay data."),
+      timeout=_("Signal relay deployment timed out."),
+      missing=_("The directory did not retain the signal relay."),
+   } or {
       occupied=_("This system already has a message buoy."),
       capacity=_("The directory cannot accept more persistent objects."),
       duplicate=_("That object ID is already in use."),
@@ -223,8 +283,9 @@ function Runtime:fail_create ( request, code )
       timeout=_("Message buoy deployment timed out."),
       missing=_("The directory did not retain the message buoy."),
    }
-   player.msg("#r"..(reasons[code]
-      or _("Message buoy deployment failed.")).."#0")
+   player.msg("#r"..(reasons[code] or (relay
+      and _("Signal relay deployment failed.")
+      or _("Message buoy deployment failed."))).."#0")
 end
 
 function Runtime:reconcile_create ( object )
@@ -318,8 +379,12 @@ function Runtime:finish_query ( message )
       end
    end
    for _index,creation in ipairs(creations) do
-      if occupied then self:fail_create(creation.request,"occupied")
-      else self:send_create(creation.request,creation.pending) end
+      local object=creation.pending.object
+      if object and object.kind=="message_buoy" and occupied then
+         self:fail_create(creation.request,"occupied")
+      else
+         self:send_create(creation.request,creation.pending)
+      end
    end
    local previously_known=self.known_by_system[message.system] or {}
    for object_id in pairs(previously_known) do
@@ -519,6 +584,8 @@ function Runtime:start ()
 end
 
 function Runtime:stop ()
+   Transient.stop("signal_relay")
+   self.relay_queue={}
    self:clear_local()
    if self.client then self.client:stop() end
    self.client=nil
@@ -537,6 +604,8 @@ function Runtime:enter ( system_name )
 end
 
 function Runtime:leave ()
+   Transient.stop("signal_relay")
+   self.relay_queue={}
    self.subscription_system=nil
    self.confirmed_system=nil
    self.confirmed_at=-math.huge
@@ -552,21 +621,117 @@ function Runtime:update ()
    local stamp=self.now()
    self:process_deadlines(stamp)
    self:ensure_subscription()
+   local missing={}
    for object_id,entry in pairs(self.local_objects) do
       if not exists(entry.pilot) then
-         self:remove_local(object_id,false)
-      elseif stamp>=entry.announce_at then
+         missing[#missing+1]={object_id=object_id,object=entry.object}
+      elseif entry.announce_at and stamp>=entry.announce_at then
          entry.pilot:broadcast(
             display_text(entry.object.data.text),true)
          entry.announce_at=stamp+BUOY_BROADCAST_INTERVAL
       end
+   end
+   for _index,entry in ipairs(missing) do
+      self:remove_local(entry.object_id,false)
+      self:spawn(entry.object)
    end
    return true
 end
 
 function Runtime:pending ()
    return self.running and (next(self.pending_requests)~=nil
-      or next(self.pending_deletes)~=nil)
+      or next(self.pending_deletes)~=nil
+      or #self.relay_queue>0 or Transient.active("signal_relay"))
+end
+
+function Runtime:update_signal_relay ()
+   if not self.running then return false end
+   if Transient.active("signal_relay") then Transient.update() end
+   if not Transient.active() then self:start_relay_chat() end
+   return #self.relay_queue>0 or Transient.active("signal_relay")
+end
+
+function Runtime:take_object_consumptions ()
+   local queue=self.consumptions
+   self.consumptions={}
+   return queue
+end
+
+local function relay_target_systems ( origin, systems )
+   local targets={}
+   local seen={}
+   for _index,system_name in ipairs(systems) do
+      if system_name~=origin and not seen[system_name] then
+         seen[system_name]=true
+         targets[#targets+1]=system_name
+      end
+   end
+   table.sort(targets)
+   return targets
+end
+
+local function relay_object ( packed, system_name, selected )
+   local object=Object.decode(packed)
+   if not object or object.kind~="signal_relay" then return selected end
+   for _index,endpoint in ipairs(object.endpoints) do
+      if endpoint.visible and endpoint.system==system_name
+            and (not selected or object.id<selected.object_id) then
+         return {
+            object_id=object.id,system=system_name,
+            x=endpoint.x,y=endpoint.y,dir=endpoint.dir,
+         }
+      end
+   end
+   return selected
+end
+
+function Runtime:start_relay_chat ()
+   if Transient.active() or #self.relay_queue==0 then return false end
+   local request=table.remove(self.relay_queue,1)
+   local ok,err=Transient.start{
+      kind="signal_relay",
+      directory=self.settings.directory,
+      node_id=self.settings.node_id,
+      node_suffix="c",
+      origin_suffix=".relay",
+      ship="Signal Relay",
+      name="Signal Relay",
+      text=request.text,
+      target_systems=function ( systems )
+         return relay_target_systems(request.origin,systems)
+      end,
+      inspect_object=relay_object,
+      position=function ( target )
+         return target.x,target.y,target.dir
+      end,
+      on_error=function ( message )
+         print("P2P: signal relay: "..tostring(message))
+      end,
+      unsupported=_("The multiplayer directory does not support signal relays."),
+   }
+   if not ok and err then
+      print("P2P: signal relay: "..tostring(err))
+      return false
+   end
+   return true
+end
+
+function Runtime:relay_chat ( text )
+   local origin=self:current_system()
+   if type(text)~="string" or text=="" or not origin
+         or not self:signal_relay_pilot() then return false end
+   if #self.relay_queue>=MAX_RELAY_QUEUE then
+      print("P2P: signal relay queue is full")
+      return false
+   end
+   self.relay_queue[#self.relay_queue+1]={
+      origin=origin,
+      text=fmt.f(_("[{system}] {captain}: {text}"),{
+         system=_(origin),captain=player.name(),text=text,
+      }):sub(1,1024),
+   }
+   self:start_relay_chat()
+   return true
 end
 
 function Runtime:create_message_buoy ( text, slot )
@@ -616,8 +781,8 @@ function Runtime:create_message_buoy ( text, slot )
    local waiting=self:has_pending_delete(system_name)
    self.pending_requests[request]={
       action=waiting and "create_wait_delete" or "create",
-      object_id=object_id,slot=slot,system=system_name,
-      object=object,packed=packed,
+      object_id=object_id,slot=slot,consume_outfit="Message Buoy",
+      system=system_name,object=object,packed=packed,
       deadline=self.now()+(waiting and RECONCILE_TIMEOUT
          or REQUEST_TIMEOUT),
    }
@@ -630,7 +795,66 @@ function Runtime:create_message_buoy ( text, slot )
    return true
 end
 
-function Runtime:message_buoy_destroyed ( object_id, destroyed_pilot )
+function Runtime:create_signal_relay ( slot )
+   local system_name=self:current_system()
+   if not self.running or not system_name or player.isLanded() then
+      return nil,_("Signal relays can only be deployed during P2P spaceflight.")
+   end
+   slot=tonumber(slot)
+   local pp=player.pilot()
+   local current=slot and pp:outfitSlot(slot) or nil
+   if not current or current:nameRaw()~="Signal Relay" then
+      return nil,_("The fitted signal relay could not be found.")
+   end
+   if not self:peer() then
+      return nil,_("The configured directory does not support persistent objects.")
+   end
+   if self.confirmed_system~=system_name then
+      self:ensure_subscription()
+      return nil,_("Signal relay data for this system is still synchronizing.")
+   end
+   for _object_id,object in pairs(self.known_by_system[system_name] or {}) do
+      if object.kind=="signal_relay" then
+         return nil,_("This system already has a signal relay.")
+      end
+   end
+   for _request,pending in pairs(self.pending_requests) do
+      if (pending.action=="create" or pending.action=="create_reconcile"
+            or pending.action=="create_wait_delete")
+            and pending.system==system_name then
+         return nil,_("A persistent-object deployment is already in progress.")
+      end
+   end
+   local random={}
+   for _index=1,4 do
+      random[#random+1]=string.format("%08x",rnd.rnd(0,0x7fffffff))
+   end
+   local object_id=self.settings.node_id.."_"..table.concat(random)
+   local x,y=pp:pos():get()
+   local object={
+      id=object_id,kind="signal_relay",owner=self.settings.node_id,
+      created=math.max(0,math.floor(self.now())),revision=1,data={},
+      endpoints={{
+         id=object_id.."_physical",system=system_name,
+         x=x,y=y,dir=pp:dir(),role="physical",visible=true,
+      }},
+   }
+   local packed,err=Object.encode(object)
+   if not packed then return nil,tostring(err) end
+   local request=self:next_request()
+   self.pending_requests[request]={
+      action="create",object_id=object_id,slot=slot,
+      consume_outfit="Signal Relay",system=system_name,
+      object=object,packed=packed,deadline=self.now()+REQUEST_TIMEOUT,
+   }
+   if not self:send_create(request,self.pending_requests[request]) then
+      self.pending_requests[request]=nil
+      return nil,_("The signal relay directory is unavailable.")
+   end
+   return true
+end
+
+function Runtime:object_destroyed ( object_id, destroyed_pilot )
    local entry=self.local_objects[object_id]
    if not entry or entry.removing
          or (destroyed_pilot and entry.pilot~=destroyed_pilot) then
@@ -641,7 +865,7 @@ function Runtime:message_buoy_destroyed ( object_id, destroyed_pilot )
    self.local_objects[object_id]=nil
    remove_local_order(self,object_id)
    self:forget(object_id)
-   local endpoint=self:message_buoy_endpoint(entry.object)
+   local endpoint=self:physical_endpoint(entry.object)
    self.pending_deletes[object_id]={
       sent=false,system=endpoint and endpoint.system,
    }

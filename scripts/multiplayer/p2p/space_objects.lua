@@ -10,16 +10,28 @@ local space_objects = {}
 local SERVICE_INTERVAL = 1
 local generation = 0
 local scheduled = false
+local consumption_scheduled = false
+local consumption_queue = {}
 local last_service = -math.huge
 local runtime
 local timer_hook
 
+local function schedule_consumption ()
+   if consumption_scheduled or #consumption_queue==0 then return end
+   consumption_scheduled=true
+   hook.safe("P2P_OBJECT_CONSUME",generation)
+end
+
 local function dispatch_consumption ()
-   local cache=naev.cache()
-   local consume=cache.multiplayer_buoy_consume
-   if not consume then return end
-   cache.multiplayer_buoy_consume=nil
-   hook.safe("P2P_BUOY_CONSUME",consume.slot)
+   if runtime and runtime.take_object_consumptions then
+      local incoming=runtime.take_object_consumptions()
+      if type(incoming)=="table" then
+         for _index,consume in ipairs(incoming) do
+            consumption_queue[#consumption_queue+1]=consume
+         end
+      end
+   end
+   schedule_consumption()
 end
 
 local function service_pending ()
@@ -41,19 +53,24 @@ end
 function space_objects.start ( session )
    generation=generation+1
    scheduled=false
+   consumption_scheduled=false
    last_service=-math.huge
    runtime=session
+   dispatch_consumption()
    schedule_if_pending()
    schedule_timer()
 end
 
 function space_objects.stop ()
+   dispatch_consumption()
+   space_objects.consume(generation)
    generation=generation+1
    scheduled=false
    last_service=-math.huge
    if timer_hook then hook.rm(timer_hook) end
    timer_hook=nil
    runtime=nil
+   schedule_consumption()
 end
 
 local function service_if_due ()
@@ -69,12 +86,48 @@ end
 function space_objects.update ( expected_generation )
    if expected_generation~=generation then return end
    scheduled=false
+   if runtime and runtime.update_signal_relay then
+      runtime.update_signal_relay()
+   end
    service_if_due()
    schedule_if_pending()
 end
 
 function space_objects.wake ()
    schedule_if_pending()
+end
+
+function space_objects.consume ( expected_generation )
+   if expected_generation~=nil and expected_generation~=generation then return end
+   consumption_scheduled=false
+   local queue=consumption_queue
+   consumption_queue={}
+   local p=player.pilot()
+   if p then
+      for _index,consume in ipairs(queue) do
+         local slot=tonumber(consume.slot)
+         local name=type(consume.outfit)=="string" and consume.outfit or nil
+         local fitted=slot and p:outfitSlot(slot)
+         if fitted and name and fitted:nameRaw()==name then
+            p:outfitRmSlot(slot)
+         end
+      end
+   end
+   dispatch_consumption()
+end
+
+function space_objects.chat ( text )
+   if not runtime or not runtime.relay_chat then return false end
+   local sent=runtime.relay_chat(text)
+   schedule_if_pending()
+   return sent
+end
+
+function space_objects.object_destroyed ( object_id, destroyed_pilot )
+   if not runtime or not runtime.object_destroyed then return false end
+   local removed=runtime.object_destroyed(object_id,destroyed_pilot)
+   schedule_if_pending()
+   return removed
 end
 
 function space_objects.timer ( expected_generation )

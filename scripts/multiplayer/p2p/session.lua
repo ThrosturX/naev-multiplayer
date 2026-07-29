@@ -2594,7 +2594,21 @@ local function show_chat ( owner, text )
    else
       local manifest=session.player_manifests[owner]
       local entry=manifest and session.players[manifest.entity]
-      if entry and exists(entry.pilot) then
+      local relay_chat=manifest
+         and manifest.ship=="Signal Relay"
+         and type(manifest.origin)=="string"
+         and manifest.origin:match("%.relay$")
+
+      local object_pilot=session.objects and session.objects.chat_pilot
+         and session.objects:chat_pilot(manifest)
+
+      if relay_chat then
+         -- A missing object_pilot means there is no operational local relay.
+         if object_pilot and exists(object_pilot) then
+            object_pilot:broadcast(display_text(text),true)
+         end
+         return
+      elseif entry and exists(entry.pilot) then
          entry.pilot:broadcast(display_text(text),true)
       else
          pilot.comm(session.identities:display_name(owner) or owner,
@@ -3661,14 +3675,33 @@ function session.create_message_buoy ( text, slot )
    return session.objects:create_message_buoy(text,slot)
 end
 
-function session.message_buoy_destroyed ( object_id, destroyed_pilot )
+function session.create_signal_relay ( slot )
+   if not session.objects then
+      return nil,_("The persistent-object service is unavailable.")
+   end
+   return session.objects:create_signal_relay(slot)
+end
+
+function session.relay_chat ( text )
+   return session.objects and session.objects:relay_chat(text) or false
+end
+
+function session.object_destroyed ( object_id, destroyed_pilot )
    return session.objects
-      and session.objects:message_buoy_destroyed(object_id,destroyed_pilot)
+      and session.objects:object_destroyed(object_id,destroyed_pilot)
       or false
+end
+
+function session.take_object_consumptions ()
+   return session.objects and session.objects:take_object_consumptions() or {}
 end
 
 function session.update_object_client ()
    return session.objects and session.objects:update() or false
+end
+
+function session.update_signal_relay ()
+   return session.objects and session.objects:update_signal_relay() or false
 end
 
 function session.object_service_pending ()
