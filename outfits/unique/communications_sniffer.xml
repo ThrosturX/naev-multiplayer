@@ -1,0 +1,16 @@
+<outfit name="Communications Sniffer">
+ <general>
+  <rarity>0</rarity>
+  <unique/>
+  <typename>Communication Package</typename>
+  <slot>utility</slot>
+  <size>small</size>
+  <mass>10</mass>
+  <price>250000</price>
+  <description>A passive receiver that attempts to tap into the communications coming from active signal relays.</description>
+  <desc_extra>Passively monitors subspace frequencies transmitted by signal relays in other solar systems.</desc_extra>
+  <gfx_store>targeting_conduit.avif</gfx_store>
+  <limit>communication_package</limit>
+ </general>
+ <specific type="modification"/>
+</outfit>

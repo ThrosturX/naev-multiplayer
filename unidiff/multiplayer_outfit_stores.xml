@@ -9,13 +9,28 @@
  </spob>
  <spob name="New Haven">
   <tech_add>Activity Scanner</tech_add>
+  <tech_add>Communications Sniffer</tech_add>
+  <tech_add>Short-Range Communications Sniffer</tech_add>
+  <tech_add>Wide-Area Communications Sniffer</tech_add>
+  <tech_add>Augmented Communications Suite</tech_add>
+  <tech_add>Extended Communications Suite</tech_add>
  </spob>
  <spob name="Warden's End">
   <tech_add>Activity Scanner</tech_add>
+  <tech_add>Communications Sniffer</tech_add>
+  <tech_add>Short-Range Communications Sniffer</tech_add>
+  <tech_add>Wide-Area Communications Sniffer</tech_add>
+  <tech_add>Augmented Communications Suite</tech_add>
+  <tech_add>Extended Communications Suite</tech_add>
  </spob>
  <spob name="Darkshed">
   <tech_add>Distress Beacon</tech_add>
   <tech_add>Activity Scanner</tech_add>
   <tech_add>Message Buoy</tech_add>
+  <tech_add>Communications Sniffer</tech_add>
+  <tech_add>Short-Range Communications Sniffer</tech_add>
+  <tech_add>Wide-Area Communications Sniffer</tech_add>
+  <tech_add>Augmented Communications Suite</tech_add>
+  <tech_add>Extended Communications Suite</tech_add>
  </spob>
 </unidiff>

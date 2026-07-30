@@ -7,8 +7,8 @@
   <size>small</size>
   <mass>2</mass>
   <price>100000</price>
-  <description>Deploys a persistent multiplayer signal relay at the ship's current position.</description>
-  <desc_extra>Chat sent from a relay system is repeated into other active systems containing a signal relay. The fitted relay is consumed after confirmed deployment.</desc_extra>
+  <description>A deployable signal relay that can be launched from the ship while in space.</description>
+  <desc_extra>Chat sent from a relay system is repeated into other active systems containing a signal relay. The fitted relay is consumed upon successful deployment.</desc_extra>
   <gfx_store>message_buoy.avif</gfx_store>
   <limit>signal_relay</limit>
  </general>
