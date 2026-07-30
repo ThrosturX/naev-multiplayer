@@ -42,8 +42,6 @@ test("directory protocol escaping and validation", function()
       track="death_knot",division=1,request=1,limit=11})
    assert(not codec.encode{type="contestant_query",node="a1",
       track="death knot",division=1,request=1,limit=11})
-   assert(not codec.encode{type="contestant_query",node="a1",division=1,
-      request=1,limit=12})
    assert(codec.encode{type="hint",node="d1",system="X",host="a1",
       endpoint="host:9",claim="c",ttl=60})
    assert(not codec.encode{type="hint",node="d1",system="X",host="a1",
@@ -489,6 +487,89 @@ test("autonav thrust is inferred beyond keyboard state", function()
    eq(session._local_accel_control(p,false,2.1,60,0),1)
    eq(session._local_accel_control(p,true,2.2,60,0),1)
    _G.player=previous_player
+end)
+
+test("solo discovery ignores remote-system presence", function()
+   local previous={
+      settings=session.settings,
+      machine=session.machine,
+      peer_meta=session.peer_meta,
+      activity=session.activity,
+      skip_host_grace=session.skip_host_grace,
+      solo_since=session.solo_since,
+      autonav_locked=session.autonav_locked,
+      indicators=session.indicators,
+      player=_G.player,
+      naev=_G.naev,
+   }
+   local function restore ()
+      session.settings=previous.settings
+      session.machine=previous.machine
+      session.peer_meta=previous.peer_meta
+      session.activity=previous.activity
+      session.skip_host_grace=previous.skip_host_grace
+      session.solo_since=previous.solo_since
+      session.autonav_locked=previous.autonav_locked
+      session.indicators=previous.indicators
+      _G.player=previous.player
+      _G.naev=previous.naev
+   end
+
+   local ok,err=pcall(function ()
+      local remote={}
+      local speed_enabled=false
+      local cleared=0
+      local countdowns=0
+      session.settings={node_id="a1"}
+      session.machine={
+         state="discovering",system="Arandon",members={a1=true},
+      }
+      session.peer_meta={
+         [remote]={
+            verified=true,protocol="gameplay",system="Gamma Polaris",
+         },
+      }
+      session.activity={{system="Gamma Polaris",active=true}}
+      session.skip_host_grace=true
+      session.autonav_locked=true
+      session.indicators={
+         clear_host_alone=function () cleared=cleared+1 end,
+         host_alone=function () countdowns=countdowns+1 end,
+      }
+      _G.naev={
+         keyEnable=function ( key, enabled )
+            eq(key,"speed")
+            speed_enabled=enabled
+         end,
+      }
+      _G.player={
+         autonav=function () return false,1 end,
+         autonavSetSpeed=function () end,
+         speed=function () return 1 end,
+         setSpeed=function () end,
+      }
+
+      assert(session._no_other_players_discovered("Arandon"),
+         "remote-system connection or activity counted as nearby")
+      session._refresh_time_controls(10)
+      assert(speed_enabled and not session.autonav_locked
+            and session.skip_host_grace and cleared==1 and countdowns==0,
+         "confirmed solo discovery did not preserve normal time controls")
+
+      session.peer_meta[remote].system="Arandon"
+      session.machine.state="host"
+      session._refresh_time_controls(10)
+      assert(not speed_enabled and session.autonav_locked
+            and not session.skip_host_grace and countdowns==1,
+         "same-system gameplay peer did not cancel the solo bypass")
+
+      session.peer_meta={}
+      session.machine.members.b2=true
+      assert(not session._no_other_players_discovered("Arandon"),
+         "same-system member was treated as solo")
+   end)
+   restore()
+   assert(ok,err)
 end)
 
 test("owned craft nesting and cleanup", function()

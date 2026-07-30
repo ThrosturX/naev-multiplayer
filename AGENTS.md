@@ -63,6 +63,8 @@ documented invariants such as handle existence explicitly, then prune, repair,
 or resynchronize invalid state. Reserve `pcall` for genuinely recoverable
 external boundaries where the underlying API can raise unexpectedly.
 
+Don't touch the README.md without good reason.
+
 ## Testing and Changes
 
 Preserve the source repository's existing uncommitted P2P work; inspect the

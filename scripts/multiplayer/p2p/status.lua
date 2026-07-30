@@ -1,6 +1,7 @@
 -- Local HUD countdowns derived from P2P session state.
 local status = {}
 status.__index = status
+status.UPDATE_INTERVAL = 0.1
 
 local HOST_ALONE_EFFECT = "Multiplayer: Autonav Pending"
 local HOST_ALONE_DIM_EFFECT = "Multiplayer: Autonav Pending Dim"

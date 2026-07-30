@@ -46,8 +46,8 @@ function identity:add ( node, name )
    return display
 end
 
--- A cached manifest can precede a direct hello after host recovery. Allow the
--- direct connection to refresh the raw name while preserving local uniqueness.
+-- A cached manifest can precede a refreshed present manifest after host
+-- recovery. Allow it to refresh the raw name while preserving local uniqueness.
 function identity:update ( node, name )
    if node==self.local_node or not valid_name(name) then
       return nil,"invalid player identity update"

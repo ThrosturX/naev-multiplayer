@@ -99,7 +99,7 @@ function ontoggle ( p, po, on, natural )
       fuel_cost=fuel,energy_cost=ENERGY_COST,
    }
    Cooldown.begin(po,mem,"emergency",activation_id)
-   player.msg(string.format(_("Magnifying aperture leading to a system%d jumps away…"),
+   player.msg(string.format(_("Magnifying aperture leading to a system %d jumps away…"),
       selected.distance))
    return false
 end

@@ -187,6 +187,23 @@ local function send_packet ( peer, message, wire_codec )
    return true
 end
 
+local function owns_target_observation ( target, epoch )
+   -- Only a claimed target can consume chat. Keeping ownership aligned with
+   -- that receive guard leaves the ordinary gameplay path as an exact fallback.
+   return target~=nil and target.peer~=nil
+      and target.verified==true and target.ready==true
+      and target.epoch==epoch
+end
+
+function communications.owns_observation ( message )
+   if type(message)~="table" or type(message.system)~="string"
+         or not runtime then return false end
+   return owns_target_observation(
+      runtime.targets[message.system],message.epoch)
+end
+
+communications._owns_target_observation=owns_target_observation
+
 local function disconnect_peer ( peer )
    if not peer then return end
    local meta=runtime and runtime.peers[peer]

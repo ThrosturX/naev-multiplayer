@@ -50,6 +50,8 @@ local value=buoy("buoy_a1","a1","Halir")
 assert(receive(first,{type="object_create",node="a1",request=3,
    object_id=value.id,object=assert(Object.encode(value))}))
 assert(dirty==1 and service:dump_objects().buoy_a1)
+assert(next(service.activity)==nil,
+   "persistent object creation leaked into player activity")
 assert(find(create_at,first,"object_result").code=="created")
 assert(find(create_at,first,"object_entry") and find(create_at,second,"object_entry"),
    "subscribers did not receive live creation")

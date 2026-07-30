@@ -1674,9 +1674,9 @@ function session.pilot_created_deferred ( generation )
    if is_host() and not session.incremental_creation_logged
          and registered_npcs+registered_craft>0 then
       session.incremental_creation_logged=true
-      print("P2P: registered incremental population ("
-         ..tostring(registered_npcs).." NPC, "
-         ..tostring(registered_craft).." craft)")
+--    print("P2P: registered incremental population ("
+--       ..tostring(registered_npcs).." NPC, "
+--       ..tostring(registered_craft).." craft)")
    end
 end
 
@@ -1758,8 +1758,10 @@ local function remove_guest_ambient_once ()
                   and session.objects:entity_for_pilot(p)) then
             if pilot_owned(p) then
                register_authority(p,"craft",session.settings.node_id)
-            else
+            elseif p:memory().natural==true then
                p:rm()
+            else
+               session.pilot_created(p)
             end
          end
       end
@@ -2572,7 +2574,9 @@ local function join_host ( old_state )
    set_ambient_spawning(false)
    if not session.guest_population_pruned then
       session.guest_population_pruned=true
-      remove_guest_ambient_once()
+      -- A former host's population is authoritative, including creation hooks
+      -- still waiting for their safe callback after a modal VN.
+      if old_state~="host" then remove_guest_ambient_once() end
    end
    local host=session.machine.host
    print("P2P: joined system host "
@@ -2770,14 +2774,6 @@ local function verify_gameplay_hello ( peer, message )
          return false
       end
    end
-   local accepted,err=session.identities:add(message.node,message.name)
-   if not accepted and err=="node changed player name" then
-      accepted,err=session.identities:update(message.node,message.name)
-   end
-   if not accepted then
-      reject_peer(peer,err)
-      return false
-   end
    meta.verified=true
    meta.node=message.node
    meta.name=message.name
@@ -2884,8 +2880,18 @@ local function handle_host_player_manifest ( peer, meta, message )
          or message.epoch~=session.machine.claim
          or not message.origin:match("^"..meta.node.."%.") then return end
    if session.dead_players[message.entity] then return end
-   local known=session.identities:raw_name(message.owner)
-   if known~=message.name then return end
+   if meta.name~=message.name then return end
+   local non_present=non_present_manifest(message)
+   if not non_present then
+      local accepted,err=session.identities:add(message.owner,message.name)
+      if not accepted and err=="node changed player name" then
+         accepted,err=session.identities:update(message.owner,message.name)
+      end
+      if not accepted then
+         reject_peer(peer,err)
+         return
+      end
+   end
    local canonical=canonical_player_manifest(message)
    session.player_manifests[message.owner]=canonical
    if not spawn_player_manifest(message) then
@@ -2893,7 +2899,7 @@ local function handle_host_player_manifest ( peer, meta, message )
       return
    end
    broadcast_manifest(cache_manifest(canonical))
-   if not non_present_manifest(message)
+   if not non_present
          and not session.host_welcomed[message.owner] then
       session.sequence=session.sequence+1
       local welcome=gameplay_base("chat")
@@ -3005,7 +3011,8 @@ local function handle_gameplay_message ( peer, message )
    local current=current_system()
    if not current or message.system~=current then
       if current and (message.type=="chat"
-            or message.type=="player_manifest" or message.type=="leave") then
+            or message.type=="player_manifest" or message.type=="leave")
+            and not communications.owns_observation(message) then
          local direct_name=message.owner==meta.node and meta.name or nil
          communications.observe(message,direct_name,current)
       end
@@ -3157,7 +3164,9 @@ local function handle_gameplay_message ( peer, message )
       session.manifest_queries[message.entity]=nil
       if message.owner~=session.settings.node_id then
          local known=session.identities:raw_name(message.owner)
-         if not known then session.identities:add(message.owner,message.name) end
+         if not known and not non_present_manifest(message) then
+            session.identities:add(message.owner,message.name)
+         end
          if not spawn_player_manifest(message) then
             reject_peer(peer,"unable to create remote player proxy")
             return
@@ -3379,7 +3388,6 @@ local function liveness_tick ( stamp )
    end
    reconcile_participant_liveness(stamp)
    audit_one_authority()
-   session.indicators:update(stamp)
    refresh_time_controls(stamp)
    session.enforce_time_controls()
    if session.directory_probe_deadline
@@ -3537,6 +3545,7 @@ function session.start ( settings )
    session.next_heartbeat=stamp
    session.next_election=stamp
    session.next_liveness=stamp
+   session.next_status=stamp
    session.next_redial=stamp
    session.next_manifest=stamp
    session.next_activity=stamp
@@ -3607,6 +3616,7 @@ function session.enter ( system_name )
    session.next_heartbeat=stamp
    session.next_election=stamp
    session.next_liveness=stamp
+   session.next_status=stamp
    session.next_redial=stamp
    session.next_manifest=stamp
    session.next_activity=stamp
@@ -3842,8 +3852,10 @@ function session.update ( _dt )
    -- going through the speed input. Correct only while a shared visit is
    -- locked, before servicing the scheduled networking jobs.
    session.enforce_time_controls()
-   service_transport(stamp)
    communications.update(session.settings)
+   -- Service the dedicated observation path first so owns_observation() is
+   -- authoritative when the ordinary off-system fallback drains its queue.
+   service_transport(stamp)
 
    if stamp>=session.next_election then
       session.next_election=stamp+0.1
@@ -3868,6 +3880,10 @@ function session.update ( _dt )
    if stamp>=session.next_liveness then
       session.next_liveness=stamp+LIVENESS_INTERVAL
       liveness_tick(stamp)
+   end
+   if stamp>=session.next_status then
+      session.next_status=stamp+status.UPDATE_INTERVAL
+      session.indicators:update(stamp)
    end
    if stamp>=session.next_redial then
       session.next_redial=stamp+REDIAL_INTERVAL

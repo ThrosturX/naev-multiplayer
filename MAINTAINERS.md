@@ -294,11 +294,16 @@ ordinary engine physics integrates object motion between host records.
 
 ## Time and event loop
 
-Whenever discovery is unresolved or a remote participant is present, disable
-speed input and enforce both `player.autonavSetSpeed(1)` and
-`player.setSpeed(1)`. The update hook corrects autonav's own per-frame ramp;
-one-second maintenance and modal chat/hail pumping preserve the lock. Ordinary
-solo speed behavior returns only after the existing host-alone grace.
+Whenever discovery is unresolved without a confirmed solo transition, or a
+remote participant is present in the same system, disable speed input and
+enforce both `player.autonavSetSpeed(1)` and `player.setSpeed(1)`. The update
+hook corrects autonav's own per-frame ramp; one-second maintenance and modal
+chat/hail pumping preserve the lock. A confirmed solo transition keeps
+ordinary speed behavior through discovery; an initial solo host returns to it
+after the existing host-alone grace.
+
+HUD countdown phase selection runs as a bounded 10 Hz scheduler. The status
+adapter crosses into pilot effects only when a bright/dim phase changes.
 
 The per-frame update may:
 
