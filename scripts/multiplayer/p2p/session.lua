@@ -1223,6 +1223,11 @@ local function remote_player_name ( owner, fallback )
    return display_text(name or fallback or owner)
 end
 
+local function non_present_manifest ( message )
+   return message and type(message.origin)=="string"
+      and message.origin:match("%.communications$")~=nil
+end
+
 local function announce_player_join ( owner, fallback )
    if owner==session.settings.node_id or session.present_players[owner] then
       return
@@ -1258,7 +1263,9 @@ local function spawn_player_manifest ( message )
    local existing=session.players[message.entity]
    if existing and exists(existing.pilot) then
       existing.manifest=message
-      announce_player_join(message.owner,message.name)
+      if not non_present_manifest(message) then
+         announce_player_join(message.owner,message.name)
+      end
       return true
    end
    if existing then remove_replica(message.entity,false) end
@@ -1292,7 +1299,9 @@ local function spawn_player_manifest ( message )
       apply_health_energy(entry,message)
       apply_player_controls(entry,message)
    end
-   announce_player_join(message.owner,message.name)
+   if not non_present_manifest(message) then
+      announce_player_join(message.owner,message.name)
+   end
    return true
 end
 
@@ -2873,7 +2882,8 @@ local function handle_host_player_manifest ( peer, meta, message )
       return
    end
    broadcast_manifest(cache_manifest(canonical))
-   if not session.host_welcomed[message.owner] then
+   if not non_present_manifest(message)
+         and not session.host_welcomed[message.owner] then
       session.sequence=session.sequence+1
       local welcome=gameplay_base("chat")
       welcome.owner=session.settings.node_id
@@ -3522,6 +3532,7 @@ end
 
 function session.stop ()
    clear_local_controls()
+   communications.stop()
    if not session.running then
       session.indicators:clear()
       lock_autonav(false)
@@ -3597,7 +3608,6 @@ end
 function session.leave ()
    clear_local_controls()
    communications.stop()
-   session.communications_active=nil
    if not session.machine or not current_system() then
       session.indicators:clear()
       lock_autonav(false)
@@ -3655,9 +3665,7 @@ function session.send_chat ( text )
    show_chat(message.owner,message.text)
    if is_host() then host_reliable(message)
    else send_host(message,true) end
-   if communications.send(message.text,session.settings) then
-      session.communications_active=true
-   end
+   communications.send(message.text,session.settings)
    return true
 end
 
@@ -3820,10 +3828,7 @@ function session.update ( _dt )
    -- locked, before servicing the scheduled networking jobs.
    session.enforce_time_controls()
    service_transport(stamp)
-   if session.communications_active then
-      communications.update()
-      session.communications_active=communications.active()
-   end
+   communications.update(session.settings)
 
    if stamp>=session.next_election then
       session.next_election=stamp+0.1
