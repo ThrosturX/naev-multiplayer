@@ -209,16 +209,24 @@ end
 local function no_other_players_discovered ( current )
    if has_remote_member() then return false end
    for _peer,meta in pairs(session.peer_meta) do
-      if meta.verified and meta.protocol=="gameplay" then return false end
-   end
-   for _index,entry in ipairs(session.activity or {}) do
-      if entry.active and entry.system~=current then return false end
+      if meta.verified and meta.protocol=="gameplay"
+            and meta.system==current then return false end
    end
    return true
 end
 
 local function refresh_time_controls ( stamp )
    if not current_system() then
+      session.solo_since=nil
+      session.indicators:clear_host_alone()
+      lock_autonav(false)
+      return
+   end
+   if session.skip_host_grace
+         and not no_other_players_discovered(current_system()) then
+      session.skip_host_grace=nil
+   end
+   if session.machine.state=="discovering" and session.skip_host_grace then
       session.solo_since=nil
       session.indicators:clear_host_alone()
       lock_autonav(false)
@@ -250,6 +258,9 @@ local function refresh_time_controls ( stamp )
    session.indicators:host_alone(deadline,stamp)
    lock_autonav(stamp<deadline)
 end
+
+session._no_other_players_discovered=no_other_players_discovered
+session._refresh_time_controls=refresh_time_controls
 
 local function endpoint_valid ( endpoint )
    return normalize_endpoint(endpoint)==endpoint
@@ -2976,6 +2987,10 @@ local function handle_gameplay_message ( peer, message )
    end
    if not meta.verified or message.node~=meta.node then return end
    meta.last_receive=now()
+   if meta.system~=message.system then
+      meta.system=message.system
+      if session.skip_host_grace then refresh_time_controls() end
+   end
    if message.type=="query" then
       if message.system==current_system() and is_host() then
          local claim=gameplay_base("claim")
