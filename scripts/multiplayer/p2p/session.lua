@@ -2518,7 +2518,7 @@ local function handle_directory_message ( peer, message )
       connect_gameplay(message.endpoint,message.peer)
    elseif message.type=="hint" and message.system==current_system()
          and message.host~=session.settings.node_id
-         and not naev.claimTest(system.cur()) then
+         and naev.claimTest(system.cur()) then
       session.member_endpoints[message.host]=message.endpoint
       session.machine.topology:remember_hint(
          message.system,message.host,message.endpoint,
@@ -2608,7 +2608,7 @@ local remove_owner_population
 local function accept_claim_message ( message )
    if message.node==session.settings.node_id
          or message.system~=current_system() then return false end
-   if naev.claimTest(system.cur()) then return false end
+   if not naev.claimTest(system.cur()) then return false end
    local old_state=session.machine.state
    local old_host=session.machine.host
    local old_claim=session.machine.claim
@@ -2823,7 +2823,7 @@ local function handle_gameplay_message ( peer, message )
       return
    elseif message.type=="claim" then
       if is_host() and message.system==current_system()
-            and naev.claimTest(system.cur()) then
+            and not naev.claimTest(system.cur()) then
          meta.separate_host_epoch=message.epoch
          if session.separate_host_epochs[message.node]~=message.epoch then
             session.separate_host_epochs[message.node]=message.epoch
@@ -2858,7 +2858,8 @@ local function handle_gameplay_message ( peer, message )
       local sequence=session.separate_host_chat_sequences[message.node] or -1
       if message.seq<=sequence then return end
       session.separate_host_chat_sequences[message.node]=message.seq
-      pilot.comm(display_text(meta.name or meta.node),display_text(message.text))
+      player.msg(string.format(_("Comm %s> \"%s\""),
+         display_text(meta.name or meta.node),display_text(message.text)))
       play_chat_sound()
       return
    end
@@ -3217,7 +3218,7 @@ local function reconcile_participant_liveness ( stamp )
 end
 
 local function liveness_tick ( stamp )
-   if naev.claimTest(system.cur()) and session.machine.state=="guest" then
+   if not naev.claimTest(system.cur()) and session.machine.state=="guest" then
       local system_name=current_system()
       print("P2P: local system claim requires hosting")
       session.leave()
@@ -3475,7 +3476,7 @@ function session.enter ( system_name )
    session.next_manifest=stamp
    session.next_activity=stamp
    print("P2P: discovering MP2G/2 system host")
-   if naev.claimTest(system.cur()) then
+   if not naev.claimTest(system.cur()) then
       session.machine:new_claim()
       become_host(false)
       publish_claim()

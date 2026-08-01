@@ -33,10 +33,11 @@ across gameplay peers and cannot queue channels 1 or 2 to the directory.
 
 ## Authority and epochs
 
-If `naev.claimTest(system.cur())` returns true, this participant must host its
-own simulation: ignore remote directory hints and gameplay claims, and never
-enter or remain in the guest state. Check again during the visit because the
-result can change after system entry.
+If `naev.claimTest(system.cur())` returns false, another exclusive claim blocks
+shared authority and this participant must host its own simulation: ignore
+remote directory hints and gameplay claims, and never enter or remain in the
+guest state. Check again during the visit because the result can change after
+system entry.
 
 Separate hosts in the same system do not exchange simulation state. Once a
 verified peer advertises a foreign host epoch, accept only its directly authored
