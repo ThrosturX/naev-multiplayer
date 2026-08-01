@@ -8,9 +8,16 @@
 --]]
 
 function create ()
-   local name = "multiplayer_outfit_stores"
-   if not diff.isApplied(name) then
-      diff.apply(name)
+   local stores_diff = "multiplayer_outfit_stores"
+   if not diff.isApplied(stores_diff) then
+      diff.apply(stores_diff)
+   end
+
+   local emergency_generator=outfit.get("Emergency Wormhole Generator")
+   local unstable_store_diff="multiplayer_unstable_wormhole_store"
+   if player.outfitNum(emergency_generator,true)>0
+         and not diff.isApplied(unstable_store_diff) then
+      diff.apply(unstable_store_diff)
    end
    evt.finish()
 end

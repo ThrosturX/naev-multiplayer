@@ -590,6 +590,12 @@ function race_landed ()
       vn.na(_("Another racer crossed the finish first. The terminal records your loss without ceremony."))
    end
    vn.run()
+   if player.outfitNum(emergency_generator,true)>0 then
+      local unstable_store_diff="multiplayer_unstable_wormhole_store"
+      if not diff.isApplied(unstable_store_diff) then
+         diff.apply(unstable_store_diff)
+      end
+   end
    misn.finish(mem.player_won)
 end
 

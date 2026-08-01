@@ -1,0 +1,5 @@
+<unidiff name="multiplayer_unstable_wormhole_store">
+ <spob name="Darkshed">
+  <tech_add>Unstable Wormhole Generator</tech_add>
+ </spob>
+</unidiff>
