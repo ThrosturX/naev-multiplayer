@@ -489,9 +489,10 @@ test("autonav thrust is inferred beyond keyboard state", function()
    _G.player=previous_player
 end)
 
-test("solo discovery ignores remote-system presence", function()
+test("shared-time lock requires online same-system evidence", function()
    local previous={
       settings=session.settings,
+      running=session.running,
       machine=session.machine,
       peer_meta=session.peer_meta,
       activity=session.activity,
@@ -504,6 +505,7 @@ test("solo discovery ignores remote-system presence", function()
    }
    local function restore ()
       session.settings=previous.settings
+      session.running=previous.running
       session.machine=previous.machine
       session.peer_meta=previous.peer_meta
       session.activity=previous.activity
@@ -521,6 +523,7 @@ test("solo discovery ignores remote-system presence", function()
       local cleared=0
       local countdowns=0
       session.settings={node_id="a1"}
+      session.running=true
       session.machine={
          state="discovering",system="Arandon",members={a1=true},
       }
@@ -537,6 +540,7 @@ test("solo discovery ignores remote-system presence", function()
          host_alone=function () countdowns=countdowns+1 end,
       }
       _G.naev={
+         ticks=function () return 10 end,
          keyEnable=function ( key, enabled )
             eq(key,"speed")
             speed_enabled=enabled
@@ -549,8 +553,20 @@ test("solo discovery ignores remote-system presence", function()
          setSpeed=function () end,
       }
 
+      session.peer_meta={[remote]={verified=false,connected_at=9}}
+      local network,refresh_after=session.network_status()
+      eq(network,"unknown")
+      eq(refresh_after,1)
+      session.peer_meta[remote].connected_at=7
+      eq(session.network_status(),"unavailable")
+      session.peer_meta={[remote]={
+         verified=true,protocol="gameplay",system="Gamma Polaris",
+      }}
+
       assert(session._no_other_players_discovered("Arandon"),
          "remote-system connection or activity counted as nearby")
+      assert(not session.has_online_shared_time_peer("Arandon"),
+         "remote-system gameplay peer counted as shared-time evidence")
       session._refresh_time_controls(10)
       assert(speed_enabled and not session.autonav_locked
             and session.skip_host_grace and cleared==1 and countdowns==0,
@@ -558,6 +574,8 @@ test("solo discovery ignores remote-system presence", function()
 
       session.peer_meta[remote].system="Arandon"
       session.machine.state="host"
+      assert(session.has_online_shared_time_peer("Arandon"),
+         "online same-system gameplay peer was not detected")
       session._refresh_time_controls(10)
       assert(not speed_enabled and session.autonav_locked
             and not session.skip_host_grace and countdowns==1,
@@ -567,6 +585,24 @@ test("solo discovery ignores remote-system presence", function()
       session.machine.members.b2=true
       assert(not session._no_other_players_discovered("Arandon"),
          "same-system member was treated as solo")
+      assert(not session.has_online_shared_time_peer("Arandon"),
+         "stale membership without a reachable network counted as online")
+      session._refresh_time_controls(11)
+      assert(speed_enabled and not session.autonav_locked
+            and cleared==2 and countdowns==1,
+         "unreachable network kept solo time controls locked")
+
+      session.machine.state="discovering"
+      session.machine.members={a1=true}
+      session.peer_meta={[remote]={
+         verified=true,protocol="directory",system=nil,
+      }}
+      session.autonav_locked=true
+      speed_enabled=false
+      session._refresh_time_controls(12)
+      assert(speed_enabled and not session.autonav_locked
+            and not session.has_online_shared_time_peer("Arandon"),
+         "directory reachability alone locked solo time controls")
    end)
    restore()
    assert(ok,err)

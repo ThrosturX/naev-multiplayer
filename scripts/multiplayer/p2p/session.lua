@@ -90,6 +90,9 @@ local session = {
    directory_probe_deadline=nil,
    indicators=status.new(function () return player.pilot() end),
 }
+session.DEFAULT_DIRECTORY = "79.76.110.205:60939"
+session.DEFAULT_LISTEN_PORT = 0
+session.NETWORK_STATUS_PENDING_TIMEOUT = 2
 
 local function now ()
    return naev.ticks()
@@ -135,9 +138,10 @@ function session.defaults ( settings )
    settings=settings or {}
    settings.enabled=settings.enabled==true
    settings.listen_port=math.max(0,
-      math.min(65535,tonumber(settings.listen_port) or 0))
+      math.min(65535,tonumber(settings.listen_port)
+         or session.DEFAULT_LISTEN_PORT))
    local directory=settings.directory==nil
-      and "79.76.110.205:60939" or settings.directory
+      and session.DEFAULT_DIRECTORY or settings.directory
    settings.directory=normalize_endpoint(directory) or ""
    local bootstrap={}
    for _index,endpoint in ipairs(settings.bootstrap or {}) do
@@ -152,6 +156,23 @@ end
 
 function session.get_settings ()
    return session.settings
+end
+
+function session.network_status ()
+   if not session.running then return "stopped" end
+   local stamp=now()
+   local pending_remaining
+   for _peer,meta in pairs(session.peer_meta) do
+      if meta.verified then return "online" end
+      local connected_at=tonumber(meta.connected_at)
+      local remaining=connected_at
+         and session.NETWORK_STATUS_PENDING_TIMEOUT-(stamp-connected_at)
+      if remaining and remaining>0 then
+         pending_remaining=math.max(pending_remaining or 0,remaining)
+      end
+   end
+   if pending_remaining then return "unknown",pending_remaining end
+   return "unavailable"
 end
 
 local function current_system ()
@@ -215,18 +236,24 @@ local function no_other_players_discovered ( current )
    return true
 end
 
+function session.has_online_shared_time_peer ( current )
+   return session.network_status()=="online"
+      and not no_other_players_discovered(current)
+end
+
 local function refresh_time_controls ( stamp )
-   if not current_system() then
+   local current=current_system()
+   if not current then
       session.solo_since=nil
       session.indicators:clear_host_alone()
       lock_autonav(false)
       return
    end
-   if session.skip_host_grace
-         and not no_other_players_discovered(current_system()) then
+   local online_peer=session.has_online_shared_time_peer(current)
+   if session.skip_host_grace and online_peer then
       session.skip_host_grace=nil
    end
-   if session.machine.state=="discovering" and session.skip_host_grace then
+   if not online_peer then
       session.solo_since=nil
       session.indicators:clear_host_alone()
       lock_autonav(false)

@@ -294,13 +294,15 @@ ordinary engine physics integrates object motion between host records.
 
 ## Time and event loop
 
-Whenever discovery is unresolved without a confirmed solo transition, or a
-remote participant is present in the same system, disable speed input and
-enforce both `player.autonavSetSpeed(1)` and `player.setSpeed(1)`. The update
-hook corrects autonav's own per-frame ramp; one-second maintenance and modal
-chat/hail pumping preserve the lock. A confirmed solo transition keeps
-ordinary speed behavior through discovery; an initial solo host returns to it
-after the existing host-alone grace.
+Disable speed input only when networking is online and another gameplay
+participant has been detected in the current system. A reachable directory by
+itself, an unanswered connection attempt, another-system activity, and stale
+membership without a reachable network all preserve ordinary solo time
+controls. While shared-time locking is active, enforce both
+`player.autonavSetSpeed(1)` and `player.setSpeed(1)`. The update hook corrects
+autonav's own per-frame ramp; one-second maintenance and modal chat/hail
+pumping preserve the lock. `HOST_ALONE_GRACE` remains the single duration for
+the host-alone transition after same-system peer evidence.
 
 HUD countdown phase selection runs as a bounded 10 Hz scheduler. The status
 adapter crosses into pilot effects only when a bright/dim phase changes.
