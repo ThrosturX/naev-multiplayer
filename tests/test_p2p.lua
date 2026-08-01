@@ -521,6 +521,9 @@ test("shared-time lock requires online same-system evidence", function()
    local ok,err=pcall(function ()
       local remote={}
       local speed_enabled=false
+      local configured_game_speed=1.25
+      local dt_mod=p2p_settings.MULTIPLAYER_TIME_RATE*0.5
+      local canonical_resets=0
       local cleared=0
       local countdowns=0
       session.settings={node_id="a1"}
@@ -542,6 +545,7 @@ test("shared-time lock requires online same-system evidence", function()
       }
       _G.naev={
          ticks=function () return 10 end,
+         conf=function () return {game_speed=configured_game_speed} end,
          keyEnable=function ( key, enabled )
             eq(key,"speed")
             speed_enabled=enabled
@@ -550,8 +554,15 @@ test("shared-time lock requires online same-system evidence", function()
       _G.player={
          autonav=function () return false,1 end,
          autonavSetSpeed=function () end,
-         speed=function () return 1 end,
-         setSpeed=function () end,
+         dt_mod=function () return dt_mod end,
+         setSpeed=function ( speed, sound )
+            if speed==nil then return end
+            eq(speed,
+               p2p_settings.MULTIPLAYER_TIME_RATE/configured_game_speed)
+            eq(sound,p2p_settings.MULTIPLAYER_TIME_RATE)
+            dt_mod=p2p_settings.MULTIPLAYER_TIME_RATE
+            canonical_resets=canonical_resets+1
+         end,
       }
 
       session.peer_meta={[remote]={verified=false,connected_at=9}}
@@ -581,8 +592,12 @@ test("shared-time lock requires online same-system evidence", function()
          "online same-system gameplay peer was not detected")
       session._refresh_time_controls(10)
       assert(not speed_enabled and session.autonav_locked
-            and not session.skip_host_grace and countdowns==1,
+            and not session.skip_host_grace and countdowns==1
+            and dt_mod==p2p_settings.MULTIPLAYER_TIME_RATE
+            and canonical_resets==1,
          "same-system gameplay peer did not cancel the solo bypass")
+      session.enforce_time_controls()
+      eq(canonical_resets,1)
 
       session.peer_meta={}
       session.machine.members.b2=true

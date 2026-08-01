@@ -1063,10 +1063,15 @@ local function spawn_entity_manifest ( message )
    end
    if not fac then return false end
    local ai=message.kind=="npc" and message.ai or "escort"
+   -- pilot.add gives positioned pilots an idle_wait task. Some valid AI
+   -- profiles do not provide that task, so construct NPC replicas with the
+   -- known-safe dummy profile before switching to their transmitted AI.
+   local spawn_ai=message.kind=="npc" and "dummy" or ai
    local p=pilot.add(message.ship,fac,
       vec2.new(message.x or 0,message.y or 0),message.name,
-      {ai=ai,naked=true})
+      {ai=spawn_ai,naked=true})
    if not p then return false end
+   if ai~=spawn_ai then p:changeAI(ai) end
    p2p_manifest.install_outfits(p,message,false)
    p:setNoDeath(true)
    if message.vx and message.vy then p:setVel(vec2.new(message.vx,message.vy)) end
@@ -3493,9 +3498,13 @@ end
 function session.enforce_time_controls ()
    if not session.autonav_locked then return end
    local _autonav,autonav_speed=player.autonav()
-   if autonav_speed~=1 or player.speed()~=1 then
-      player.autonavSetSpeed(1,1)
-      player.setSpeed(1,1)
+   local time_rate=p2p_settings.MULTIPLAYER_TIME_RATE
+   if autonav_speed~=1
+         or math.abs(player.dt_mod()-time_rate)
+            >p2p_settings.MULTIPLAYER_TIME_EPSILON then
+      local game_speed=naev.conf().game_speed
+      player.autonavSetSpeed(1,time_rate)
+      player.setSpeed(time_rate/game_speed,time_rate)
    end
 end
 
