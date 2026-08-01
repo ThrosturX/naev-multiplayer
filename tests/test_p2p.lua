@@ -722,6 +722,57 @@ test("session lifecycle resolves extracted settings helpers", function()
    if not stopped then error(stop_err) end
 end)
 
+test("session lifecycle retries transient ENet peer exhaustion", function()
+   local old_naev,old_player,old_pilot,old_rnd,old_system=
+      _G.naev,_G.player,_G.pilot,_G.rnd,_G.system
+   local enet=require "enet"
+   local old_host_create=enet.host_create
+   local cache={}
+   local connect_attempts=0
+   _G.naev={
+      cache=function () return cache end,
+      ticks=function () return 10 end,
+      claimTest=function () return true end,
+      keyEnable=function () end,
+   }
+   _G.player={
+      pilot=function () return nil end,
+      name=function () return "Lifecycle Retry Test" end,
+      autonavSetSpeed=function () end,
+      setSpeed=function () end,
+   }
+   _G.pilot={toggleSpawn=function () end}
+   _G.rnd={rnd=function () return 1 end}
+   _G.system={cur=function () return {} end}
+   enet.host_create=function ()
+      return {
+         get_socket_address=function () return "0.0.0.0:62000" end,
+         connect=function ()
+            connect_attempts=connect_attempts+1
+            error("Failed to create peer")
+         end,
+         broadcast=function () end,
+         service=function () return nil end,
+      }
+   end
+
+   local ok,err=pcall(function ()
+      assert(session.start{
+         enabled=true,node_id="a1",directory="",
+         bootstrap={"127.0.0.1:9"},recent={},
+      })
+      assert(session.enter("Lifecycle Retry Test System"))
+      assert(connect_attempts>=2,
+         "failed connection was not left eligible for a later retry")
+   end)
+   local stopped,stop_err=pcall(session.stop)
+   enet.host_create=old_host_create
+   _G.naev,_G.player,_G.pilot,_G.rnd,_G.system=
+      old_naev,old_player,old_pilot,old_rnd,old_system
+   if not ok then error(err) end
+   if not stopped then error(stop_err) end
+end)
+
 test("remote player AI gives owned craft the normal no-kill policy", function()
    local chunk=assert(loadfile("ai/core/control/p2p_remote_control.lua"))
    local env={

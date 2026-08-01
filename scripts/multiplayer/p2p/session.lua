@@ -297,9 +297,13 @@ end
 local function connect_endpoint ( endpoint, protocol, expected_node )
    if not endpoint_valid(endpoint) or endpoint_is_local_listener(endpoint)
          or session.endpoints[endpoint] then return false end
-   local peer=session.host:connect(
+   -- Entering a system can make both sides redial while connections from the
+   -- previous visit are still being torn down. lua_enet raises when all ENet
+   -- peer slots are transiently occupied; leave the endpoint unregistered so
+   -- the ordinary redial scheduler can try it again after teardown settles.
+   local ok,peer=pcall(session.host.connect,session.host,
       endpoint,protocol=="gameplay" and p2p_settings.CANONICAL_CHANNEL+1 or 1)
-   if not peer then return false end
+   if not ok or not peer then return false end
    session.endpoints[endpoint]=peer
    session.peers[peer]=endpoint
    session.peer_meta[peer]={
