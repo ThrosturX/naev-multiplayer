@@ -33,6 +33,9 @@ local session = {
    origins={},
    replica_by_local={},
    departures={},
+   separate_host_epochs={},
+   separate_host_notices={},
+   separate_host_chat_sequences={},
    generation=0,
    sequence=0,
    manifest_cache={},
@@ -2514,7 +2517,8 @@ local function handle_directory_message ( peer, message )
       session.member_endpoints[message.peer]=message.endpoint
       connect_gameplay(message.endpoint,message.peer)
    elseif message.type=="hint" and message.system==current_system()
-         and message.host~=session.settings.node_id then
+         and message.host~=session.settings.node_id
+         and not naev.claimTest(system.cur()) then
       session.member_endpoints[message.host]=message.endpoint
       session.machine.topology:remember_hint(
          message.system,message.host,message.endpoint,
@@ -2604,6 +2608,7 @@ local remove_owner_population
 local function accept_claim_message ( message )
    if message.node==session.settings.node_id
          or message.system~=current_system() then return false end
+   if naev.claimTest(system.cur()) then return false end
    local old_state=session.machine.state
    local old_host=session.machine.host
    local old_claim=session.machine.claim
@@ -2817,6 +2822,23 @@ local function handle_gameplay_message ( peer, message )
       end
       return
    elseif message.type=="claim" then
+      if is_host() and message.system==current_system()
+            and naev.claimTest(system.cur()) then
+         meta.separate_host_epoch=message.epoch
+         if session.separate_host_epochs[message.node]~=message.epoch then
+            session.separate_host_epochs[message.node]=message.epoch
+            session.separate_host_chat_sequences[message.node]=nil
+         end
+         if not session.separate_host_notices[message.node] then
+            session.separate_host_notices[message.node]=true
+            local name=display_text(meta.name or message.node)
+            player.msg("#o"..string.format(_(
+               "%s is hosting a separate simulation of this system. "
+               .."Chat remains available, but ships and world state are not shared."
+            ),name).."#0")
+            print("P2P: detected separate system host "..name)
+         end
+      end
       accept_claim_message(message)
       return
    end
@@ -2828,6 +2850,16 @@ local function handle_gameplay_message ( peer, message )
          local direct_name=message.owner==meta.node and meta.name or nil
          communications.observe(message,direct_name,current)
       end
+      return
+   end
+   if message.type=="chat" and is_host()
+         and meta.separate_host_epoch==message.epoch
+         and message.owner==meta.node then
+      local sequence=session.separate_host_chat_sequences[message.node] or -1
+      if message.seq<=sequence then return end
+      session.separate_host_chat_sequences[message.node]=message.seq
+      pilot.comm(display_text(meta.name or meta.node),display_text(message.text))
+      play_chat_sound()
       return
    end
    if message.type=="heartbeat" then
@@ -3185,6 +3217,13 @@ local function reconcile_participant_liveness ( stamp )
 end
 
 local function liveness_tick ( stamp )
+   if naev.claimTest(system.cur()) and session.machine.state=="guest" then
+      local system_name=current_system()
+      print("P2P: local system claim requires hosting")
+      session.leave()
+      session.enter(system_name)
+      return
+   end
    local stale={}
    for peer,meta in pairs(session.peer_meta) do
       if not meta.verified
@@ -3255,6 +3294,9 @@ local function reset_runtime_tables ()
    session.origins={}
    session.replica_by_local={}
    session.departures={}
+   session.separate_host_epochs={}
+   session.separate_host_notices={}
+   session.separate_host_chat_sequences={}
    session.manifest_cache={}
    session.manifest_order={}
    session.manifest_cursor=1
@@ -3395,10 +3437,6 @@ function session.stop ()
    lock_autonav(false)
 end
 
-local function locally_claimed ()
-   return not naev.claimTest(system.cur())
-end
-
 function session.enter ( system_name )
    if not session.running then return nil,"not running" end
    if current_system()==system_name then
@@ -3437,7 +3475,7 @@ function session.enter ( system_name )
    session.next_manifest=stamp
    session.next_activity=stamp
    print("P2P: discovering MP2G/2 system host")
-   if locally_claimed() then
+   if naev.claimTest(system.cur()) then
       session.machine:new_claim()
       become_host(false)
       publish_claim()

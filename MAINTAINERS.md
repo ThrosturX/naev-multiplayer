@@ -33,6 +33,18 @@ across gameplay peers and cannot queue channels 1 or 2 to the directory.
 
 ## Authority and epochs
 
+If `naev.claimTest(system.cur())` returns true, this participant must host its
+own simulation: ignore remote directory hints and gameplay claims, and never
+enter or remain in the guest state. Check again during the visit because the
+result can change after system entry.
+
+Separate hosts in the same system do not exchange simulation state. Once a
+verified peer advertises a foreign host epoch, accept only its directly authored
+chat under that epoch, display it locally without rebroadcasting, and show one
+notice per remote host and local system visit explaining that the simulations
+remain separate. Deduplicate chat by remote node, epoch, and sequence because
+simultaneous inbound and outbound ENet connections can carry the same packet.
+
 Every system packet carries a system visit. Authoritative packets and guest
 gameplay submissions also carry the accepted host epoch. Entity identifiers
 contain an owner, visit/generation, kind, generation counter, and local pilot
