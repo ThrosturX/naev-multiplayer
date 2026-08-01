@@ -101,6 +101,26 @@ Do not introduce a periodic population scan. All authority hooks are removed
 when the pilot departs, authority changes, the system visit ends, or the
 session stops.
 
+When a participant leaves a live shared visit, discard network ownership but
+do not delete its player, craft, or guest-owned NPC replicas. Apply the same
+departure lifecycle to each ship: if its last state is within the exit radius,
+ship radius, and packet-lag allowance of a landable friendly spob or usable
+jump, clear network controls and push the matching native AI departure task.
+Otherwise leave it behind as a permanently disabled, damageable ship. Retain
+departing handles outside the gameplay registries until Naev completes their
+landing or jump so creation and attack hooks cannot readmit them. On rejoin,
+destroy disabled remnants before creating the participant's replacement; let
+ships already committed to landing or jumping finish their departure.
+Before starting this lifecycle, the participant proxy broadcasts "Signal
+lost.", plays the disconnect cue once, and gains a visible "(disconnected)"
+suffix. Do not expose its internal node identifier in that name.
+
+The same proximity test is used when first creating a remote player proxy.
+Spawn it from a nearby spob or jump so Naev supplies the native takeoff or
+jump-in motion; otherwise create it at the received position and velocity.
+Apply this departure lifecycle consistently to non-death NPC and craft removal
+messages as well; only explicit death or explosion reasons are destructive.
+
 Targeting closes any creation-hook admission gap without a scan. Before any
 participant publishes its own target, a valid local pilot with no object,
 replica, or authority identity is registered immediately. Target serialization
@@ -148,8 +168,9 @@ silently prevent a trusted guest-owned NPC from entering the host broadcast.
 Players publish at 15 Hz. A host world frame contains cached player records plus
 only bounded entity records:
 
-- one priority NPC, newly announced NPC, or ambient ring NPC every tick;
-- at most one additional ambient NPC every tick;
+- up to two priority NPCs, newly announced NPCs, or ambient ring NPCs per tick,
+  with one of those slots reserved for ambient selection every third tick;
+- at most two additional ambient NPCs every tick;
 - at most one craft record;
 - at most one persistent-object dynamic record.
 
@@ -164,11 +185,13 @@ Receivers reject stale records per entity so separately replaceable datagrams
 remain safe when lost or reordered. Never rebuild a monolithic world packet;
 ENet rejects an oversized unreliable packet instead of fragmenting it.
 
-This limits host NPC dynamic collection to 30 records per second regardless of
-population. Ambient selection inspects at most four ring candidates and skips
+This limits host NPC dynamic collection to 60 records per second regardless of
+population. Ambient selection inspects at most eight ring candidates and skips
 pilots undetectable by the local player and the bounded participant-proxy
 check. Participant attackers, participant targets, and owned-craft engagements
-feed deterministic priority rings.
+feed deterministic priority rings. One priority-capable slot gives participant
+target interest first refusal before falling back to announcements, combat
+priority, and finally the ambient ring.
 
 NPC ship, faction, name, outfit, AI, and leader fields are collected once and
 cached, then accompany that NPC's selected round-robin announcement. Dynamic

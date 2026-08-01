@@ -32,6 +32,7 @@ local session = {
    authority_by_local={},
    origins={},
    replica_by_local={},
+   departures={},
    generation=0,
    sequence=0,
    manifest_cache={},
@@ -809,6 +810,80 @@ local function apply_object_state ( record, stamp, world_sequence )
    return true
 end
 
+-- Restored from the pre-MP2G/2 departure lifecycle. A final 15 Hz state may
+-- trail the real ship slightly, but must not imply an exit from across the
+-- system.
+local function nearby_transition ( pos, pilot_radius, pilot_faction )
+   if not pos then return end
+   local best_kind,best_target,best_distance
+   local function consider ( kind, target )
+      local distance=target:pos():dist2(pos)
+      local radius=target:radius()
+      if type(radius)~="number" or radius<0 then radius=0 end
+      local transition_range=radius+pilot_radius+300
+      if distance>transition_range*transition_range then return end
+      if not best_distance or distance<best_distance then
+         best_kind,best_target,best_distance=kind,target,distance
+      end
+   end
+
+   local current=system.cur()
+   if not current then return end
+   for _index,spb in ipairs(current:spobs()) do
+      local services=spb:services()
+      local usable=services and services.land
+      if usable and pilot_faction then
+         local spob_faction=spb:faction()
+         if spob_faction and pilot_faction:areEnemies(spob_faction) then
+            usable=false
+         end
+      end
+      if usable then consider("land",spb) end
+   end
+   for _index,jmp in ipairs(current:jumps(true)) do consider("jump",jmp) end
+   return best_kind,best_target
+end
+
+local function clear_departure_controls ( p )
+   p:taskClear()
+   local memory=p:memory()
+   memory.p2p_accel=0
+   memory.p2p_turn=0
+   memory.p2p_reverse=false
+   memory.p2p_primary=false
+   memory.p2p_secondary=false
+end
+
+local function begin_departure ( p )
+   local kind,target=nearby_transition(p:pos(),p:radius(),p:faction())
+   p:setNoDeath(false)
+   p:setLeader()
+   clear_departure_controls(p)
+   if not kind then
+      p:setDisable()
+      return "disabled"
+   end
+   if kind=="land" then p:pushtask("land",target)
+   else p:pushtask("hyperspace",target) end
+   return kind
+end
+
+local function reconcile_departures ( owner, entity )
+   for id,entry in pairs(session.departures) do
+      if entry.owner==owner and (not entity or entry.entity==entity) then
+         if not exists(entry.pilot) then
+            session.departures[id]=nil
+         elseif entry.mode=="disabled" then
+            -- A rejoining participant replaces ships that could not reach an
+            -- exit. Ships already landing or jumping are allowed to finish.
+            entry.pilot:setNoDeath(false)
+            entry.pilot:explode()
+            session.departures[id]=nil
+         end
+      end
+   end
+end
+
 local function remove_replica ( entity, removal )
    local entry=session.players[entity] or session.npcs[entity]
       or session.craft[entity]
@@ -829,6 +904,14 @@ local function remove_replica ( entity, removal )
          -- its next update so all peers show the normal death animation.
          entry.pilot:setNoDeath(false)
          entry.pilot:setHealth(0,0,0)
+      elseif removal=="depart" then
+         local id=entry.local_id or local_id(entry.pilot)
+         local mode=begin_departure(entry.pilot)
+         if id then
+            session.departures[id]={
+               pilot=entry.pilot,owner=entry.owner,entity=entry.entity,mode=mode,
+            }
+         end
       elseif removal then
          entry.pilot:explode()
       else
@@ -957,18 +1040,25 @@ local function spawn_player_manifest ( message )
       player_faction=faction.dynAdd(nil,"P2P Players","P2P Players",
          {ai="p2p_remote_control",clear_allies=true,clear_enemies=true})
    end
+   reconcile_departures(message.owner)
    local display=session.identities:display_name(message.owner)
       or display_text(message.name)
-   local p=pilot.add(proxy_ship,player_faction,
-      vec2.new(message.x or 0,message.y or 0),display,
+   local position=vec2.new(message.x or 0,message.y or 0)
+   local arrival_kind,arrival_origin=nearby_transition(
+      position,50,player_faction)
+   local p=pilot.add(proxy_ship,player_faction,arrival_origin or position,display,
       {ai="p2p_remote_control",naked=true})
    if not p then return false end
    p2p_manifest.install_outfits(p,message,not compatible)
    p2p_manifest.install_weapon_sets(p,message.weapsets)
    p:fillAmmo()
    p:setNoDeath(true)
-   if message.vx and message.vy then p:setVel(vec2.new(message.vx,message.vy)) end
-   if message.dir then p:setDir(message.dir) end
+   -- Native takeoff and jump-in setup owns initial motion. Subsequent state
+   -- packets converge the proxy on the participant's real ship.
+   if not arrival_kind then
+      if message.vx and message.vy then p:setVel(vec2.new(message.vx,message.vy)) end
+      if message.dir then p:setDir(message.dir) end
+   end
    ai_setup.setup(p)
    local entry={
       kind="player",owner=message.owner,entity=message.entity,
@@ -1066,6 +1156,7 @@ local function spawn_entity_manifest ( message )
       fac=owner_craft_faction(message.owner)
    end
    if not fac then return false end
+   reconcile_departures(message.owner,message.entity)
    local ai=message.kind=="npc" and message.ai or "escort"
    -- pilot.add gives positioned pilots an idle_wait task. Some valid AI
    -- profiles do not provide that task, so construct NPC replicas with the
@@ -1237,6 +1328,7 @@ function session._admit_local_pilot ( p )
    local id=local_id(p)
    if not id or session.authority_by_local[id]
          or session.replica_by_local[id]
+         or session.departures[id]
          or (session.objects and session.objects:entity_for_pilot(p)) then
       return
    end
@@ -1327,6 +1419,7 @@ function session.pilot_created_deferred ( generation )
       if exists(p) and p~=player.pilot()
             and not session.replica_by_local[id]
             and not session.authority_by_local[id]
+            and not session.departures[id]
             and not (session.objects
                and session.objects:entity_for_pilot(p)) then
          if pilot_owned(p) then
@@ -1547,7 +1640,7 @@ local function classify_npc_record ( entry, record )
    end
 end
 
-local function select_priority_class ( class )
+local function select_priority_class ( class, selected )
    local queue=session.priority_queues[class]
    local count=#queue
    if count==0 then return nil end
@@ -1557,7 +1650,8 @@ local function select_priority_class ( class )
       local entity=queue[at]
       at=at+1
       local entry=npc_entry(entity)
-      if entry and entry.priority_class==class and exists(entry.pilot) then
+      if entry and entry.priority_class==class and exists(entry.pilot)
+            and not selected[entity] then
          session.priority_cursor[class]=at
          return entry
       end
@@ -1567,7 +1661,7 @@ end
 
 local clear_interest
 
-local function select_interest_npc ( stamp )
+local function select_interest_npc ( stamp, selected )
    local count=#session.interest_order
    if count==0 then return nil end
    local at=session.interest_cursor or 1
@@ -1578,7 +1672,7 @@ local function select_interest_npc ( stamp )
       local interest=session.target_interests[node]
       if interest and stamp<interest.expires then
          local entry=npc_entry(interest.entity)
-         if entry and exists(entry.pilot) then
+         if entry and exists(entry.pilot) and not selected[entry.entity] then
             session.interest_cursor=at
             return entry
          end
@@ -1589,20 +1683,32 @@ local function select_interest_npc ( stamp )
    session.interest_cursor=at
 end
 
-local function select_priority_npc ( stamp, include_priority )
+local function select_announced_npc ( selected )
    local queue=session.npc_announcement_queue
    while #queue>0 do
       local entity=table.remove(queue,1)
       session.npc_announcement_seen[entity]=nil
       local entry=npc_entry(entity)
-      if entry and exists(entry.pilot) then
+      if entry and exists(entry.pilot) and not selected[entry.entity] then
          return entry
       end
    end
+end
+
+local function select_priority_npc ( stamp, include_priority, selected )
+   local announced=select_announced_npc(selected)
+   if announced then return announced end
    if not include_priority then return nil end
-   return select_priority_class(1)
-      or select_interest_npc(stamp)
-      or select_priority_class(3)
+   return select_priority_class(1,selected)
+      or select_interest_npc(stamp,selected)
+      or select_priority_class(3,selected)
+end
+
+local function select_target_slot_npc ( stamp, selected )
+   return select_interest_npc(stamp,selected)
+      or select_announced_npc(selected)
+      or select_priority_class(1,selected)
+      or select_priority_class(3,selected)
 end
 
 local function detectable_by_participant ( p )
@@ -1619,7 +1725,7 @@ local function detectable_by_participant ( p )
    return false
 end
 
-local function select_ambient_npc ( skip )
+local function select_ambient_npc ( selected )
    local count=#session.npc_order
    if count==0 then return nil end
    local inspected=0
@@ -1629,7 +1735,7 @@ local function select_ambient_npc ( skip )
       session.npc_cursor=session.npc_cursor+1
       inspected=inspected+1
       local entry=npc_entry(entity)
-      if entry and entry~=skip
+      if entry and not selected[entry.entity]
             and exists(entry.pilot) and detectable_by_participant(entry.pilot) then
          return entry
       end
@@ -1660,6 +1766,18 @@ local function selected_npc_record ( entry )
       record.secondary=cached.secondary
    end
    return record
+end
+
+local function append_npc_record ( entry, lines, selected )
+   if not entry then return false end
+   local record=selected_npc_record(entry)
+   if not record then return false end
+   classify_npc_record(entry,record)
+   local packed=session._pack_npc_announcement(entry,record)
+   if not packed then return false end
+   lines[#lines+1]=packed
+   selected[entry.entity]=true
+   return true
 end
 
 local function select_world_craft ()
@@ -1848,27 +1966,24 @@ local function host_world_tick ( stamp )
 
    session.world_tick=(session.world_tick or 0)+1
    local entity_lines={}
+   local selected={}
    -- Reserve every third primary slot for the ambient ring. Important NPCs
    -- still receive two thirds of the primary slots, while no engagement can
    -- starve the rest of the host population.
-   local first=select_priority_npc(stamp,session.world_tick%3~=0)
-   if not first then first=select_ambient_npc() end
-   if first then
-      local record=selected_npc_record(first)
-      if record then
-         classify_npc_record(first,record)
-         local packed=session._pack_npc_announcement(first,record)
-         if packed then entity_lines[#entity_lines+1]=packed end
-      end
-   end
-   local ambient=select_ambient_npc(first)
-   if ambient then
-      local record=selected_npc_record(ambient)
-      if record then
-         classify_npc_record(ambient,record)
-         local packed=session._pack_npc_announcement(ambient,record)
-         if packed then entity_lines[#entity_lines+1]=packed end
-      end
+   local first=select_priority_npc(
+      stamp,session.world_tick%3~=0,selected)
+   if not first then first=select_ambient_npc(selected) end
+   append_npc_record(first,entity_lines,selected)
+
+   -- The added pair splits capacity evenly: this slot gives player target
+   -- interest first refusal, while the other can never be consumed by priority.
+   local priority=select_target_slot_npc(stamp,selected)
+   if not priority then priority=select_ambient_npc(selected) end
+   append_npc_record(priority,entity_lines,selected)
+
+   for _slot=1,2 do
+      local ambient=select_ambient_npc(selected)
+      append_npc_record(ambient,entity_lines,selected)
    end
    local craft_record=select_world_craft()
    if craft_record then entity_lines[#entity_lines+1]=gameplay_codec.pack_state(craft_record) end
@@ -2289,6 +2404,14 @@ local function play_chat_sound ()
    chat_sound:play()
 end
 
+local disconnect_sound
+local function play_disconnect_sound ()
+   if not disconnect_sound then
+      disconnect_sound=audio.new("snd/sounds/sokoban/invalid")
+   end
+   disconnect_sound:play()
+end
+
 local function show_chat ( owner, text )
    if owner==session.settings.node_id then
       pilot.comm(display_text(local_player_name()),display_text(text))
@@ -2511,6 +2634,16 @@ local function accept_claim_message ( message )
 end
 
 remove_owner_population = function ( owner, explode )
+   local manifest=session.player_manifests[owner]
+   local player_entry=manifest and session.players[manifest.entity]
+   if not explode and player_entry and exists(player_entry.pilot) then
+      local p=player_entry.pilot
+      -- Keep the cue anchored to the participant ship while it still has its
+      -- connected identity, then mark the retained departure visibly.
+      p:broadcast(_("Signal lost."),true)
+      play_disconnect_sound()
+      p:rename(string.format(_("%s (disconnected)"),p:name()))
+   end
    local entities={}
    for entity,entry in pairs(session.players) do
       if entry.owner==owner then entities[#entities+1]=entity end
@@ -2523,7 +2656,10 @@ remove_owner_population = function ( owner, explode )
          entities[#entities+1]=entity
       end
    end
-   for _index,entity in ipairs(entities) do remove_replica(entity,explode) end
+   local removal=explode and true or "depart"
+   for _index,entity in ipairs(entities) do
+      remove_replica(entity,removal)
+   end
    session.player_manifests[owner]=nil
    session.player_states[owner]=nil
    session.outfit_messages[owner]=nil
@@ -2641,22 +2777,22 @@ local function handle_entity_remove ( peer, meta, message )
       end
       return
    end
+   local removal="depart"
+   if message.reason=="death" then removal="death"
+   elseif message.reason=="exploded" then removal=true end
    if is_host() then
       if message.owner~=meta.node
             or (message.kind~="craft" and message.kind~="npc") then return end
       local container=message.kind=="npc" and session.npcs or session.craft
       local entry=container[message.entity]
       if entry and entry.owner==message.owner then
-         remove_replica(message.entity,
-            message.reason=="death" or message.reason=="exploded")
+         remove_replica(message.entity,removal)
       end
       host_reliable(canonical_copy(message))
    elseif meta.node==session.machine.host then
       local entry=session.npcs[message.entity] or session.craft[message.entity]
       if entry and entry.owner==message.owner then
-         remove_replica(message.entity,
-            message.reason=="absent" or message.reason=="death"
-               or message.reason=="exploded")
+         remove_replica(message.entity,removal)
       end
    end
 end
@@ -3064,6 +3200,9 @@ local function liveness_tick ( stamp )
    end
    reconcile_participant_liveness(stamp)
    audit_one_authority()
+   for id,entry in pairs(session.departures) do
+      if not exists(entry.pilot) then session.departures[id]=nil end
+   end
    refresh_time_controls(stamp)
    session.enforce_time_controls()
    if session.directory_probe_deadline
@@ -3115,6 +3254,7 @@ local function reset_runtime_tables ()
    session.authority_by_local={}
    session.origins={}
    session.replica_by_local={}
+   session.departures={}
    session.manifest_cache={}
    session.manifest_order={}
    session.manifest_cursor=1
