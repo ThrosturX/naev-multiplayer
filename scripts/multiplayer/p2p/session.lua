@@ -2,6 +2,8 @@
 -- persistent objects stay on their independent ObjectRuntime transport.
 local directory_codec = require "multiplayer.p2p.codec"
 local gameplay_codec = require "multiplayer.p2p.gameplay_codec"
+local p2p_settings = require "multiplayer.p2p.settings"
+local p2p_manifest = require "multiplayer.p2p.manifest"
 local core = require "multiplayer.p2p.core"
 local reconcile = require "multiplayer.p2p.reconcile"
 local identity = require "multiplayer.p2p.identity"
@@ -10,31 +12,6 @@ local ObjectRuntime = require "multiplayer.p2p.object_runtime"
 local communications = require "multiplayer.p2p.communications"
 local enet = require "enet"
 local ai_setup = require "ai.core.setup"
-
-local MAX_EVENTS_PER_FRAME = 40
-local HANDSHAKE_TIMEOUT = 10
-local TRANSPORT_IDLE_TIMEOUT = 7
-local DIRECTORY_RESPONSE_TIMEOUT = 10
-local WORLD_INTERVAL = 1/15
-local WORLD_CHANNEL = 1
-local CANONICAL_CHANNEL = 2
-local HEARTBEAT_INTERVAL = 1
-local CLAIM_INTERVAL = 5
-local LIVENESS_INTERVAL = 1
-local REDIAL_INTERVAL = 2
-local MANIFEST_INTERVAL = 0.1
-local MANIFEST_QUERY_COOLDOWN = 1
-local HOST_ALONE_GRACE = 4
-local AGGRESSION_GRACE = 20
-local ACTIVITY_QUERY_INTERVAL = 30
-local ACTIVITY_RETENTION = 15*60
-local AMBIENT_INSPECTION_CAP = 4
-local PARTICIPANT_VISIBILITY_CAP = 8
-local RECONCILE_DISTANCE = 2000
-local RECONCILE_POSITION_BIAS = 0.5
--- ENet's default MTU is 1392 bytes and Naev's Lua binding does not expose
--- unreliable fragmentation. Leave room for protocol and path overhead.
-local WORLD_PACKET_BUDGET = 1200
 
 local session = {
    running=false,
@@ -90,9 +67,10 @@ local session = {
    directory_probe_deadline=nil,
    indicators=status.new(function () return player.pilot() end),
 }
-session.DEFAULT_DIRECTORY = "79.76.110.205:60939"
-session.DEFAULT_LISTEN_PORT = 0
-session.NETWORK_STATUS_PENDING_TIMEOUT = 2
+session.DEFAULT_DIRECTORY = p2p_settings.DEFAULT_DIRECTORY
+session.DEFAULT_LISTEN_PORT = p2p_settings.DEFAULT_LISTEN_PORT
+session.NETWORK_STATUS_PENDING_TIMEOUT =
+   p2p_settings.NETWORK_STATUS_PENDING_TIMEOUT
 
 local function now ()
    return naev.ticks()
@@ -113,46 +91,8 @@ local function display_text ( text )
    return tostring(text):gsub("#","＃")
 end
 
-local function random_id ()
-   local parts={}
-   for _index=1,4 do
-      parts[#parts+1]=string.format("%08x",rnd.rnd(0,0x7fffffff))
-   end
-   return table.concat(parts)
-end
-
-local function normalize_endpoint ( endpoint )
-   if type(endpoint)~="string" then return nil end
-   endpoint=endpoint:match("^%s*(.-)%s*$")
-   if endpoint=="" then return "" end
-   local host,port=endpoint:match("^([^%s:]+)%s*:%s*(%d+)$")
-   if not host then host,port=endpoint:match("^(%S+)%s+(%d+)$") end
-   port=tonumber(port)
-   if not host or not port or port<1 or port>65535 then return nil end
-   return host..":"..tostring(math.floor(port))
-end
-
-session.normalize_endpoint=normalize_endpoint
-
-function session.defaults ( settings )
-   settings=settings or {}
-   settings.enabled=settings.enabled==true
-   settings.listen_port=math.max(0,
-      math.min(65535,tonumber(settings.listen_port)
-         or session.DEFAULT_LISTEN_PORT))
-   local directory=settings.directory==nil
-      and session.DEFAULT_DIRECTORY or settings.directory
-   settings.directory=normalize_endpoint(directory) or ""
-   local bootstrap={}
-   for _index,endpoint in ipairs(settings.bootstrap or {}) do
-      local normalized=normalize_endpoint(endpoint)
-      if normalized and normalized~="" then bootstrap[#bootstrap+1]=normalized end
-   end
-   settings.bootstrap=bootstrap
-   settings.recent=settings.recent or {}
-   settings.node_id=settings.node_id or random_id()
-   return settings
-end
+session.normalize_endpoint=p2p_settings.normalize_endpoint
+session.defaults=p2p_settings.defaults
 
 function session.get_settings ()
    return session.settings
@@ -172,7 +112,7 @@ function session.network_status ()
       end
    end
    if pending_remaining then return "unknown",pending_remaining end
-   return "unavailable"
+   return "unavailable",p2p_settings.NETWORK_STATUS_RECHECK_INTERVAL
 end
 
 local function current_system ()
@@ -281,7 +221,7 @@ local function refresh_time_controls ( stamp )
       return
    end
    session.solo_since=session.solo_since or stamp
-   local deadline=session.solo_since+HOST_ALONE_GRACE
+   local deadline=session.solo_since+p2p_settings.HOST_ALONE_GRACE
    session.indicators:host_alone(deadline,stamp)
    lock_autonav(stamp<deadline)
 end
@@ -290,7 +230,7 @@ session._no_other_players_discovered=no_other_players_discovered
 session._refresh_time_controls=refresh_time_controls
 
 local function endpoint_valid ( endpoint )
-   return normalize_endpoint(endpoint)==endpoint
+   return p2p_settings.normalize_endpoint(endpoint)==endpoint
 end
 
 local function endpoint_is_local_listener ( endpoint )
@@ -346,7 +286,7 @@ function session._send_game_state ( peer, message )
    if not peer then return false end
    local packet=encode_packet(gameplay_codec,message)
    if not packet then return false end
-   local result=peer:send(packet,WORLD_CHANNEL,"unreliable")
+   local result=peer:send(packet,p2p_settings.WORLD_CHANNEL,"unreliable")
    return result and result>=0 or false
 end
 
@@ -358,7 +298,7 @@ local function connect_endpoint ( endpoint, protocol, expected_node )
    if not endpoint_valid(endpoint) or endpoint_is_local_listener(endpoint)
          or session.endpoints[endpoint] then return false end
    local peer=session.host:connect(
-      endpoint,protocol=="gameplay" and CANONICAL_CHANNEL+1 or 1)
+      endpoint,protocol=="gameplay" and p2p_settings.CANONICAL_CHANNEL+1 or 1)
    if not peer then return false end
    session.endpoints[endpoint]=peer
    session.peers[peer]=endpoint
@@ -413,7 +353,7 @@ local function broadcast_gameplay ( message, reliable )
    local packet=encode_packet(gameplay_codec,message)
    if not packet then return false end
    session.host:broadcast(
-      packet,CANONICAL_CHANNEL,reliable and "reliable" or "unreliable")
+      packet,p2p_settings.CANONICAL_CHANNEL,reliable and "reliable" or "unreliable")
    return true
 end
 
@@ -422,7 +362,7 @@ local function broadcast_world_packet ( packet )
    -- 0. ENet reuses one packet across all gameplay peers without leaking
    -- MP2G/2 traffic onto the directory connection. Receivers enforce the
    -- accepted host and authority epoch.
-   session.host:broadcast(packet,WORLD_CHANNEL,"unreliable")
+   session.host:broadcast(packet,p2p_settings.WORLD_CHANNEL,"unreliable")
    return true
 end
 
@@ -497,125 +437,9 @@ local function publish_directory_leave ( system_name )
    end
 end
 
-local function outfit_names ( p )
-   local names={}
-   for _index,o in ipairs(p:outfitsList()) do
-      names[#names+1]=gameplay_codec.escape(o:nameRaw())
-   end
-   return table.concat(names,",")
-end
-
-local function outfit_slots ( p )
-   local slots={}
-   for index,o in pairs(p:outfits()) do
-      if type(index)=="number" and o then
-         slots[#slots+1]={
-            index=index,
-            value=tostring(index)..":"
-               ..gameplay_codec.escape(o:nameRaw()),
-         }
-      end
-   end
-   table.sort(slots,function ( a,b ) return a.index<b.index end)
-   local values={}
-   for index,entry in ipairs(slots) do values[index]=entry.value end
-   return table.concat(values,",")
-end
-
-local function weapon_sets ( p )
-   local sets={}
-   for id=1,10 do
-      local slots={}
-      for _index,slot in ipairs(p:weapsetList(id)) do
-         slot=tonumber(slot)
-         if slot and slot>=1 and slot<=512 then
-            slots[#slots+1]=tostring(math.floor(slot))
-         end
-      end
-      sets[#sets+1]=tostring(id)..":"..table.concat(slots,".")
-   end
-   return table.concat(sets,";")
-end
-
-local function install_weapon_sets ( p, packed )
-   if packed==nil then return end
-   p:weapsetCleanup()
-   local installed=p:outfits()
-   for line in packed:gmatch("([^;]+)") do
-      local id,slots=line:match("^(%d+):(.*)$")
-      id=tonumber(id)
-      if id and id>=1 and id<=10 then
-         for value in slots:gmatch("(%d+)") do
-            local slot=tonumber(value)
-            if slot and slot>=1 and slot<=512 and installed[slot] then
-               p:weapsetAdd(id,slot)
-            end
-         end
-      end
-   end
-end
-
-local function ship_fallback_names ( s )
-   local names,seen={},{}
-   local inherited=s:inherits()
-   while inherited and #names<16 do
-      local name=inherited:nameRaw()
-      if type(name)~="string" or name=="" or seen[name] then break end
-      seen[name]=true
-      names[#names+1]=gameplay_codec.escape(name)
-      inherited=inherited:inherits()
-   end
-   local base_type=s:baseType()
-   if #names<16 and type(base_type)=="string" and base_type~=""
-         and not seen[base_type] and ship.exists(base_type) then
-      names[#names+1]=gameplay_codec.escape(base_type)
-   end
-   return table.concat(names,",")
-end
-
 local function resource_get ( getter, name )
    local ok,value=pcall(getter,name)
    if ok then return value end
-end
-
-local function resolve_proxy_ship ( message )
-   if resource_get(ship.get,message.ship) then return message.ship,true end
-   for encoded in (message.ship_fallbacks or ""):gmatch("([^,]+)") do
-      local name=gameplay_codec.unescape(encoded)
-      if name and resource_get(ship.get,name) then return name,true end
-   end
-   if resource_get(ship.get,"Plowshare") then return "Plowshare",false end
-end
-
-local function replica_outfit_allowed ( o )
-   -- Fighter craft have their own owner-generated manifests. A replica carrier
-   -- must never launch a second speculative copy.
-   return o:type()~="Fighter Bay"
-end
-
-local function install_outfits ( p, message, compatible )
-   local used_slots=false
-   if not compatible then
-      for item in (message.slots or ""):gmatch("([^,]+)") do
-         local index,encoded=item:match("^(%d+):(.+)$")
-         index=tonumber(index)
-         local name=encoded and gameplay_codec.unescape(encoded)
-         local o=name and outfit.exists(name) or nil
-         if index and index>=1 and index<=512 and o
-               and replica_outfit_allowed(o) then
-            p:outfitAddSlot(o,index,true,true)
-            used_slots=true
-         end
-      end
-   end
-   if used_slots then return end
-   for item in (message.outfits or ""):gmatch("([^,]+)") do
-      local name=gameplay_codec.unescape(item)
-      local o=name and outfit.exists(name) or nil
-      if o and replica_outfit_allowed(o) then
-         p:outfitAdd(o,1,true,compatible and false or nil)
-      end
-   end
 end
 
 local function pilot_owned ( p )
@@ -735,57 +559,6 @@ local function state_record ( p, entity, include_controls, stamp )
    return record
 end
 
-local function pack_state ( record )
-   return table.concat({
-      record.entity,record.x,record.y,record.vx,record.vy,record.dir,
-      record.armour,record.shield,record.stress,record.energy,
-      record.target or "-",record.weapset or 1,record.accel or 0,
-      record.turn or 0,record.reverse or 0,
-      record.primary or 0,record.secondary or 0,
-   },",")
-end
-
-local function unpack_state ( packed )
-   local fields={}
-   for value in (packed..","):gmatch("(.-),") do fields[#fields+1]=value end
-   if #fields~=17 or not fields[1]:match("^[%w_%.%-]+$") then return nil end
-   local record={
-      entity=fields[1],
-      x=tonumber(fields[2]),y=tonumber(fields[3]),
-      vx=tonumber(fields[4]),vy=tonumber(fields[5]),
-      dir=tonumber(fields[6]),armour=tonumber(fields[7]),
-      shield=tonumber(fields[8]),stress=tonumber(fields[9]),
-      energy=tonumber(fields[10]),target=fields[11],
-      weapset=tonumber(fields[12]),accel=tonumber(fields[13]),
-      turn=tonumber(fields[14]),reverse=tonumber(fields[15]),
-      primary=tonumber(fields[16]),secondary=tonumber(fields[17]),
-   }
-   for _index,key in ipairs({
-      "x","y","vx","vy","dir","armour","shield","stress","energy",
-      "weapset","accel","turn","reverse","primary","secondary",
-   }) do
-      local value=record[key]
-      if not value or value~=value then return nil end
-   end
-   if math.abs(record.x)>1e9 or math.abs(record.y)>1e9
-         or math.abs(record.vx)>1e7 or math.abs(record.vy)>1e7
-         or math.abs(record.dir)>1e6
-         or record.armour<0 or record.armour>1e9
-         or record.shield<0 or record.shield>1e9
-         or record.stress<0 or record.stress>1e9
-         or record.energy<0 or record.energy>1e9 then return nil end
-   if #record.entity>255 or #record.target>255
-         or (record.target~="-"
-            and not record.target:match("^[%w_%.%-]+$"))
-         or record.weapset<1 or record.weapset>10
-         or record.accel<0 or record.accel>1
-         or record.turn< -1 or record.turn>1
-         or record.reverse<0 or record.reverse>1
-         or record.primary<0 or record.primary>1
-         or record.secondary<0 or record.secondary>1 then return nil end
-   return record
-end
-
 local function object_state_record ( p, entity )
    local x,y=p:pos():get()
    local vx,vy=p:vel():get()
@@ -796,154 +569,34 @@ local function object_state_record ( p, entity )
    }
 end
 
-local function pack_object_state ( record )
-   return table.concat({
-      record.entity,record.x,record.y,record.vx,record.vy,record.dir,
-      record.armour,record.shield,record.stress,
-   },",")
-end
-
-local function unpack_object_state ( packed )
-   local fields={}
-   for value in (packed..","):gmatch("(.-),") do fields[#fields+1]=value end
-   if #fields~=9 or not fields[1]:match("^[%w_%.%-]+$") then return nil end
-   local record={
-      entity=fields[1],
-      x=tonumber(fields[2]),y=tonumber(fields[3]),
-      vx=tonumber(fields[4]),vy=tonumber(fields[5]),
-      dir=tonumber(fields[6]),
-      armour=tonumber(fields[7]),shield=tonumber(fields[8]),
-      stress=tonumber(fields[9]),
-   }
-   for _index,key in ipairs({
-      "x","y","vx","vy","dir","armour","shield","stress",
-   }) do
-      local value=record[key]
-      if not value or value~=value then return nil end
-   end
-   if #record.entity>255
-         or math.abs(record.x)>1e9 or math.abs(record.y)>1e9
-         or math.abs(record.vx)>1e7 or math.abs(record.vy)>1e7
-         or math.abs(record.dir)>1e6
-         or record.armour<0 or record.armour>1e9
-         or record.shield<0 or record.shield>1e9
-         or record.stress<0 or record.stress>1e9 then return nil end
-   return record
-end
-
 local function player_manifest ()
    local p=player.pilot()
    if not exists(p) then return nil end
    local entity=local_entity()
    if session.dead_players[entity] then return nil end
-   local record=state_record(p,entity,true)
-   local current_ship=p:ship()
-   local message=gameplay_base("player_manifest")
-   message.owner=session.settings.node_id
-   message.entity=entity
-   message.origin=session.settings.node_id.."."..session.visit..".player"
-   message.ship=current_ship:nameRaw()
-   message.ship_fallbacks=ship_fallback_names(current_ship)
-   message.name=local_player_name()
-   message.outfits=outfit_names(p)
-   if message.outfits=="" then message.outfits="-" end
-   message.slots=outfit_slots(p)
-   if message.slots=="" then message.slots="-" end
-   message.weapsets=weapon_sets(p)
-   if message.weapsets=="" then message.weapsets="-" end
-   for key,value in pairs(record) do
-      if key~="entity" then message[key]=value end
-   end
-   return message
+   return p2p_manifest.player(p,{
+      base=gameplay_base("player_manifest"),
+      owner=session.settings.node_id,
+      entity=entity,
+      origin=session.settings.node_id.."."..session.visit..".player",
+      name=local_player_name(),
+      state=state_record(p,entity,true),
+   })
 end
 
 local function authority_manifest ( entry )
    local p=entry.pilot
    if not exists(p) then return nil end
-   local message=gameplay_base("entity_manifest")
-   message.kind=entry.kind
-   message.owner=entry.owner
-   message.entity=entry.entity
-   message.origin=entry.origin
-   message.ship=p:ship():nameRaw()
-   message.name=p:name()
-   message.faction=p:faction():nameRaw()
-   message.ai=entry.ai or p:ainame() or "dummy"
-   message.outfits=outfit_names(p)
-   if message.outfits=="" then message.outfits="-" end
-   message.slots=outfit_slots(p)
-   if message.slots=="" then message.slots="-" end
    local leader=p:leader()
-   message.leader=exists(leader) and target_entity(leader) or "-"
-   local record=state_record(p,entry.entity,false)
-   for key,value in pairs(record) do
-      if key~="entity" then message[key]=value end
-   end
-   return message
+   return p2p_manifest.authority(p,entry,{
+      base=gameplay_base("entity_manifest"),
+      leader=exists(leader) and target_entity(leader) or "-",
+      state=state_record(p,entry.entity,false),
+   })
 end
 
-function session._pack_npc_announcement ( entry, record )
-   local description=entry.description
-   if not description then return nil end
-   local slots=description.slots or "-"
-   local outfits=slots~="-" and "-" or (description.outfits or "-")
-   return table.concat({
-      "n",pack_state(record),
-      gameplay_codec.escape(description.owner),
-      gameplay_codec.escape(description.origin),
-      gameplay_codec.escape(description.ship),
-      gameplay_codec.escape(description.name),
-      gameplay_codec.escape(description.faction),
-      gameplay_codec.escape(description.ai),
-      gameplay_codec.escape(outfits),
-      gameplay_codec.escape(slots),
-      gameplay_codec.escape(description.leader or "-"),
-   },",")
-end
-
-function session._unpack_npc_announcement ( packed )
-   local fields={}
-   for value in (packed..","):gmatch("(.-),") do fields[#fields+1]=value end
-   if #fields~=27 or fields[1]~="n" then return nil end
-   local dynamic={}
-   for index=2,18 do dynamic[#dynamic+1]=fields[index] end
-   local record=unpack_state(table.concat(dynamic,","))
-   if not record then return nil end
-   local decoded={}
-   for index=19,27 do
-      decoded[index]=gameplay_codec.unescape(fields[index])
-      if not decoded[index] then return nil end
-   end
-   local owner,origin,ship_name,name,faction_name,ai_name,
-      outfits,slots,leader=decoded[19],decoded[20],decoded[21],
-      decoded[22],decoded[23],decoded[24],decoded[25],decoded[26],decoded[27]
-   if #owner<1 or #owner>64 or not owner:match("^[%x]+$")
-         or #origin<1 or #origin>255
-         or not origin:match("^[%w_%.%-]+$")
-         or #ship_name<1 or #ship_name>240
-         or ship_name:find("[%z\1-\31\127]")
-         or #name<1 or #name>240 or name:find("[%z\1-\31\127]")
-         or #faction_name<1 or #faction_name>240
-         or faction_name:find("[%z\1-\31\127]")
-         or #ai_name<1 or #ai_name>240
-         or not ai_name:match("^[%w_%-]+$")
-         or #outfits>12000 or outfits:find("[%z\1-\31\127]")
-         or #slots>12000 or slots:find("[%z\1-\31\127]")
-         or (leader~="-" and (#leader>255
-            or not leader:match("^[%w_%.%-]+$"))) then
-      return nil
-   end
-   return record,{
-      kind="npc",owner=owner,entity=record.entity,origin=origin,
-      ship=ship_name,name=name,faction=faction_name,ai=ai_name,
-      outfits=outfits,slots=slots,leader=leader,
-      x=record.x,y=record.y,vx=record.vx,vy=record.vy,dir=record.dir,
-      armour=record.armour,shield=record.shield,stress=record.stress,
-      energy=record.energy,target=record.target,weapset=record.weapset,
-      accel=record.accel,turn=record.turn,reverse=record.reverse,
-      primary=record.primary,secondary=record.secondary,
-   }
-end
+session._pack_npc_announcement=gameplay_codec.pack_npc_announcement
+session._unpack_npc_announcement=gameplay_codec.unpack_npc_announcement
 
 local function canonical_copy ( message )
    local copy={}
@@ -954,22 +607,6 @@ local function canonical_copy ( message )
    copy.epoch=session.machine.claim
    return copy
 end
-
-local player_limits={
-   position_gain=1.5,correction_speed=400,velocity_rate=12,
-   acceleration=2400,direction_rate=30,direction_speed=8,
-   max_prediction=0,rest_source_speed=0,follow_velocity=true,
-}
-local npc_limits={
-   position_gain=1.5,correction_speed=250,velocity_rate=8,
-   acceleration=600,direction_rate=30,direction_speed=8,
-   max_dt=0.25,max_prediction=0.125,prediction_fraction=0.5,
-}
-local craft_limits={
-   position_gain=2,correction_speed=400,velocity_rate=10,
-   acceleration=1200,direction_rate=30,direction_speed=8,
-   max_dt=0.25,max_prediction=0.125,prediction_fraction=0.5,
-}
 
 local function reconcile_arrival ( entry, record, limits, stamp )
    local p=entry.pilot
@@ -989,7 +626,7 @@ local function reconcile_arrival ( entry, record, limits, stamp )
    }
    local catchup_x,catchup_y,catchup=
       reconcile.catchup_position(x,y,wanted.x,wanted.y,
-         RECONCILE_DISTANCE,RECONCILE_POSITION_BIAS)
+         p2p_settings.RECONCILE_DISTANCE,p2p_settings.RECONCILE_POSITION_BIAS)
    if catchup then
       p:setPos(vec2.new(catchup_x,catchup_y))
       x,y=catchup_x,catchup_y
@@ -1035,7 +672,7 @@ local function mark_player_aggression ( owner )
    if not entry or not exists(entry.pilot) then return end
    local stamp=now()
    entry.last_aggression=stamp
-   session.indicators:mark_aggression(stamp+AGGRESSION_GRACE,stamp)
+   session.indicators:mark_aggression(stamp+p2p_settings.AGGRESSION_GRACE,stamp)
    if not entry.hostile then
       entry.pilot:setHostile(true)
       entry.hostile=true
@@ -1108,7 +745,8 @@ local function apply_player_record ( record, stamp, world_sequence )
    if world_sequence
          and world_sequence<=(entry.world_sequence or -1) then return false end
    if world_sequence then entry.world_sequence=world_sequence end
-   if not reconcile_arrival(entry,record,player_limits,stamp) then return false end
+   if not reconcile_arrival(
+         entry,record,p2p_settings.PLAYER_RECONCILE,stamp) then return false end
    apply_player_controls(entry,record)
    apply_health_energy(entry,record)
    return true
@@ -1141,7 +779,8 @@ local function apply_entity_record ( record, stamp, world_sequence )
    if world_sequence
          and world_sequence<=(entry.world_sequence or -1) then return false end
    if world_sequence then entry.world_sequence=world_sequence end
-   local limits=entry.kind=="npc" and npc_limits or craft_limits
+   local limits=entry.kind=="npc" and p2p_settings.NPC_RECONCILE
+      or p2p_settings.CRAFT_RECONCILE
    if not reconcile_arrival(entry,record,limits,stamp) then return false end
    apply_health_energy(entry,record)
    apply_target(entry,record.target)
@@ -1155,7 +794,8 @@ local function apply_object_state ( record, stamp, world_sequence )
    if world_sequence
          and world_sequence<=(entry.world_sequence or -1) then return false end
    if world_sequence then entry.world_sequence=world_sequence end
-   if not reconcile_arrival(entry,record,npc_limits,stamp) then return false end
+   if not reconcile_arrival(
+         entry,record,p2p_settings.NPC_RECONCILE,stamp) then return false end
    local armour,shield,stress=entry.pilot:health()
    if math.abs(armour-record.armour)>0.01
          or math.abs(shield-record.shield)>0.01
@@ -1307,7 +947,7 @@ local function spawn_player_manifest ( message )
       return true
    end
    if existing then remove_replica(message.entity,false) end
-   local proxy_ship,compatible=resolve_proxy_ship(message)
+   local proxy_ship,compatible=p2p_manifest.resolve_proxy_ship(message)
    if not proxy_ship then return false end
    if not player_faction then
       player_faction=faction.dynAdd(nil,"P2P Players","P2P Players",
@@ -1319,8 +959,8 @@ local function spawn_player_manifest ( message )
       vec2.new(message.x or 0,message.y or 0),display,
       {ai="p2p_remote_control",naked=true})
    if not p then return false end
-   install_outfits(p,message,not compatible)
-   install_weapon_sets(p,message.weapsets)
+   p2p_manifest.install_outfits(p,message,not compatible)
+   p2p_manifest.install_weapon_sets(p,message.weapsets)
    p:fillAmmo()
    p:setNoDeath(true)
    if message.vx and message.vy then p:setVel(vec2.new(message.vx,message.vy)) end
@@ -1427,7 +1067,7 @@ local function spawn_entity_manifest ( message )
       vec2.new(message.x or 0,message.y or 0),message.name,
       {ai=ai,naked=true})
    if not p then return false end
-   install_outfits(p,message,false)
+   p2p_manifest.install_outfits(p,message,false)
    p:setNoDeath(true)
    if message.vx and message.vy then p:setVel(vec2.new(message.vx,message.vy)) end
    if message.dir then p:setDir(message.dir) end
@@ -1491,7 +1131,7 @@ end
 
 local function broadcast_manifest ( cached )
    if not cached then return false end
-   session.host:broadcast(cached.packet,CANONICAL_CHANNEL,"reliable")
+   session.host:broadcast(cached.packet,p2p_settings.CANONICAL_CHANNEL,"reliable")
    return true
 end
 
@@ -1622,7 +1262,7 @@ local function broadcast_npc_announcement ( entry )
    world.seq=session.sequence
    local batches,err,oversized=gameplay_codec.encode_world_batches(world,{
       players={},entities={line},objects={},
-   },WORLD_PACKET_BUDGET)
+   },p2p_settings.WORLD_PACKET_BUDGET)
    if not batches then return false,err end
    for _index,batch in ipairs(batches) do
       host_reliable(batch.message)
@@ -1961,7 +1601,7 @@ local function detectable_by_participant ( p )
    if exists(pp) and pp:inrange(p) then return true end
    local inspected=1
    for _entity,entry in pairs(session.players) do
-      if inspected>=PARTICIPANT_VISIBILITY_CAP then break end
+      if inspected>=p2p_settings.PARTICIPANT_VISIBILITY_CAP then break end
       if exists(entry.pilot) then
          inspected=inspected+1
          if entry.pilot:inrange(p) then return true end
@@ -1974,7 +1614,7 @@ local function select_ambient_npc ( skip )
    local count=#session.npc_order
    if count==0 then return nil end
    local inspected=0
-   while inspected<AMBIENT_INSPECTION_CAP and inspected<count do
+   while inspected<p2p_settings.AMBIENT_INSPECTION_CAP and inspected<count do
       if session.npc_cursor>count then session.npc_cursor=1 end
       local entity=session.npc_order[session.npc_cursor]
       session.npc_cursor=session.npc_cursor+1
@@ -2156,7 +1796,7 @@ local function publish_owned_entity_tick ()
          message.owner=session.settings.node_id
          message.entity=entity
          message.seq=session.sequence
-         message.state=pack_state(record)
+         message.state=gameplay_codec.pack_state(record)
          return session._send_game_state(
             peer_for_node(session.machine.host),message)
       end
@@ -2174,7 +1814,7 @@ local function collect_player_lines ()
    table.sort(ordered,function ( a,b ) return a.owner<b.owner end)
    local lines={}
    for _index,item in ipairs(ordered) do
-      lines[#lines+1]=pack_state(item.record)
+      lines[#lines+1]=gameplay_codec.pack_state(item.record)
    end
    return lines
 end
@@ -2222,7 +1862,7 @@ local function host_world_tick ( stamp )
       end
    end
    local craft_record=select_world_craft()
-   if craft_record then entity_lines[#entity_lines+1]=pack_state(craft_record) end
+   if craft_record then entity_lines[#entity_lines+1]=gameplay_codec.pack_state(craft_record) end
    local object_record=select_object_state()
 
    session.sequence=session.sequence+1
@@ -2231,8 +1871,8 @@ local function host_world_tick ( stamp )
    local batches,err,oversized=gameplay_codec.encode_world_batches(world,{
       players=collect_player_lines(),
       entities=entity_lines,
-      objects=object_record and {pack_object_state(object_record)} or {},
-   },WORLD_PACKET_BUDGET)
+      objects=object_record and {gameplay_codec.pack_object_state(object_record)} or {},
+   },p2p_settings.WORLD_PACKET_BUDGET)
    if not batches then
       local signature="world_batch:"..tostring(err)
       if not session.encode_errors[signature] then
@@ -2285,8 +1925,8 @@ function session._broadcast_player_state ( record )
    local world=gameplay_base("world")
    world.seq=session.sequence
    local batches,err=gameplay_codec.encode_world_batches(world,{
-      players={pack_state(record)},entities={},objects={},
-   },WORLD_PACKET_BUDGET)
+      players={gameplay_codec.pack_state(record)},entities={},objects={},
+   },p2p_settings.WORLD_PACKET_BUDGET)
    if not batches then
       local signature="player_broadcast:"..tostring(err)
       if not session.encode_errors[signature] then
@@ -2307,7 +1947,7 @@ local function request_entity_manifest ( entity, stamp )
    end
    stamp=stamp or now()
    if stamp-(session.manifest_queries[entity] or -math.huge)
-         <MANIFEST_QUERY_COOLDOWN then return false end
+         <p2p_settings.MANIFEST_QUERY_COOLDOWN then return false end
    session.manifest_queries[entity]=stamp
    session.sequence=session.sequence+1
    local message=gameplay_base("entity_query")
@@ -2343,7 +1983,7 @@ local function parse_world_records ( packed, callback, stamp, sequence, kind )
    for line in packed:gmatch("([^;]+)") do
       count=count+1
       if count>128 then break end
-      local record=unpack_state(line)
+      local record=gameplay_codec.unpack_state(line)
       if record and callback(record,stamp,sequence)==false
             and record.entity~=local_entity()
             and not session.players[record.entity]
@@ -2378,7 +2018,7 @@ function session._parse_world_entities ( packed, stamp, sequence )
             end
          end
       else
-         local record=unpack_state(line)
+         local record=gameplay_codec.unpack_state(line)
          if record and apply_entity_record(record,stamp,sequence)==false
                and record.entity~=local_entity()
                and not session.craft[record.entity]
@@ -2400,7 +2040,7 @@ local function apply_world ( message )
       for line in message.objects:gmatch("([^;]+)") do
          count=count+1
          if count>32 then break end
-         local record=unpack_object_state(line)
+         local record=gameplay_codec.unpack_object_state(line)
          if record then apply_object_state(record,stamp,message.seq) end
       end
    end
@@ -2414,7 +2054,7 @@ local function apply_player_control_message ( message )
    local target=entity_pilot(message.target)
    if message.target~="-" and not target then return nil,"absent" end
    entry.control_sequence=message.seq
-   reconcile_arrival(entry,message,player_limits,now())
+   reconcile_arrival(entry,message,p2p_settings.PLAYER_RECONCILE,now())
    apply_player_controls(entry,message)
    if entry.applied.energy~=message.energy then
       entry.pilot:setEnergy(message.energy)
@@ -2688,7 +2328,7 @@ local function request_activity_from_directory ()
    session.last_activity_query=now()
    if sent then
       session.directory_probe_deadline=
-         session.last_activity_query+DIRECTORY_RESPONSE_TIMEOUT
+         session.last_activity_query+p2p_settings.DIRECTORY_RESPONSE_TIMEOUT
    end
    return sent
 end
@@ -3147,7 +2787,7 @@ local function handle_gameplay_message ( peer, message )
          if message.owner~=meta.node then return end
          local container=message.kind=="npc" and session.npcs or session.craft
          local entry=container[message.entity]
-         local record=unpack_state(message.state)
+         local record=gameplay_codec.unpack_state(message.state)
          if entry and entry.owner==meta.node and record
                and record.entity==message.entity
                and message.seq>(entry.state_sequence or -1) then
@@ -3265,7 +2905,7 @@ end
 
 local function service_transport ( stamp )
    local processed=0
-   while processed<MAX_EVENTS_PER_FRAME do
+   while processed<p2p_settings.MAX_EVENTS_PER_FRAME do
       local event=session.host:service(0)
       if not event then break end
       processed=processed+1
@@ -3387,13 +3027,13 @@ local function reconcile_participant_liveness ( stamp )
    local aggression_deadline
    for _entity,entry in pairs(session.players) do
       if entry.last_aggression
-            and stamp-entry.last_aggression>=AGGRESSION_GRACE then
+            and stamp-entry.last_aggression>=p2p_settings.AGGRESSION_GRACE then
          if exists(entry.pilot) then entry.pilot:setHostile(false) end
          entry.last_aggression=nil
          entry.hostile=nil
       elseif entry.last_aggression then
          aggression_deadline=math.max(aggression_deadline or 0,
-            entry.last_aggression+AGGRESSION_GRACE)
+            entry.last_aggression+p2p_settings.AGGRESSION_GRACE)
       end
    end
    session.indicators:reconcile_aggression(aggression_deadline,stamp)
@@ -3403,10 +3043,10 @@ local function liveness_tick ( stamp )
    local stale={}
    for peer,meta in pairs(session.peer_meta) do
       if not meta.verified
-            and stamp-(meta.connected_at or stamp)>=HANDSHAKE_TIMEOUT then
+            and stamp-(meta.connected_at or stamp)>=p2p_settings.HANDSHAKE_TIMEOUT then
          stale[#stale+1]=peer
       elseif meta.verified and meta.protocol=="gameplay"
-            and stamp-(meta.last_receive or stamp)>=TRANSPORT_IDLE_TIMEOUT then
+            and stamp-(meta.last_receive or stamp)>=p2p_settings.TRANSPORT_IDLE_TIMEOUT then
          stale[#stale+1]=peer
       end
    end
@@ -3538,7 +3178,7 @@ function session.start ( settings )
    session.settings=session.defaults(settings)
    local ok,host=pcall(
       enet.host_create,"*:"..tostring(session.settings.listen_port),
-      64,CANONICAL_CHANNEL+1)
+      64,p2p_settings.CANONICAL_CHANNEL+1)
    if not ok or not host then
       return nil,"unable to create P2P host: "..tostring(host)
    end
@@ -3620,7 +3260,7 @@ function session.enter ( system_name )
    reset_runtime_tables()
    session.lifecycle_generation=session.lifecycle_generation+1
    session.visit_generation=(session.visit_generation or 0)+1
-   session.visit=random_id()
+   session.visit=p2p_settings.random_id()
       ..string.format("%x",session.visit_generation)
    session.machine:enter(system_name,session.visit)
    session.solo_since=nil
@@ -3730,10 +3370,10 @@ function session.recent_activity ()
    local stamp=now()
    local activity={}
    local fresh=stamp-(session.activity_received or 0)
-      <=2*ACTIVITY_QUERY_INTERVAL
+      <=2*p2p_settings.ACTIVITY_QUERY_INTERVAL
    for _index,entry in ipairs(session.activity or {}) do
       local age=math.max(0,math.floor(stamp-entry.seen))
-      if age<=ACTIVITY_RETENTION then
+      if age<=p2p_settings.ACTIVITY_RETENTION then
          activity[#activity+1]={
             system=entry.system,active=entry.active and fresh,age=age,
          }
@@ -3889,15 +3529,15 @@ function session.update ( _dt )
       election_tick(stamp)
    end
    if stamp>=session.next_manifest then
-      session.next_manifest=stamp+MANIFEST_INTERVAL
+      session.next_manifest=stamp+p2p_settings.MANIFEST_INTERVAL
       if is_host() and has_remote_member() then publish_manifest_tick() end
    end
    if stamp>=session.next_heartbeat then
-      session.next_heartbeat=stamp+HEARTBEAT_INTERVAL
+      session.next_heartbeat=stamp+p2p_settings.HEARTBEAT_INTERVAL
       publish_heartbeat(stamp)
    end
    if stamp>=session.next_world then
-      session.next_world=stamp+WORLD_INTERVAL
+      session.next_world=stamp+p2p_settings.WORLD_INTERVAL
       if is_host() then
          if has_remote_member() then host_world_tick(stamp) end
       elseif session.machine.state=="guest" then
@@ -3905,7 +3545,7 @@ function session.update ( _dt )
       end
    end
    if stamp>=session.next_liveness then
-      session.next_liveness=stamp+LIVENESS_INTERVAL
+      session.next_liveness=stamp+p2p_settings.LIVENESS_INTERVAL
       liveness_tick(stamp)
    end
    if stamp>=session.next_status then
@@ -3913,14 +3553,14 @@ function session.update ( _dt )
       session.indicators:update(stamp)
    end
    if stamp>=session.next_redial then
-      session.next_redial=stamp+REDIAL_INTERVAL
+      session.next_redial=stamp+p2p_settings.REDIAL_INTERVAL
       redial_host_and_members()
    end
-   if is_host() and stamp-session.last_claim>=CLAIM_INTERVAL then
+   if is_host() and stamp-session.last_claim>=p2p_settings.CLAIM_INTERVAL then
       publish_claim()
    end
    if stamp>=session.next_activity then
-      session.next_activity=stamp+ACTIVITY_QUERY_INTERVAL
+      session.next_activity=stamp+p2p_settings.ACTIVITY_QUERY_INTERVAL
       request_activity_from_directory()
    end
 end

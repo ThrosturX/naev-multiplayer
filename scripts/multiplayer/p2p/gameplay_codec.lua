@@ -30,6 +30,155 @@ end
 codec.escape=escape
 codec.unescape=unescape
 
+function codec.pack_state ( record )
+   return table.concat({
+      record.entity,record.x,record.y,record.vx,record.vy,record.dir,
+      record.armour,record.shield,record.stress,record.energy,
+      record.target or "-",record.weapset or 1,record.accel or 0,
+      record.turn or 0,record.reverse or 0,
+      record.primary or 0,record.secondary or 0,
+   },",")
+end
+
+function codec.unpack_state ( packed )
+   local fields={}
+   for value in (packed..","):gmatch("(.-),") do fields[#fields+1]=value end
+   if #fields~=17 or not fields[1]:match("^[%w_%.%-]+$") then return nil end
+   local record={
+      entity=fields[1],
+      x=tonumber(fields[2]),y=tonumber(fields[3]),
+      vx=tonumber(fields[4]),vy=tonumber(fields[5]),
+      dir=tonumber(fields[6]),armour=tonumber(fields[7]),
+      shield=tonumber(fields[8]),stress=tonumber(fields[9]),
+      energy=tonumber(fields[10]),target=fields[11],
+      weapset=tonumber(fields[12]),accel=tonumber(fields[13]),
+      turn=tonumber(fields[14]),reverse=tonumber(fields[15]),
+      primary=tonumber(fields[16]),secondary=tonumber(fields[17]),
+   }
+   for _index,key in ipairs({
+      "x","y","vx","vy","dir","armour","shield","stress","energy",
+      "weapset","accel","turn","reverse","primary","secondary",
+   }) do
+      local value=record[key]
+      if not value or value~=value then return nil end
+   end
+   if math.abs(record.x)>1e9 or math.abs(record.y)>1e9
+         or math.abs(record.vx)>1e7 or math.abs(record.vy)>1e7
+         or math.abs(record.dir)>1e6
+         or record.armour<0 or record.armour>1e9
+         or record.shield<0 or record.shield>1e9
+         or record.stress<0 or record.stress>1e9
+         or record.energy<0 or record.energy>1e9 then return nil end
+   if #record.entity>255 or #record.target>255
+         or (record.target~="-"
+            and not record.target:match("^[%w_%.%-]+$"))
+         or record.weapset<1 or record.weapset>10
+         or record.accel<0 or record.accel>1
+         or record.turn< -1 or record.turn>1
+         or record.reverse<0 or record.reverse>1
+         or record.primary<0 or record.primary>1
+         or record.secondary<0 or record.secondary>1 then return nil end
+   return record
+end
+
+function codec.pack_object_state ( record )
+   return table.concat({
+      record.entity,record.x,record.y,record.vx,record.vy,record.dir,
+      record.armour,record.shield,record.stress,
+   },",")
+end
+
+function codec.unpack_object_state ( packed )
+   local fields={}
+   for value in (packed..","):gmatch("(.-),") do fields[#fields+1]=value end
+   if #fields~=9 or not fields[1]:match("^[%w_%.%-]+$") then return nil end
+   local record={
+      entity=fields[1],
+      x=tonumber(fields[2]),y=tonumber(fields[3]),
+      vx=tonumber(fields[4]),vy=tonumber(fields[5]),
+      dir=tonumber(fields[6]),
+      armour=tonumber(fields[7]),shield=tonumber(fields[8]),
+      stress=tonumber(fields[9]),
+   }
+   for _index,key in ipairs({
+      "x","y","vx","vy","dir","armour","shield","stress",
+   }) do
+      local value=record[key]
+      if not value or value~=value then return nil end
+   end
+   if #record.entity>255
+         or math.abs(record.x)>1e9 or math.abs(record.y)>1e9
+         or math.abs(record.vx)>1e7 or math.abs(record.vy)>1e7
+         or math.abs(record.dir)>1e6
+         or record.armour<0 or record.armour>1e9
+         or record.shield<0 or record.shield>1e9
+         or record.stress<0 or record.stress>1e9 then return nil end
+   return record
+end
+
+function codec.pack_npc_announcement ( entry, record )
+   local description=entry.description
+   if not description then return nil end
+   local slots=description.slots or "-"
+   local outfits=slots~="-" and "-" or (description.outfits or "-")
+   return table.concat({
+      "n",codec.pack_state(record),
+      escape(description.owner),
+      escape(description.origin),
+      escape(description.ship),
+      escape(description.name),
+      escape(description.faction),
+      escape(description.ai),
+      escape(outfits),
+      escape(slots),
+      escape(description.leader or "-"),
+   },",")
+end
+
+function codec.unpack_npc_announcement ( packed )
+   local fields={}
+   for value in (packed..","):gmatch("(.-),") do fields[#fields+1]=value end
+   if #fields~=27 or fields[1]~="n" then return nil end
+   local dynamic={}
+   for index=2,18 do dynamic[#dynamic+1]=fields[index] end
+   local record=codec.unpack_state(table.concat(dynamic,","))
+   if not record then return nil end
+   local decoded={}
+   for index=19,27 do
+      decoded[index]=unescape(fields[index])
+      if not decoded[index] then return nil end
+   end
+   local owner,origin,ship_name,name,faction_name,ai_name,
+      outfits,slots,leader=decoded[19],decoded[20],decoded[21],
+      decoded[22],decoded[23],decoded[24],decoded[25],decoded[26],decoded[27]
+   if #owner<1 or #owner>64 or not owner:match("^[%x]+$")
+         or #origin<1 or #origin>255
+         or not origin:match("^[%w_%.%-]+$")
+         or #ship_name<1 or #ship_name>240
+         or ship_name:find("[%z\1-\31\127]")
+         or #name<1 or #name>240 or name:find("[%z\1-\31\127]")
+         or #faction_name<1 or #faction_name>240
+         or faction_name:find("[%z\1-\31\127]")
+         or #ai_name<1 or #ai_name>240
+         or not ai_name:match("^[%w_%-]+$")
+         or #outfits>12000 or outfits:find("[%z\1-\31\127]")
+         or #slots>12000 or slots:find("[%z\1-\31\127]")
+         or (leader~="-" and (#leader>255
+            or not leader:match("^[%w_%.%-]+$"))) then
+      return nil
+   end
+   return record,{
+      kind="npc",owner=owner,entity=record.entity,origin=origin,
+      ship=ship_name,name=name,faction=faction_name,ai=ai_name,
+      outfits=outfits,slots=slots,leader=leader,
+      x=record.x,y=record.y,vx=record.vx,vy=record.vy,dir=record.dir,
+      armour=record.armour,shield=record.shield,stress=record.stress,
+      energy=record.energy,target=record.target,weapset=record.weapset,
+      accel=record.accel,turn=record.turn,reverse=record.reverse,
+      primary=record.primary,secondary=record.secondary,
+   }
+end
+
 local required = {
    hello={"node","name","endpoint"},
    query={"node","system","visit"},
