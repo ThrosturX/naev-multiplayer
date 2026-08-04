@@ -687,6 +687,35 @@ test("remote owned craft require explicit attack orders", function()
    eq(memory.atk_kill,false)
 end)
 
+test("open-space departures retain a disabled replica", function()
+   local old_system=_G.system
+   _G.system={cur=function ()
+      return {
+         spobs=function () return {} end,
+         jumps=function () return {} end,
+      }
+   end}
+   local disabled=0
+   local effects=0
+   local p={
+      pos=function () return {} end,
+      radius=function () return 50 end,
+      faction=function () return nil end,
+      setNoDeath=function () end,
+      setLeader=function () end,
+      taskClear=function () end,
+      memory=function () return {} end,
+      setDisable=function () disabled=disabled+1 end,
+      effectAdd=function () effects=effects+1; return true end,
+   }
+   local ok,mode=pcall(session._begin_departure,p)
+   _G.system=old_system
+   if not ok then error(mode) end
+   eq(mode,"disabled")
+   eq(disabled,1)
+   eq(effects,0)
+end)
+
 test("session lifecycle resolves extracted settings helpers", function()
    local old_naev,old_player,old_pilot,old_rnd,old_system=
       _G.naev,_G.player,_G.pilot,_G.rnd,_G.system

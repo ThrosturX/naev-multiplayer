@@ -868,10 +868,9 @@ local function begin_departure ( p )
    p:setLeader()
    clear_departure_controls(p)
    if not kind then
-      -- There is no native landing or jump transition to carry the replica
-      -- away. The effect hides it immediately and removes non-player pilots
-      -- when its animation finishes.
-      if p:effectAdd("Wormhole Enter") then return "wormhole" end
+      -- Retain ships that have no plausible exit. Wormhole Enter cannot be a
+      -- generic fallback because Naev removes non-player pilots when that
+      -- effect finishes.
       p:setDisable()
       return "disabled"
    end
@@ -879,6 +878,7 @@ local function begin_departure ( p )
    else p:pushtask("hyperspace",target) end
    return kind
 end
+session._begin_departure=begin_departure
 
 local function reconcile_departures ( owner, entity )
    for id,entry in pairs(session.departures) do
