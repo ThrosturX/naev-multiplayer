@@ -150,6 +150,7 @@ Reward: {reward}]]),{
    mem.reward=rewards[selected]
    mem.player_won=false
    misn.accept()
+   naev.trigger("multiplayer_npc_replication",false)
    misn.setTitle(_("Death Race"))
    misn.setDesc(_("Win a lethal armed race launched from Darkshed."))
    misn.setReward(fmt.credits(mem.reward))
@@ -312,6 +313,7 @@ local function release_countdown_protection ()
 end
 
 local function cleanup ()
+   naev.trigger("multiplayer_npc_replication",true)
    roster_network.stop(false)
    roster_requested=nil
    clear_hook(roster_hook)

@@ -16,6 +16,7 @@ local lf = require "love.filesystem"
 
 local session = {
    running=false,
+   accept_npc_replicas=true,
    peers={},
    endpoints={},
    peer_meta={},
@@ -1155,7 +1156,7 @@ end
 
 local function spawn_entity_manifest ( message )
    if message.owner==session.settings.node_id then return true end
-   if message.kind=="npc" and not pilot.canSpawn() then return true end
+   if message.kind=="npc" and not session.accept_npc_replicas then return true end
    replace_origin_generation(message)
    local container=message.kind=="npc" and session.npcs or session.craft
    local existing=container[message.entity]
@@ -3398,6 +3399,7 @@ end
 function session.start ( settings )
    if session.running then return true end
    clear_local_controls()
+   session.accept_npc_replicas=true
    session.settings=session.defaults(settings)
    local ok,host=pcall(
       enet.host_create,"*:"..tostring(session.settings.listen_port),

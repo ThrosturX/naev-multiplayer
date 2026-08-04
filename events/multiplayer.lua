@@ -29,6 +29,7 @@ local vn = require "vn"
 -- luacheck: globals P2P_SESSION_PILOT_JUMP P2P_SESSION_PILOT_LAND
 -- luacheck: globals P2P_SESSION_PILOT_ATTACKED
 -- luacheck: globals P2P_SESSION_PLAYER_DEATH
+-- luacheck: globals P2P_SESSION_NPC_REPLICATION
 -- luacheck: globals P2P_OBJECT_UPDATE P2P_OBJECT_TIMER
 -- luacheck: globals P2P_OBJECT_CONSUME P2P_OBJECT_DESTROYED
 -- luacheck: globals P2P_ONBOARDING
@@ -178,6 +179,7 @@ local function p2p_start ()
         hook.land("P2P_SESSION_LEAVE"),
         hook.takeoff("P2P_SESSION_ENTER"),
         hook.jumpout("P2P_SESSION_LEAVE"),
+        hook.custom("multiplayer_npc_replication", "P2P_SESSION_NPC_REPLICATION"),
     }
     if not player.isLanded() then
         p2psession.enter(system.cur():nameRaw())
@@ -249,6 +251,9 @@ function P2P_SESSION_PILOT_ATTACKED ( victim, attacker, _damage )
 end
 function P2P_SESSION_PLAYER_DEATH ( p, _attacker )
     p2psession.player_died(p)
+end
+function P2P_SESSION_NPC_REPLICATION ( enabled )
+    p2psession.accept_npc_replicas = enabled ~= false
 end
 function P2P_SESSION_INPUT ( input_name, input_pressed )
     p2psession.input(input_name, input_pressed)
