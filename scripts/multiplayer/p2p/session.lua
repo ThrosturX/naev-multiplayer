@@ -3438,6 +3438,10 @@ function session.stop ()
    for peer in pairs(session.peers) do peer:disconnect_now() end
    session.settings.recent=session.machine.topology:serialize_peers()
    session.machine:stop()
+   -- Dropping the Lua reference leaves the bound socket open until the next
+   -- garbage-collection cycle. Cache reset removes the owning event, so close
+   -- the listener deterministically while its lifecycle is still running.
+   session.host:destroy()
    session.running=false
    session.host=nil
    session.objects=nil

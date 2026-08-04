@@ -693,6 +693,7 @@ test("session lifecycle resolves extracted settings helpers", function()
    local enet=require "enet"
    local old_host_create=enet.host_create
    local cache={}
+   local host_destroyed=false
    _G.naev={
       cache=function () return cache end,
       ticks=function () return 10 end,
@@ -710,6 +711,7 @@ test("session lifecycle resolves extracted settings helpers", function()
    _G.system={cur=function () return {} end}
    enet.host_create=function ()
       return {
+         destroy=function () host_destroyed=true end,
          get_socket_address=function () return "0.0.0.0:62000" end,
          connect=function ()
             return {disconnect_now=function () end}
@@ -733,6 +735,7 @@ test("session lifecycle resolves extracted settings helpers", function()
       old_naev,old_player,old_pilot,old_rnd,old_system
    if not ok then error(err) end
    if not stopped then error(stop_err) end
+   assert(host_destroyed,"session stop did not destroy its ENet listener")
 end)
 
 test("session lifecycle retries transient ENet peer exhaustion", function()
@@ -741,6 +744,7 @@ test("session lifecycle retries transient ENet peer exhaustion", function()
    local enet=require "enet"
    local old_host_create=enet.host_create
    local cache={}
+   local host_destroyed=false
    local connect_attempts=0
    _G.naev={
       cache=function () return cache end,
@@ -759,6 +763,7 @@ test("session lifecycle retries transient ENet peer exhaustion", function()
    _G.system={cur=function () return {} end}
    enet.host_create=function ()
       return {
+         destroy=function () host_destroyed=true end,
          get_socket_address=function () return "0.0.0.0:62000" end,
          connect=function ()
             connect_attempts=connect_attempts+1
@@ -784,6 +789,7 @@ test("session lifecycle retries transient ENet peer exhaustion", function()
       old_naev,old_player,old_pilot,old_rnd,old_system
    if not ok then error(err) end
    if not stopped then error(stop_err) end
+   assert(host_destroyed,"session stop did not destroy its ENet listener")
 end)
 
 test("remote player AI gives owned craft the normal no-kill policy", function()

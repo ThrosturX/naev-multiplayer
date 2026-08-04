@@ -66,6 +66,7 @@ end
 
 function ObjectClient:stop ()
    if self.peer then self.peer:disconnect_now() end
+   if self.host then self.host:destroy() end
    self.host=nil
    self.peer=nil
    self.directory_node=nil

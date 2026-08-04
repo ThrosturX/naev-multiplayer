@@ -49,6 +49,7 @@ local function finish_job ()
    for peer in pairs(job.peers) do
       peer:disconnect_now()
    end
+   job.host:destroy()
    job = nil
 end
 

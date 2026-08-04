@@ -232,6 +232,7 @@ end
 local function stop_runtime ()
    if not runtime then return end
    for peer in pairs(runtime.peers) do peer:disconnect_now() end
+   runtime.host:destroy()
    runtime=nil
    selected_systems={}
 end
