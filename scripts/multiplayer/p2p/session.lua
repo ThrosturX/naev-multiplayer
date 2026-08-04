@@ -49,12 +49,12 @@ local session = {
    npc_announcement_queue={},
    npc_announcement_seen={},
    npc_order={},
-   npc_order_seen={},
+   npc_order_index={},
    npc_cursor=1,
    owned_order={},
    owned_cursor=1,
    priority_queues={{},{},{}},
-   priority_seen={{},{},{}},
+   priority_index={{},{},{}},
    priority_cursor={1,1,1},
    target_interests={},
    interest_entities={},
@@ -618,6 +618,13 @@ local function canonical_copy ( message )
    return copy
 end
 
+local teleport_spfx
+local function show_teleport ( p )
+   teleport_spfx=teleport_spfx or require "luaspfx"
+   teleport_spfx.blink(p,p:pos(),p:vel())
+   p:effectAdd("Blink")
+end
+
 local function reconcile_arrival ( entry, record, limits, stamp )
    local p=entry.pilot
    if not exists(p) then return false end
@@ -638,8 +645,12 @@ local function reconcile_arrival ( entry, record, limits, stamp )
       reconcile.catchup_position(x,y,wanted.x,wanted.y,
          p2p_settings.RECONCILE_DISTANCE,p2p_settings.RECONCILE_POSITION_BIAS)
    if catchup then
+      if not entry.teleport_correction then show_teleport(p) end
+      entry.teleport_correction=true
       p:setPos(vec2.new(catchup_x,catchup_y))
       x,y=catchup_x,catchup_y
+   else
+      entry.teleport_correction=nil
    end
    local corrected_vx,corrected_vy,corrected_dir=
       reconcile.steer_values(
@@ -655,6 +666,7 @@ local function reconcile_arrival ( entry, record, limits, stamp )
    end
    return true
 end
+session._reconcile_arrival=reconcile_arrival
 
 local function apply_health_energy ( entry, record )
    local p=entry.pilot
@@ -835,18 +847,18 @@ local function nearby_transition ( pos, pilot_radius, pilot_faction )
    local current=system.cur()
    if not current then return end
    for _index,spb in ipairs(current:spobs()) do
+      local tags=spb:tags() or {}
       local services=spb:services()
-      local usable=services and services.land
+      -- Wormholes implement landing through their Lua spob handler and only
+      -- advertise the uninhabited service, so their tag is the capability.
+      local usable=tags.wormhole or (services and services.land)
       if usable and pilot_faction then
          local spob_faction=spb:faction()
          if spob_faction and pilot_faction:areEnemies(spob_faction) then
             usable=false
          end
       end
-      if usable then
-         local tags=spb:tags()
-         consider(tags and tags.wormhole and "wormhole" or "land",spb)
-      end
+      if usable then consider(tags.wormhole and "wormhole" or "land",spb) end
    end
    for _index,jmp in ipairs(current:jumps(true)) do consider("jump",jmp) end
    return best_kind,best_target
@@ -880,7 +892,8 @@ local function begin_departure ( p )
 end
 session._begin_departure=begin_departure
 
-local function reconcile_departures ( owner, entity )
+local function reconcile_departures ( owner, entity, arrival_position )
+   local teleported=false
    for id,entry in pairs(session.departures) do
       if entry.owner==owner and (not entity or entry.entity==entity) then
          if not exists(entry.pilot) then
@@ -888,18 +901,65 @@ local function reconcile_departures ( owner, entity )
          elseif entry.mode=="disabled" then
             -- A rejoining participant replaces ships that could not reach an
             -- exit. Ships already landing or jumping are allowed to finish.
-            entry.pilot:setNoDeath(false)
-            entry.pilot:explode()
+            if arrival_position and entry.pilot:pos():dist2(arrival_position)
+                  >p2p_settings.RECONCILE_DISTANCE^2 then
+               show_teleport(entry.pilot)
+               teleported=true
+            end
+            entry.pilot:rm()
             session.departures[id]=nil
          end
       end
    end
+   return teleported
 end
+
+local function ring_add ( order, index, entity )
+   if index[entity] then return false end
+   order[#order+1]=entity
+   index[entity]=#order
+   return true
+end
+
+local function ring_remove ( order, index, entity )
+   local at=index[entity]
+   if not at then return false end
+   local last=#order
+   local replacement=order[last]
+   order[last]=nil
+   index[entity]=nil
+   if at<last then
+      order[at]=replacement
+      index[replacement]=at
+   end
+   return true
+end
+
+local function add_npc_order ( entity )
+   return ring_add(session.npc_order,session.npc_order_index,entity)
+end
+
+local function remove_npc_schedule ( entity )
+   if ring_remove(session.npc_order,session.npc_order_index,entity)
+         and session.npc_cursor>#session.npc_order then
+      session.npc_cursor=1
+   end
+   for class=1,3 do
+      if ring_remove(
+            session.priority_queues[class],session.priority_index[class],entity)
+            and session.priority_cursor[class]>#session.priority_queues[class] then
+         session.priority_cursor[class]=1
+      end
+   end
+end
+session._add_npc_order=add_npc_order
+session._remove_npc_schedule=remove_npc_schedule
 
 local function remove_replica ( entity, removal )
    local entry=session.players[entity] or session.npcs[entity]
       or session.craft[entity]
    if not entry then return false end
+   if entry.kind=="npc" then remove_npc_schedule(entity) end
    if entry.local_id and session.replica_by_local[entry.local_id]==entity then
       session.replica_by_local[entry.local_id]=nil
    end
@@ -1052,10 +1112,10 @@ local function spawn_player_manifest ( message )
       player_faction=faction.dynAdd(nil,"P2P Players","P2P Players",
          {ai="p2p_remote_control",clear_allies=true,clear_enemies=true})
    end
-   reconcile_departures(message.owner)
    local display=session.identities:display_name(message.owner)
       or display_text(message.name)
    local position=vec2.new(message.x or 0,message.y or 0)
+   local teleported=reconcile_departures(message.owner,nil,position)
    local arrival_kind,arrival_origin=nearby_transition(
       position,50,player_faction)
    local native_arrival=arrival_kind=="land" or arrival_kind=="jump"
@@ -1063,7 +1123,8 @@ local function spawn_player_manifest ( message )
       native_arrival and arrival_origin or position,display,
       {ai="p2p_remote_control",naked=true})
    if not p then return false end
-   if not native_arrival then p:effectAdd("Wormhole Exit") end
+   if teleported then p:effectAdd("Blink")
+   elseif not native_arrival then p:effectAdd("Wormhole Exit") end
    p2p_manifest.install_outfits(p,message,not compatible)
    p2p_manifest.install_weapon_sets(p,message.weapsets)
    p:fillAmmo()
@@ -1114,12 +1175,6 @@ local function bind_leader ( entry, leader_id )
    local waiting=session.waiting_leaders[leader_id] or {}
    waiting[entry.entity]=true
    session.waiting_leaders[leader_id]=waiting
-end
-
-local function add_npc_order ( entity )
-   if session.npc_order_seen[entity] then return end
-   session.npc_order_seen[entity]=true
-   session.npc_order[#session.npc_order+1]=entity
 end
 
 function session._apply_owned_craft_ai_policy ( p )
@@ -1180,17 +1235,19 @@ local function spawn_entity_manifest ( message )
       fac=owner_craft_faction(message.owner)
    end
    if not fac then return false end
-   reconcile_departures(message.owner,message.entity)
+   local position=vec2.new(message.x or 0,message.y or 0)
+   local teleported=reconcile_departures(
+      message.owner,message.entity,position)
    local ai=message.kind=="npc"
       and session._remote_ai_profile(message.ai) or "escort"
    -- pilot.add gives positioned pilots an idle_wait task. Some valid AI
    -- profiles do not provide that task, so construct NPC replicas with the
    -- known-safe dummy profile before switching to their transmitted AI.
    local spawn_ai=message.kind=="npc" and "dummy" or ai
-   local p=pilot.add(message.ship,fac,
-      vec2.new(message.x or 0,message.y or 0),message.name,
+   local p=pilot.add(message.ship,fac,position,message.name,
       {ai=spawn_ai,naked=true})
    if not p then return false end
+   if teleported then p:effectAdd("Blink") end
    if ai~=spawn_ai then p:changeAI(ai) end
    p2p_manifest.install_outfits(p,message,false)
    p:setNoDeath(true)
@@ -1226,6 +1283,7 @@ end
 
 local function unregister_authority ( entry )
    remove_authority_hooks(entry)
+   if entry.kind=="npc" then remove_npc_schedule(entry.entity) end
    if session.authority_by_local[entry.local_id]==entry.entity then
       session.authority_by_local[entry.local_id]=nil
    end
@@ -1639,11 +1697,8 @@ local function remember_priority ( entity, class )
    if not entry then return end
    if entry.priority_class==class then return end
    entry.priority_class=class
-   if not session.priority_seen[class][entity] then
-      local queue=session.priority_queues[class]
-      queue[#queue+1]=entity
-      session.priority_seen[class][entity]=true
-   end
+   ring_add(session.priority_queues[class],
+      session.priority_index[class],entity)
 end
 
 local function participant_entity ( entity )
@@ -1653,8 +1708,10 @@ local function participant_entity ( entity )
 end
 
 local function classify_npc_record ( entry, record )
-   if record.target~="-" and participant_entity(record.target)
-         and (record.primary==1 or record.secondary==1) then
+   -- NPC records do not expose Naev's internal weapon trigger state. A current
+   -- participant target is therefore the bounded evidence that this NPC can
+   -- affect participant combat and needs the attacker-priority cadence.
+   if record.target~="-" and participant_entity(record.target) then
       remember_priority(entry.entity,1)
    elseif record.target~="-" and (session.craft[record.target]
          or (session.authority[record.target]
@@ -1664,6 +1721,7 @@ local function classify_npc_record ( entry, record )
       entry.priority_class=nil
    end
 end
+session._classify_npc_record=classify_npc_record
 
 local function select_priority_class ( class, selected )
    local queue=session.priority_queues[class]
@@ -2287,6 +2345,7 @@ local function promote_guest_population ()
    end)
    for _index,item in ipairs(promoted) do
       local old=session.npcs[item.old_entity]
+      remove_npc_schedule(item.old_entity)
       session.npcs[item.old_entity]=nil
       if old and session.replica_by_local[old.local_id]==item.old_entity then
          session.replica_by_local[old.local_id]=nil
@@ -2303,8 +2362,10 @@ local function promote_guest_population ()
          session.settings.node_id,item.origin,item.entity)
    end
    session.promoted_visit=true
-   set_ambient_spawning(false)
+   -- The elected participant is now the sole ambient spawning authority.
+   set_ambient_spawning(true)
 end
+session._promote_guest_population=promote_guest_population
 
 local function demote_host_population ()
    local demoted={}
@@ -2383,10 +2444,23 @@ local function become_host ( failover )
       .." (epoch "..tostring(session.machine.claim)..")")
 end
 
-local function join_host ( old_state )
+local function discard_previous_host_npcs ( owner )
+   if not owner then return end
+   local stale={}
+   for entity,entry in pairs(session.npcs) do
+      if entry.owner==owner and not entry.peer_owned then
+         stale[#stale+1]=entity
+      end
+   end
+   for _index,entity in ipairs(stale) do remove_replica(entity,true) end
+end
+session._discard_previous_host_npcs=discard_previous_host_npcs
+
+local function join_host ( old_state, previous_host, authority_changed )
    reset_delivery_state()
    session.needs_host_join=nil
    if old_state=="host" then demote_host_population() end
+   if authority_changed then discard_previous_host_npcs(previous_host) end
    set_ambient_spawning(false)
    if not session.guest_population_pruned then
       session.guest_population_pruned=true
@@ -2649,12 +2723,14 @@ local function accept_claim_message ( message )
          and session.machine.host==message.node
          and session.needs_host_join) then
       local departed=old_host or session.recovering_from
-      if changed and departed and departed~=message.node then
-         if old_state=="recovering" then announce_player_leave(departed) end
+      if changed and departed then
+         if old_state=="recovering" and departed~=message.node then
+            announce_player_leave(departed)
+         end
          remove_owner_population(departed,false)
       end
       session.recovering_from=nil
-      join_host(old_state)
+      join_host(old_state,departed,changed)
    end
    refresh_time_controls()
    return true
@@ -3339,7 +3415,7 @@ local function reset_runtime_tables ()
    session.npc_announcement_queue={}
    session.npc_announcement_seen={}
    session.npc_order={}
-   session.npc_order_seen={}
+   session.npc_order_index={}
    session.npc_cursor=1
    session.owned_order={}
    session.owned_cursor=1
@@ -3348,7 +3424,7 @@ local function reset_runtime_tables ()
    session.audit_order={}
    session.audit_cursor=1
    session.priority_queues={{},{},{}}
-   session.priority_seen={{},{},{}}
+   session.priority_index={{},{},{}}
    session.priority_cursor={1,1,1}
    session.target_interests={}
    session.interest_entities={}

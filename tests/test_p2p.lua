@@ -211,6 +211,165 @@ test("target and combat interactions admit both local pilots", function()
    session.running,session.machine=old_running,old_machine
 end)
 
+test("NPC participant targets receive attacker priority", function()
+   local previous={
+      settings=session.settings,
+      visit=session.visit,
+      players=session.players,
+      authority=session.authority,
+      npcs=session.npcs,
+      craft=session.craft,
+      priority_queues=session.priority_queues,
+      priority_index=session.priority_index,
+      priority_cursor=session.priority_cursor,
+   }
+   session.settings={node_id="local"}
+   session.visit="visit"
+   session.players={participant={}}
+   session.authority={npc={kind="npc",entity="npc"}}
+   session.npcs={}
+   session.craft={}
+   session.priority_queues={{},{},{}}
+   session.priority_index={{},{},{}}
+   session.priority_cursor={1,1,1}
+   local entry=session.authority.npc
+   session._classify_npc_record(entry,{
+      target="participant",primary=0,secondary=0,
+   })
+   eq(entry.priority_class,1)
+   eq(session.priority_queues[1][1],"npc")
+   session.settings=previous.settings
+   session.visit=previous.visit
+   session.players=previous.players
+   session.authority=previous.authority
+   session.npcs=previous.npcs
+   session.craft=previous.craft
+   session.priority_queues=previous.priority_queues
+   session.priority_index=previous.priority_index
+   session.priority_cursor=previous.priority_cursor
+end)
+
+test("removed NPCs leave bounded scheduler rings", function()
+   local previous={
+      npc_order=session.npc_order,
+      npc_order_index=session.npc_order_index,
+      npc_cursor=session.npc_cursor,
+      priority_queues=session.priority_queues,
+      priority_index=session.priority_index,
+      priority_cursor=session.priority_cursor,
+   }
+   session.npc_order={}
+   session.npc_order_index={}
+   session.npc_cursor=3
+   session.priority_queues={{"old"},{},{"old"}}
+   session.priority_index={{old=1},{},{old=1}}
+   session.priority_cursor={2,1,2}
+   assert(session._add_npc_order("old"))
+   assert(session._add_npc_order("live"))
+   assert(not session._add_npc_order("old"))
+   session._remove_npc_schedule("old")
+   eq(#session.npc_order,1)
+   eq(session.npc_order[1],"live")
+   eq(session.npc_order_index.old,nil)
+   eq(session.npc_order_index.live,1)
+   eq(session.npc_cursor,1)
+   eq(#session.priority_queues[1],0)
+   eq(#session.priority_queues[3],0)
+   eq(session.priority_index[1].old,nil)
+   eq(session.priority_index[3].old,nil)
+   eq(session.priority_cursor[1],1)
+   eq(session.priority_cursor[3],1)
+   session.npc_order=previous.npc_order
+   session.npc_order_index=previous.npc_order_index
+   session.npc_cursor=previous.npc_cursor
+   session.priority_queues=previous.priority_queues
+   session.priority_index=previous.priority_index
+   session.priority_cursor=previous.priority_cursor
+end)
+
+test("host changes discard old ambient replicas", function()
+   local previous={
+      players=session.players,
+      npcs=session.npcs,
+      craft=session.craft,
+      replica_by_local=session.replica_by_local,
+      origins=session.origins,
+      manifest_cache=session.manifest_cache,
+      npc_order=session.npc_order,
+      npc_order_index=session.npc_order_index,
+      npc_cursor=session.npc_cursor,
+      priority_queues=session.priority_queues,
+      priority_index=session.priority_index,
+      priority_cursor=session.priority_cursor,
+   }
+   local exploded=0
+   local function replica ()
+      return {
+         exists=function () return true end,
+         explode=function () exploded=exploded+1 end,
+      }
+   end
+   session.players={}
+   session.npcs={
+      ambient={kind="npc",owner="old",entity="ambient",
+         origin="origin.ambient",local_id="1",pilot=replica(),
+         peer_owned=false},
+      guest_owned={kind="npc",owner="old",entity="guest_owned",
+         origin="origin.guest",local_id="2",pilot=replica(),
+         peer_owned=true},
+   }
+   session.craft={}
+   session.replica_by_local={
+      ["1"]="ambient",["2"]="guest_owned",
+   }
+   session.origins={
+      ["origin.ambient"]="ambient",["origin.guest"]="guest_owned",
+   }
+   session.manifest_cache={}
+   session.npc_order={"ambient","guest_owned"}
+   session.npc_order_index={ambient=1,guest_owned=2}
+   session.npc_cursor=1
+   session.priority_queues={{},{},{}}
+   session.priority_index={{},{},{}}
+   session.priority_cursor={1,1,1}
+   session._discard_previous_host_npcs("old")
+   eq(exploded,1)
+   eq(session.npcs.ambient,nil)
+   assert(session.npcs.guest_owned)
+   eq(#session.npc_order,1)
+   eq(session.npc_order[1],"guest_owned")
+   session.players=previous.players
+   session.npcs=previous.npcs
+   session.craft=previous.craft
+   session.replica_by_local=previous.replica_by_local
+   session.origins=previous.origins
+   session.manifest_cache=previous.manifest_cache
+   session.npc_order=previous.npc_order
+   session.npc_order_index=previous.npc_order_index
+   session.npc_cursor=previous.npc_cursor
+   session.priority_queues=previous.priority_queues
+   session.priority_index=previous.priority_index
+   session.priority_cursor=previous.priority_cursor
+end)
+
+test("elected hosts resume ambient spawning", function()
+   local old_pilot=_G.pilot
+   local old_npcs=session.npcs
+   local old_ambient=session.ambient_spawning
+   local old_promoted=session.promoted_visit
+   local enabled
+   _G.pilot={toggleSpawn=function ( value ) enabled=value end}
+   session.npcs={}
+   session.ambient_spawning=false
+   session._promote_guest_population()
+   eq(enabled,true)
+   eq(session.ambient_spawning,true)
+   _G.pilot=old_pilot
+   session.npcs=old_npcs
+   session.ambient_spawning=old_ambient
+   session.promoted_visit=old_promoted
+end)
+
 test("player death tombstones clear replaceable state", function()
    local old_settings,old_visit=session.settings,session.visit
    local old_dead,old_states=session.dead_players,session.player_states
@@ -486,6 +645,43 @@ test("capped reconciliation", function()
    eq(stationary_offset.vx,150); eq(stationary_offset.vy,-75)
 end)
 
+test("hard reconciliation blinks once per correction episode", function()
+   local old_vec2=_G.vec2
+   local old_luaspfx=package.loaded.luaspfx
+   local blinks,effects=0,0
+   package.loaded.luaspfx={blink=function () blinks=blinks+1 end}
+   _G.vec2={new=function ( x, y )
+      return {x=x,y=y,get=function ( self ) return self.x,self.y end}
+   end}
+   local px,py=0,0
+   local vx,vy=0,0
+   local p={
+      exists=function () return true end,
+      pos=function () return {get=function () return px,py end} end,
+      vel=function () return {get=function () return vx,vy end} end,
+      dir=function () return 0 end,
+      effectAdd=function () effects=effects+1 end,
+      setPos=function ( _self, value ) px,py=value:get() end,
+      setVel=function ( _self, value ) vx,vy=value:get() end,
+      setDir=function () end,
+   }
+   local entry={pilot=p}
+   local record={x=10000,y=0,vx=0,vy=0,dir=0}
+   local ok,err=pcall(function ()
+      session._reconcile_arrival(entry,record,{},1)
+      session._reconcile_arrival(entry,record,{},2)
+      session._reconcile_arrival(entry,record,{},3)
+      session._reconcile_arrival(entry,record,{},4)
+      record.x=12000
+      session._reconcile_arrival(entry,record,{},5)
+   end)
+   _G.vec2=old_vec2
+   package.loaded.luaspfx=old_luaspfx
+   if not ok then error(err) end
+   eq(blinks,2)
+   eq(effects,2)
+end)
+
 test("autonav thrust is inferred beyond keyboard state", function()
    local previous_player=_G.player
    _G.player={autonav=function () return true end}
@@ -714,6 +910,48 @@ test("open-space departures retain a disabled replica", function()
    eq(mode,"disabled")
    eq(disabled,1)
    eq(effects,0)
+end)
+
+test("wormhole departures use Lua landing without a land service", function()
+   local old_system=_G.system
+   local wormhole={
+      tags=function () return {wormhole=true} end,
+      services=function () return {uninhabited=true} end,
+      faction=function () return nil end,
+      radius=function () return 100 end,
+      pos=function ()
+         return {dist2=function () return 0 end}
+      end,
+   }
+   _G.system={cur=function ()
+      return {
+         spobs=function () return {wormhole} end,
+         jumps=function () return {} end,
+      }
+   end}
+   local disabled=0
+   local task_name,task_target
+   local p={
+      pos=function () return {} end,
+      radius=function () return 50 end,
+      faction=function () return nil end,
+      setNoDeath=function () end,
+      setLeader=function () end,
+      taskClear=function () end,
+      memory=function () return {} end,
+      setDisable=function () disabled=disabled+1 end,
+      pushtask=function ( _self, name, target )
+         task_name=name
+         task_target=target
+      end,
+   }
+   local ok,mode=pcall(session._begin_departure,p)
+   _G.system=old_system
+   if not ok then error(mode) end
+   eq(mode,"wormhole")
+   eq(task_name,"land")
+   eq(task_target,wormhole)
+   eq(disabled,0)
 end)
 
 test("session lifecycle resolves extracted settings helpers", function()

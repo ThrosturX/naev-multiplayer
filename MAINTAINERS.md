@@ -299,7 +299,8 @@ When a guest is elected:
 - its replica tasks are cleared and no-death is removed;
 - NPCs owned by still-connected guests remain guest-authoritative and the new
   host continues relaying their records;
-- ambient spawning remains disabled for the rest of that system visit;
+- ambient spawning resumes only on the elected host, which becomes the new
+  spawning authority for the rest of that system visit;
 - entities receive the new authority generation and epoch;
 - other peers discard the departed host's population and rebuild it from the
   new authority's complete round-robin NPC announcements.
