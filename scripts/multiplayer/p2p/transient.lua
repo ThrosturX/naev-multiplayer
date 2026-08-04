@@ -491,6 +491,9 @@ function transient.update ()
       end
 
       if processed >= MAX_EVENTS_PER_UPDATE then break end
+      -- A receive handler can complete the job and destroy its ENet host.
+      -- Never service the captured userdata again after that teardown.
+      if not job or job.host ~= current_host then return end
       event = current_host:service(0)
    end
 
