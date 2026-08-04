@@ -7,8 +7,8 @@
   <size>medium</size>
   <mass>40</mass>
   <price>600000</price>
-  <description>A passive long-range receiver that attempts to tap into communications originating outside of the solar system.</description>
-  <desc_extra>Discretely monitors subspace frequencies containing chatter from up to eight solar systems at a time.</desc_extra>
+  <description>A passive long-range receiver that attempts to tap into communications originating outside of the star system.</description>
+  <desc_extra>Discretely monitors subspace frequencies containing chatter from up to eight star systems at a time.</desc_extra>
   <gfx_store>pipeline_conduit.avif</gfx_store>
   <limit>communication_package</limit>
  </general>

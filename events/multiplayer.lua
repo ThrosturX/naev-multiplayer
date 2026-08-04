@@ -658,7 +658,7 @@ local function multiplayer_settings ()
     end)
     luatk.newText(wdw,0,10,w,20,_("Multiplayer Settings"),nil,"centre")
     local intro = luatk.newText(wdw,20,40,w-40,nil,
-        _("World sharing allows players to connect to each other and share the same solar system. You can still do everything like in single-player; it is an augmented experience.\n\nA player may be unable to join a shared system when one of their missions or events claims that system."))
+        _("World sharing allows players to connect to each other and share the same star system. You can still do everything like in single-player; it is an augmented experience.\n\nA player may be unable to join a shared system when one of their missions or events claims that system."))
 
     local digit_whitelist = {}
     for digit=0,9 do digit_whitelist[tostring(digit)] = true end

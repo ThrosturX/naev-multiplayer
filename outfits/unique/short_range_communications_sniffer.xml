@@ -7,7 +7,7 @@
   <size>small</size>
   <mass>1</mass>
   <price>350000</price>
-  <description>A passive receiver that attempts to tap into communications originating outside of the solar system.</description>
+  <description>A passive receiver that attempts to tap into communications originating outside of the star system.</description>
   <desc_extra>Passively monitors subspace frequencies containing chatter within two jumps.</desc_extra>
   <gfx_store>charge_conduit.avif</gfx_store>
   <limit>communication_package</limit>
