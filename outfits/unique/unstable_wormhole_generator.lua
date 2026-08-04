@@ -48,6 +48,11 @@ function ontoggle ( p, po, on, natural )
       player.msg("#r".._("Unstable wormholes can only be opened in space.").."#0")
       return false
    end
+   local source=system.cur()
+   if not naev.claimTest(source) then
+      player.msg("#r".._("The device doesn't seem to be working at the moment.").."#0")
+      return false
+   end
    local cache=naev.cache()
    local config=cache.multiplayer_p2p_config
    if type(config)~="table" or not config.enabled then
@@ -74,7 +79,6 @@ function ontoggle ( p, po, on, natural )
       return false
    end
 
-   local source=system.cur()
    local candidates=destination_candidates(source,maximum_jumps)
    if #candidates==0 then
       player.msg("#r".._("No suitable wormhole destination is within fuel range.").."#0")

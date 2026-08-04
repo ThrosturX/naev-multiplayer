@@ -842,7 +842,10 @@ local function nearby_transition ( pos, pilot_radius, pilot_faction )
             usable=false
          end
       end
-      if usable then consider("land",spb) end
+      if usable then
+         local tags=spb:tags()
+         consider(tags and tags.wormhole and "wormhole" or "land",spb)
+      end
    end
    for _index,jmp in ipairs(current:jumps(true)) do consider("jump",jmp) end
    return best_kind,best_target
@@ -864,10 +867,14 @@ local function begin_departure ( p )
    p:setLeader()
    clear_departure_controls(p)
    if not kind then
+      -- There is no native landing or jump transition to carry the replica
+      -- away. The effect hides it immediately and removes non-player pilots
+      -- when its animation finishes.
+      if p:effectAdd("Wormhole Enter") then return "wormhole" end
       p:setDisable()
       return "disabled"
    end
-   if kind=="land" then p:pushtask("land",target)
+   if kind=="land" or kind=="wormhole" then p:pushtask("land",target)
    else p:pushtask("hyperspace",target) end
    return kind
 end
@@ -1050,16 +1057,19 @@ local function spawn_player_manifest ( message )
    local position=vec2.new(message.x or 0,message.y or 0)
    local arrival_kind,arrival_origin=nearby_transition(
       position,50,player_faction)
-   local p=pilot.add(proxy_ship,player_faction,arrival_origin or position,display,
+   local native_arrival=arrival_kind=="land" or arrival_kind=="jump"
+   local p=pilot.add(proxy_ship,player_faction,
+      native_arrival and arrival_origin or position,display,
       {ai="p2p_remote_control",naked=true})
    if not p then return false end
+   if not native_arrival then p:effectAdd("Wormhole Exit") end
    p2p_manifest.install_outfits(p,message,not compatible)
    p2p_manifest.install_weapon_sets(p,message.weapsets)
    p:fillAmmo()
    p:setNoDeath(true)
    -- Native takeoff and jump-in setup owns initial motion. Subsequent state
    -- packets converge the proxy on the participant's real ship.
-   if not arrival_kind then
+   if not native_arrival then
       if message.vx and message.vy then p:setVel(vec2.new(message.vx,message.vy)) end
       if message.dir then p:setDir(message.dir) end
    end
