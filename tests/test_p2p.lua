@@ -11,11 +11,24 @@ local identity=require "multiplayer.p2p.identity"
 package.preload["ai.core.setup"]=function()
    return {setup=function () end}
 end
+package.preload["love.filesystem"]=function()
+   return {getInfo=function ( path, kind )
+      if kind=="file" and (path=="ai/dummy.lua" or path=="ai/escort.lua") then
+         return {type="file"}
+      end
+   end}
+end
 local session=require "multiplayer.p2p.session"
 
 local tests={}
 local function test(name, fn) tests[#tests+1]={name,fn} end
 local function eq(a,b) assert(a==b, tostring(a).." != "..tostring(b)) end
+
+test("remote AI profiles fall back when unavailable", function()
+   eq(session._remote_ai_profile("escort"),"escort")
+   eq(session._remote_ai_profile("escort_guardian"),"dummy")
+   eq(session._remote_ai_profile(nil),"dummy")
+end)
 
 test("directory protocol escaping and validation", function()
    local packet=assert(codec.encode{

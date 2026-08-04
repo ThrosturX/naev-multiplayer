@@ -12,6 +12,7 @@ local ObjectRuntime = require "multiplayer.p2p.object_runtime"
 local communications = require "multiplayer.p2p.communications"
 local enet = require "enet"
 local ai_setup = require "ai.core.setup"
+local lf = require "love.filesystem"
 
 local session = {
    running=false,
@@ -1134,6 +1135,14 @@ function session._log_replica_failure ( message )
       ..", AI "..display_text(message.ai or "-")..")")
 end
 
+function session._remote_ai_profile ( ai_name )
+   if type(ai_name)=="string"
+         and lf.getInfo("ai/"..ai_name..".lua","file") then
+      return ai_name
+   end
+   return "dummy"
+end
+
 local function spawn_entity_manifest ( message )
    if message.owner==session.settings.node_id then return true end
    replace_origin_generation(message)
@@ -1160,7 +1169,8 @@ local function spawn_entity_manifest ( message )
    end
    if not fac then return false end
    reconcile_departures(message.owner,message.entity)
-   local ai=message.kind=="npc" and message.ai or "escort"
+   local ai=message.kind=="npc"
+      and session._remote_ai_profile(message.ai) or "escort"
    -- pilot.add gives positioned pilots an idle_wait task. Some valid AI
    -- profiles do not provide that task, so construct NPC replicas with the
    -- known-safe dummy profile before switching to their transmitted AI.
@@ -2253,7 +2263,7 @@ local function promote_guest_population ()
          promoted[#promoted+1]={
             old_entity=old_entity,pilot=entry.pilot,kind="npc",entity=entity,
             origin=entry.origin,
-            ai=entry.description.ai,
+            ai=session._remote_ai_profile(entry.description.ai),
             depth=pilot_leader_depth(entry.pilot),
             id=tonumber(entry.local_id) or math.huge,
          }
