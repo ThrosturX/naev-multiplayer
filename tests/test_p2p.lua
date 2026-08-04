@@ -694,6 +694,8 @@ test("session lifecycle resolves extracted settings helpers", function()
    local old_host_create=enet.host_create
    local cache={}
    local host_destroyed=false
+   local graceful_disconnects=0
+   local flushes=0
    _G.naev={
       cache=function () return cache end,
       ticks=function () return 10 end,
@@ -714,9 +716,15 @@ test("session lifecycle resolves extracted settings helpers", function()
          destroy=function () host_destroyed=true end,
          get_socket_address=function () return "0.0.0.0:62000" end,
          connect=function ()
-            return {disconnect_now=function () end}
+            return {
+               disconnect_now=function () end,
+               disconnect_later=function ()
+                  graceful_disconnects=graceful_disconnects+1
+               end,
+            }
          end,
          broadcast=function () end,
+         flush=function () flushes=flushes+1 end,
          service=function () return nil end,
       }
    end
@@ -736,6 +744,8 @@ test("session lifecycle resolves extracted settings helpers", function()
    if not ok then error(err) end
    if not stopped then error(stop_err) end
    assert(host_destroyed,"session stop did not destroy its ENet listener")
+   eq(graceful_disconnects,1)
+   eq(flushes,1)
 end)
 
 test("session lifecycle retries transient ENet peer exhaustion", function()

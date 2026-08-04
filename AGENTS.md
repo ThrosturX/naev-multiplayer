@@ -1,5 +1,9 @@
 # Repository Guidelines
 
+Before making architectural changes, read `architect_note.md`. Treat it as
+read-only documentation of the architect's vision, and explicitly notify the
+user before implementing anything that diverges from it.
+
 ## Project Structure
 
 This repository is an experimental multiplayer plugin for Naev. The persistent

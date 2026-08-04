@@ -1155,6 +1155,7 @@ end
 
 local function spawn_entity_manifest ( message )
    if message.owner==session.settings.node_id then return true end
+   if message.kind=="npc" and not pilot.canSpawn() then return true end
    replace_origin_generation(message)
    local container=message.kind=="npc" and session.npcs or session.craft
    local existing=container[message.entity]
@@ -3097,8 +3098,16 @@ local function disconnect_gameplay_peers ()
       if meta.protocol=="gameplay" then peers[#peers+1]=peer end
    end
    for _index,peer in ipairs(peers) do
-      reject_peer(peer,"system lifecycle reset",true)
+      local endpoint=session.peers[peer]
+      -- session.leave queues the reliable leave control first. Let ENet drain
+      -- that packet before disconnecting so remote replicas can begin their
+      -- departure instead of waiting for transport liveness to expire.
+      peer:disconnect_later()
+      session.peers[peer]=nil
+      session.peer_meta[peer]=nil
+      if endpoint then session.endpoints[endpoint]=nil end
    end
+   if #peers>0 then session.host:flush() end
 end
 
 local function service_transport ( stamp )

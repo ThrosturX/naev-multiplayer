@@ -196,9 +196,10 @@ local function translated_gates ( track )
 end
 
 local function external_ship ( name )
-   if type(name)~="string" or name=="" then return nil end
-   local ok,value=pcall(ship.get,name)
-   if ok then return value end
+   if type(name)~="string" or name=="" or not ship.exists(name) then
+      return nil
+   end
+   return ship.get(name)
 end
 
 local function validate_profile ( profile, division )
