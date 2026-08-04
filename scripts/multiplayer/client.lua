@@ -82,6 +82,7 @@ client.start = function( bindaddr, bindport, localport )
         return "PLAYER_NOT_LANDED"
     end
 
+    client.stop()
     client.host = enet.host_create("*:" .. tostring(localport))
     if not client.host then
         return "NO_CLIENT_HOST"
@@ -90,6 +91,8 @@ client.start = function( bindaddr, bindport, localport )
     client.conport = bindport
     client.server = client.host:connect( fmt.f("{addr}:{port}", { addr = bindaddr, port = bindport } ) )
     if not client.server then
+        client.host:destroy()
+        client.host = nil
         return "NO_CLIENT_SERVER"
     end
     -- WE ARE GOING IN
@@ -124,6 +127,17 @@ client.start = function( bindaddr, bindport, localport )
     }
 
     was_connected = true
+end
+
+client.stop = function()
+    if client.server then client.server:disconnect_now() end
+    if client.host then client.host:destroy() end
+    if client.hook then hook.rm(client.hook) end
+    if client.inputhook then hook.rm(client.inputhook) end
+    client.server = nil
+    client.host = nil
+    client.hook = nil
+    client.inputhook = nil
 end
 
 

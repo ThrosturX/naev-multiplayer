@@ -20,6 +20,7 @@ end
 
 function network.stop ( clear_cache )
    if job and job.peer then job.peer:disconnect_now() end
+   if job and job.host then job.host:destroy() end
    job=nil
    if clear_cache then naev.cache().multiplayer_contestants=nil end
 end
@@ -118,7 +119,10 @@ function network.start ( config, track )
    local host=enet.host_create("*:0")
    if not host then return nil,"unable to create contestant client" end
    local peer=host:connect(config.directory)
-   if not peer then return nil,"unable to connect contestant directory" end
+   if not peer then
+      host:destroy()
+      return nil,"unable to connect contestant directory"
+   end
    job={
       host=host,
       peer=peer,
@@ -157,6 +161,7 @@ function network.update ()
          network.stop(true)
       end
       if processed>=MAX_EVENTS_PER_UPDATE then break end
+      if job~=current then return job~=nil end
       event=current.host:service(0)
    end
    if job==current and now()>=current.deadline then network.stop(true) end

@@ -104,9 +104,10 @@ end
 
 function ObjectClient:update ()
    if not self.host then return false end
+   local current_host=self.host
    local processed=0
-   local event=self.host:service(0)
-   while event do
+   local event=current_host:service(0)
+   while event and self.host==current_host do
       processed=processed+1
       if event.type=="connect" then
          if not self.peer then self.peer=event.peer end
@@ -131,8 +132,10 @@ function ObjectClient:update ()
          self:disconnect()
       end
       if processed>=MAX_EVENTS then break end
-      event=self.host:service(0)
+      if self.host~=current_host then return false end
+      event=current_host:service(0)
    end
+   if self.host~=current_host then return false end
    if self.peer and not self.verified
          and self.now()-self.last_connect>=HANDSHAKE_TIMEOUT then
       self:invalidate()

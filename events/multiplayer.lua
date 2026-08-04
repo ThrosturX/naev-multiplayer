@@ -17,6 +17,8 @@ local mplayerclient = require "multiplayer.client"
 local mplayerserver = require "multiplayer.server"
 local p2psession    = require "multiplayer.p2p.session"
 local space_objects = require "multiplayer.p2p.space_objects"
+local distress      = require "multiplayer.distress"
+local pod_network   = require "multiplayer.pod_racing_network"
 local luatk         = require "luatk"
 local vn = require "vn"
 -- luacheck: globals load startMultiplayerServer resetMultiplayerCache
@@ -299,6 +301,10 @@ end
 
 function resetMultiplayerCache ()
     p2p_stop()
+    distress.stop()
+    pod_network.stop(false)
+    mplayerclient.stop()
+    mplayerserver.stop()
     player.infoButtonUnregister(mpbtn)
     mpbtn = nil
     evt.finish(false)

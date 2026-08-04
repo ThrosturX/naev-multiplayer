@@ -3092,9 +3092,11 @@ local function disconnect_gameplay_peers ()
 end
 
 local function service_transport ( stamp )
+   local current_host=session.host
    local processed=0
-   while processed<p2p_settings.MAX_EVENTS_PER_FRAME do
-      local event=session.host:service(0)
+   while session.running and session.host==current_host
+         and processed<p2p_settings.MAX_EVENTS_PER_FRAME do
+      local event=current_host:service(0)
       if not event then break end
       processed=processed+1
       if event.type=="connect" then

@@ -574,7 +574,9 @@ server.start = function( port )
         return "ERROR_SERVER_LANDED"
     end
     if not port then port = 6789 end
+    server.stop()
     server.host = enet.host_create( fmt.f( "*:{port}", { port = port } ) )
+    if not server.host then return "ERROR_SERVER_HOST" end
     local message = "SERVER IS RUNNING ON: " .. server.host:get_socket_address()
     print( message )
     player.omsgAdd( "#b"..message.."#0" )
@@ -611,6 +613,17 @@ server.start = function( port )
             }
         )
     end
+end
+
+server.stop = function()
+    if server.host then server.host:destroy() end
+    for _index, field in ipairs{
+        "hook", "pinghook", "chill", "round", "inputhook",
+    } do
+        if server[field] then hook.rm(server[field]) end
+        server[field] = nil
+    end
+    server.host = nil
 end
 
 local FPS = 60

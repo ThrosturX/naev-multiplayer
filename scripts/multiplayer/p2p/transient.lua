@@ -430,8 +430,11 @@ function transient.start ( params )
       or _("Unable to initialize the transmission.") end
 
    local peer = host:connect(params.directory)
-   if not peer then return nil,params.connect_error
-      or _("Unable to contact the multiplayer directory.") end
+   if not peer then
+      host:destroy()
+      return nil,params.connect_error
+         or _("Unable to contact the multiplayer directory.")
+   end
 
    job = {
       host = host,

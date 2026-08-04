@@ -794,6 +794,7 @@ function communications.update ( settings )
       elseif event.type=="receive" then handle_receive(event.peer,event.data)
       elseif event.type=="disconnect" then handle_disconnect(event.peer) end
       if processed>=MAX_EVENTS_PER_UPDATE then break end
+      if runtime~=current_runtime then return end
       event=current_runtime.host:service(0)
    end
    if runtime~=current_runtime then return end

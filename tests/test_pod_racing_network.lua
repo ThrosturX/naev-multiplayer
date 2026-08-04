@@ -10,6 +10,8 @@ player={name=function() return "Local Captain" end}
 
 local events={}
 local sent={}
+local destroyed=false
+local connect_peer
 local peer={
    send=function(_self,packet)
       sent[#sent+1]=packet
@@ -17,11 +19,13 @@ local peer={
    disconnect_now=function() end,
 }
 local host={
-   connect=function() return peer end,
+   connect=function() return connect_peer end,
    get_socket_address=function() return "0.0.0.0:12345" end,
    service=function()
+      assert(not destroyed,"serviced a destroyed ENet host")
       return table.remove(events,1)
    end,
+   destroy=function() destroyed=true end,
 }
 package.preload.enet=function()
    return {host_create=function() return host end}
@@ -40,6 +44,7 @@ end
 
 local codec=require "multiplayer.p2p.codec"
 local network=require "multiplayer.pod_racing_network"
+connect_peer=peer
 assert(not network.start{
    enabled=true,directory="127.0.0.1:60939",node_id="a1",captain="Stale Captain",
 })
@@ -92,9 +97,11 @@ assert(cache.multiplayer_contestants.directory=="127.0.0.1:60939")
 assert(cache.multiplayer_contestants.track=="death_knot")
 assert(cache.multiplayer_contestants.divisions[1][1].name=="Remote")
 assert(#cache.multiplayer_contestants.divisions[2]==0)
+assert(destroyed,"completed roster transport did not destroy its ENet host")
 
 -- Omitting the track retains the original generic request shape.
 local previous=#sent
+destroyed=false
 assert(network.start{
    enabled=true,directory="127.0.0.1:60939",node_id="a1",
    captain="Local Captain",
@@ -112,5 +119,13 @@ for index=previous+1,#sent do
    end
 end
 network.stop(true)
+
+destroyed=false
+connect_peer=nil
+assert(not network.start{
+   enabled=true,directory="127.0.0.1:60939",node_id="a1",
+   captain="Local Captain",
+})
+assert(destroyed,"failed roster connection leaked its ENet host")
 
 print("ok - death race contestant network")
