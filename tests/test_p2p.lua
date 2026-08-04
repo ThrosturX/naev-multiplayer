@@ -24,6 +24,23 @@ local tests={}
 local function test(name, fn) tests[#tests+1]={name,fn} end
 local function eq(a,b) assert(a==b, tostring(a).." != "..tostring(b)) end
 
+test("node identity survives removable event state", function()
+   local node,store=p2p_settings.resolve_node_id("a1",nil)
+   eq(node,"a1")
+   eq(store,true)
+
+   node,store=p2p_settings.resolve_node_id("a1","b2")
+   eq(node,"b2")
+   eq(store,false)
+
+   local old_rnd=_G.rnd
+   _G.rnd={rnd=function () return 1 end}
+   node,store=p2p_settings.resolve_node_id("not-a-node","also-invalid")
+   _G.rnd=old_rnd
+   eq(node,"00000001000000010000000100000001")
+   eq(store,true)
+end)
+
 test("remote AI profiles fall back when unavailable", function()
    eq(session._remote_ai_profile("escort"),"escort")
    eq(session._remote_ai_profile("escort_guardian"),"dummy")

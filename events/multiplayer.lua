@@ -38,10 +38,21 @@ local function pick_one ( ipair )
     return ipair[ rnd.rnd( 1, #ipair ) ]
 end
 
+local P2P_NODE_ID_VAR = "multiplayer_p2p_node_id"
+
+local function p2p_persistent_defaults ( settings )
+    settings = settings or {}
+    local node_id, store = p2psession.resolve_node_id(
+        settings.node_id, var.peek(P2P_NODE_ID_VAR))
+    settings.node_id = node_id
+    if store then var.push(P2P_NODE_ID_VAR, node_id) end
+    return p2psession.defaults(settings)
+end
+
 function create ()
     mem.multiplayer = {
         servers = {},
-        p2p = p2psession.defaults(),
+        p2p = p2p_persistent_defaults(),
         p2p_hook_ids = {},
     }
     hook.load("load")
@@ -872,7 +883,7 @@ function load()
             servers = {},
         }
     end
-    mem.multiplayer.p2p = p2psession.defaults(mem.multiplayer.p2p)
+    mem.multiplayer.p2p = p2p_persistent_defaults(mem.multiplayer.p2p)
     mem.multiplayer.p2p_hook_ids = mem.multiplayer.p2p_hook_ids or {}
     p2p_publish_config()
     evt.save()

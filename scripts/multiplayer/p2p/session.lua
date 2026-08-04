@@ -99,6 +99,7 @@ end
 
 session.normalize_endpoint=p2p_settings.normalize_endpoint
 session.defaults=p2p_settings.defaults
+session.resolve_node_id=p2p_settings.resolve_node_id
 
 function session.get_settings ()
    return session.settings

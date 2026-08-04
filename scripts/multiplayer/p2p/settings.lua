@@ -60,6 +60,22 @@ end
 
 settings.random_id=random_id
 
+local function valid_node_id ( value )
+   return type(value)=="string" and #value>=1 and #value<=64
+      and value:match("^[%x]+$")~=nil
+end
+
+settings.valid_node_id=valid_node_id
+
+-- Prefer the save-global identity, migrate a valid legacy event identity, or
+-- create a new one as a last resort. The boolean tells the persistence adapter
+-- that the returned value must be written to save-global storage.
+function settings.resolve_node_id ( current, persisted )
+   if valid_node_id(persisted) then return persisted,false end
+   if valid_node_id(current) then return current,true end
+   return random_id(),true
+end
+
 function settings.normalize_endpoint ( endpoint )
    if type(endpoint)~="string" then return nil end
    endpoint=endpoint:match("^%s*(.-)%s*$")
@@ -89,7 +105,7 @@ function settings.defaults ( value )
    end
    value.bootstrap=bootstrap
    value.recent=value.recent or {}
-   value.node_id=value.node_id or random_id()
+   if not valid_node_id(value.node_id) then value.node_id=random_id() end
    return value
 end
 
