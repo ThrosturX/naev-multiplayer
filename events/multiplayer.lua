@@ -28,7 +28,7 @@ local vn = require "vn"
 -- luacheck: globals P2P_SESSION_PILOT_DEFERRED P2P_SESSION_PILOT_DEATH
 -- luacheck: globals P2P_SESSION_PILOT_JUMP P2P_SESSION_PILOT_LAND
 -- luacheck: globals P2P_SESSION_PILOT_ATTACKED
--- luacheck: globals P2P_SESSION_PLAYER_DEATH
+-- luacheck: globals P2P_SESSION_PLAYER_DEATH P2P_SESSION_PLAYER_FINAL_DEATH
 -- luacheck: globals P2P_SESSION_NPC_REPLICATION
 -- luacheck: globals P2P_OBJECT_UPDATE P2P_OBJECT_TIMER
 -- luacheck: globals P2P_OBJECT_CONSUME P2P_OBJECT_DESTROYED
@@ -79,6 +79,7 @@ local function p2p_install_pilot_hooks ()
         hook.pilot(nil, "attacked", "P2P_SESSION_PILOT_ATTACKED"),
         hook.pilot(player.pilot(), "disable", "P2P_SESSION_PLAYER_DEATH"),
         hook.pilot(player.pilot(), "exploded", "P2P_SESSION_PLAYER_DEATH"),
+        hook.pilot(player.pilot(), "death", "P2P_SESSION_PLAYER_FINAL_DEATH"),
     }
 end
 
@@ -267,6 +268,9 @@ function P2P_SESSION_PILOT_ATTACKED ( victim, attacker, _damage )
 end
 function P2P_SESSION_PLAYER_DEATH ( p, _attacker )
     p2psession.player_died(p)
+end
+function P2P_SESSION_PLAYER_FINAL_DEATH ()
+    p2p_stop()
 end
 function P2P_SESSION_NPC_REPLICATION ( enabled )
     p2psession.accept_npc_replicas = enabled ~= false
