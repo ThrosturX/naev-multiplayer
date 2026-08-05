@@ -9,6 +9,7 @@ local MAX_HOSTS = 4096
 local MAX_QUERIES_PER_PEER = 128
 local MAX_ACTIVITY_SYSTEMS = 20
 local ACTIVITY_RETENTION = 15*60
+local INACTIVE_CLAIM_RETENTION = 60
 local ACTIVITY_PAYLOAD = 3000
 local MAX_CONTESTANTS = 4096
 local CONTESTANT_RETENTION = 90*24*60*60
@@ -34,6 +35,11 @@ local function canonical_endpoint ( endpoint )
    local port=endpoint_port(endpoint)
    if not host or not port then return nil end
    return host..":"..tostring(port)
+end
+
+local function endpoint_belongs_to ( meta, endpoint )
+   return meta and endpoint
+      and (endpoint==meta.endpoint or endpoint==meta.alternate)
 end
 
 function directory.new ( options )
@@ -79,6 +85,7 @@ function directory:disconnect_peer ( peer )
       if claim.peer==peer then
          claim.peer=nil
          claim.active=false
+         claim.inactive_since=stamp
          self:record_activity(system_name,false,stamp)
       end
    end
@@ -93,10 +100,15 @@ end
 
 function directory:prune ()
    self.objects:prune()
-   -- Claims are deliberately retained while bounded by MAX_HOSTS. A stale
-   -- hint costs one failed direct connection before normal local claiming,
-   -- while forgetting a reachable host can create a needless split brain.
    local stamp=self.now()
+   -- Brief directory disconnects should not immediately hide an otherwise
+   -- reachable host, but an old endpoint must not remain discoverable forever.
+   for system_name,claim in pairs(self.hosts) do
+      local inactive_since=claim.inactive_since or claim.seen
+      if not claim.active and stamp-inactive_since>=INACTIVE_CLAIM_RETENTION then
+         self.hosts[system_name]=nil
+      end
+   end
    local function prune_profiles ( profiles )
       local removed=false
       for key,entry in pairs(profiles) do
@@ -273,6 +285,7 @@ function directory:record_activity ( system_name, active, stamp )
 end
 
 function directory:send_hint ( peer, system_name, claim )
+   if endpoint_belongs_to(self.peers[peer],claim.endpoint) then return false end
    return self:send(peer,{type="hint",node=self.node_id,system=system_name,
       host=claim.node,endpoint=claim.endpoint,claim=claim.claim,
       ttl=60})
@@ -286,15 +299,19 @@ end
 
 function directory:send_candidates ( peer, system_name, node, candidate, same_public_ip )
    local sent={}
+   local recipient=self.peers[peer]
    local function send_candidate ( endpoint )
-      if endpoint and not sent[endpoint] then
+      if endpoint and not sent[endpoint]
+            and not endpoint_belongs_to(recipient,endpoint) then
          sent[endpoint]=true
          self:send_punch(peer,system_name,node,endpoint)
       end
    end
    send_candidate(candidate.endpoint)
    send_candidate(candidate.alternate)
-   if same_public_ip and candidate.advertised_port then
+   if same_public_ip and candidate.advertised_port
+         and (not recipient
+            or candidate.advertised_port~=recipient.advertised_port) then
       send_candidate("127.0.0.1:"..tostring(candidate.advertised_port))
    end
 end

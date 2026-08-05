@@ -33,6 +33,8 @@ settings.RECONCILE_POSITION_BIAS = 0.5
 -- ENet's default MTU is 1392 bytes and Naev's Lua binding does not expose
 -- unreliable fragmentation. Leave room for protocol and path overhead.
 settings.WORLD_PACKET_BUDGET = 1200
+settings.MULTIPLAYER_ID_MIN = 4
+settings.MULTIPLAYER_ID_MAX = 32
 
 settings.PLAYER_RECONCILE = {
    position_gain=1.5,correction_speed=400,velocity_rate=12,
@@ -67,13 +69,50 @@ end
 
 settings.valid_node_id=valid_node_id
 
--- Prefer the save-global identity, migrate a valid legacy event identity, or
--- create a new one as a last resort. The boolean tells the persistence adapter
--- that the returned value must be written to save-global storage.
-function settings.resolve_node_id ( current, persisted )
-   if valid_node_id(persisted) then return persisted,false end
-   if valid_node_id(current) then return current,true end
-   return random_id(),true
+local function utf8_length ( value )
+   local _bytes,count=value:gsub("[^\128-\193]","")
+   return count
+end
+
+local function canonical_identity_part ( value )
+   return value:lower():gsub("[%s%p]","")
+end
+
+function settings.validate_multiplayer_id ( value )
+   if type(value)~="string" then return nil end
+   local length=utf8_length(value)
+   local canonical=canonical_identity_part(value)
+   if length<settings.MULTIPLAYER_ID_MIN
+         or length>settings.MULTIPLAYER_ID_MAX
+         or utf8_length(canonical)<settings.MULTIPLAYER_ID_MIN
+         or value:find("[%z\1-\31\127]") then return nil end
+   return value
+end
+
+-- Lua numbers represent every integer used here exactly. Independent 32-bit
+-- lanes provide an 80-bit wire ID without relying on Naev's gameplay RNG,
+-- which can repeat across unrelated saves.
+function settings.derive_node_id ( captain, multiplayer_id )
+   assert(type(captain)=="string" and captain~="",
+      "captain is required to derive a node ID")
+   multiplayer_id=assert(settings.validate_multiplayer_id(multiplayer_id),
+      "valid multiplayer ID is required to derive a node ID")
+   captain=canonical_identity_part(captain)
+   assert(captain~="","captain must contain identity characters")
+   multiplayer_id=canonical_identity_part(multiplayer_id)
+   local input="MP2P player identity\0"..captain.."\0"..multiplayer_id
+   local lanes={
+      {5381,33},{2166136261,65599},{2246822519,131},
+   }
+   local result={}
+   for _index,lane in ipairs(lanes) do
+      local hash,multiplier=lane[1],lane[2]
+      for byte_index=1,#input do
+         hash=(hash*multiplier+input:byte(byte_index))%4294967296
+      end
+      result[#result+1]=string.format("%08x",hash)
+   end
+   return table.concat(result):sub(1,20)
 end
 
 function settings.normalize_endpoint ( endpoint )
@@ -105,7 +144,8 @@ function settings.defaults ( value )
    end
    value.bootstrap=bootstrap
    value.recent=value.recent or {}
-   if not valid_node_id(value.node_id) then value.node_id=random_id() end
+   if value.multiplayer_id==nil then value.multiplayer_id="" end
+   if not valid_node_id(value.node_id) then value.node_id="" end
    return value
 end
 

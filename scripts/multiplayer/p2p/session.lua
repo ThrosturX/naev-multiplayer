@@ -99,7 +99,8 @@ end
 
 session.normalize_endpoint=p2p_settings.normalize_endpoint
 session.defaults=p2p_settings.defaults
-session.resolve_node_id=p2p_settings.resolve_node_id
+session.validate_multiplayer_id=p2p_settings.validate_multiplayer_id
+session.derive_node_id=p2p_settings.derive_node_id
 
 function session.get_settings ()
    return session.settings
@@ -3478,6 +3479,9 @@ function session.start ( settings )
    clear_local_controls()
    session.accept_npc_replicas=true
    session.settings=session.defaults(settings)
+   if not p2p_settings.valid_node_id(session.settings.node_id) then
+      return nil,"multiplayer ID is not configured"
+   end
    local ok,host=pcall(
       enet.host_create,"*:"..tostring(session.settings.listen_port),
       64,p2p_settings.CANONICAL_CHANNEL+1)

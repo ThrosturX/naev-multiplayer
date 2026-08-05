@@ -24,21 +24,21 @@ local tests={}
 local function test(name, fn) tests[#tests+1]={name,fn} end
 local function eq(a,b) assert(a==b, tostring(a).." != "..tostring(b)) end
 
-test("node identity survives removable event state", function()
-   local node,store=p2p_settings.resolve_node_id("a1",nil)
-   eq(node,"a1")
-   eq(store,true)
-
-   node,store=p2p_settings.resolve_node_id("a1","b2")
-   eq(node,"b2")
-   eq(store,false)
-
-   local old_rnd=_G.rnd
-   _G.rnd={rnd=function () return 1 end}
-   node,store=p2p_settings.resolve_node_id("not-a-node","also-invalid")
-   _G.rnd=old_rnd
-   eq(node,"00000001000000010000000100000001")
-   eq(store,true)
+test("node identity derives from captain and private phrase", function()
+   eq(p2p_settings.validate_multiplayer_id("  blue moon  "),"  blue moon  ")
+   assert(not p2p_settings.validate_multiplayer_id("abc"))
+   assert(not p2p_settings.validate_multiplayer_id("a!!!"))
+   assert(not p2p_settings.validate_multiplayer_id(string.rep("x",33)))
+   local first=p2p_settings.derive_node_id("Captain John","blue moon")
+   eq(first,"508ad9ebac91f5092bf9")
+   eq(first,p2p_settings.derive_node_id("CAPTAIN-JOHN!","BLUE-MOON"))
+   eq(first,p2p_settings.derive_node_id(" captain john ","blue...moon"))
+   eq(first,p2p_settings.derive_node_id("Captain John","blue moon"))
+   assert(first:match("^[%x]+$") and #first==20)
+   assert(first~=p2p_settings.derive_node_id("Captain Jane","blue moon"))
+   assert(first~=p2p_settings.derive_node_id("Captain John","blue moon x"))
+   assert(not pcall(p2p_settings.derive_node_id,"","blue moon"))
+   assert(not pcall(p2p_settings.derive_node_id,"Captain John","abc"))
 end)
 
 test("remote AI profiles fall back when unavailable", function()

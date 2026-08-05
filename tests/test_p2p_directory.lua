@@ -149,6 +149,19 @@ assert(service:receive(local_peer,assert(codec.encode{type="query",node="50",sys
 assert(find_sent(local_at,local_peer,"punch","127.0.0.1:62001"))
 assert(find_sent(local_at,host_peer,"punch","127.0.0.1:64000"))
 
+-- Reusing the exact fixed endpoint must not make the directory introduce the
+-- new connection to the old identity at its own socket.
+local reused_peer={}
+assert(service:connect(reused_peer,"198.51.100.10:45000"))
+assert(service:receive(reused_peer,assert(codec.encode{
+   type="hello",node="70",cap="player",name="Reset Host",
+   endpoint="0.0.0.0:62001"})))
+local reused_at=#sent+1
+assert(service:receive(reused_peer,assert(codec.encode{
+   type="query",node="70",system="Delta Polaris"})))
+assert(not find_sent(reused_at,reused_peer,"hint"))
+assert(not find_sent(reused_at,reused_peer,"punch"))
+
 -- The latest verified claim wins regardless of node ordering.
 local lower_peer={}
 assert(service:connect(lower_peer,"198.51.100.5:47000"))
@@ -162,10 +175,14 @@ assert(service.hosts["Delta Polaris"].node=="10",
    "directory retained a lower-ID claimant instead of the latest claim")
 
 -- Disconnected claims remain useful as stale hints. Any new live claimant can
--- supersede a stale entry regardless of node ordering.
+-- supersede a stale entry regardless of node ordering, but inactive claims
+-- expire after one minute.
 service:disconnect_peer(host_peer)
-clock=100000; service:prune()
+local disconnected_at=clock
+clock=disconnected_at+59; service:prune()
 assert(service.hosts["Delta Polaris"].node=="10" and not service.hosts["Delta Polaris"].active)
+clock=clock+1; service:prune()
+assert(not service.hosts["Delta Polaris"])
 local replacement_peer={}
 assert(service:connect(replacement_peer,"198.51.100.30:48000"))
 assert(service:receive(replacement_peer,assert(codec.encode{type="hello",node="30",cap="player",name="Replacement"})))

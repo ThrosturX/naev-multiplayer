@@ -38,21 +38,25 @@ local function pick_one ( ipair )
     return ipair[ rnd.rnd( 1, #ipair ) ]
 end
 
-local P2P_NODE_ID_VAR = "multiplayer_p2p_node_id"
-
-local function p2p_persistent_defaults ( settings )
-    settings = settings or {}
-    local node_id, store = p2psession.resolve_node_id(
-        settings.node_id, var.peek(P2P_NODE_ID_VAR))
-    settings.node_id = node_id
-    if store then var.push(P2P_NODE_ID_VAR, node_id) end
-    return p2psession.defaults(settings)
+local function p2p_event_defaults ( settings )
+    settings = p2psession.defaults(settings)
+    local multiplayer_id = p2psession.validate_multiplayer_id(
+        settings.multiplayer_id)
+    if multiplayer_id then
+        settings.multiplayer_id = multiplayer_id
+        settings.node_id = p2psession.derive_node_id(
+            player.name(), multiplayer_id)
+    else
+        settings.multiplayer_id = ""
+        settings.node_id = ""
+    end
+    return settings, multiplayer_id ~= nil
 end
 
 function create ()
     mem.multiplayer = {
         servers = {},
-        p2p = p2p_persistent_defaults(),
+        p2p = p2p_event_defaults(),
         p2p_hook_ids = {},
     }
     hook.load("load")
@@ -686,6 +690,11 @@ local function multiplayer_settings ()
     for digit=0,9 do digit_whitelist[tostring(digit)] = true end
     local save_settings
     local y = 40 + intro:height() + 15
+    luatk.newText(wdw,20,y,115,30,_("Multiplayer ID:"))
+    local shown_multiplayer_id=tostring(
+        mem.multiplayer.p2p.multiplayer_id):gsub("#","＃")
+    luatk.newText(wdw,140,y,290,30,shown_multiplayer_id)
+    y = y + 45
     luatk.newText(wdw,20,y,115,30,_("Listen Port:"))
     local port_input = p2p_new_settings_input(wdw,140,y-5,80,30,5,
         {whitelist=digit_whitelist,
@@ -736,7 +745,10 @@ local function multiplayer_settings ()
         shown_status=nil
         local port = tonumber(port_input.str)
         local directory = p2psession.normalize_endpoint(relay_input.str)
-        if not port or port<0 or port>65535 or not directory then
+        local multiplayer_id = p2psession.validate_multiplayer_id(
+            mem.multiplayer.p2p.multiplayer_id)
+        if not multiplayer_id or not port or port<0 or port>65535
+                or not directory then
             shown_status="invalid"
             status_text:set("#r".._("Invalid").."#0")
         else
@@ -770,7 +782,7 @@ local function multiplayer_settings ()
     end
     p2p_button = luatk.newButton(wdw,20,sharing_y,200,30,
         _("World Sharing"),function()
-        if settings_dirty and not save_settings() then return end
+        if not save_settings() then return end
         mem.multiplayer.p2p.enabled = not mem.multiplayer.p2p.enabled
         if mem.multiplayer.p2p.enabled then p2p_start() else p2p_stop() end
         evt.save()
@@ -787,13 +799,20 @@ local function multiplayer_settings ()
     luatk.newButton(wdw,w-20-150,footer_y,150,30,
         _("Reset Cache").." #r".._("!!").."#0",function()
         luatk.yesno(_("Reset Multiplayer Cache?"),
-            _("This removes the multiplayer event and its registered hooks. Save and reload the game to start multiplayer again."),function()
+            _("This removes the multiplayer event and its registered hooks. Save and reload the game to start multiplayer again. Enter the same Multiplayer ID during onboarding to keep your current network identity and persistent object ownership."),function()
                 reset_cache = true
                 luatk.close()
             end,nil,_("Reset"),_("Cancel"))
     end)
 
     save_settings = function ()
+        local multiplayer_id = p2psession.validate_multiplayer_id(
+            mem.multiplayer.p2p.multiplayer_id)
+        if not multiplayer_id then
+            luatk.msg(_("Multiplayer ID Not Configured"),
+                _("Reset the multiplayer cache and complete onboarding to configure a Multiplayer ID."))
+            return false
+        end
         local port = tonumber(port_input.str)
         if not port or port<0 or port>65535 then
             mark_settings_changed()
@@ -847,6 +866,22 @@ end
 
 function P2P_ONBOARDING ()
     if mem.multiplayer.p2p.enabled or mem.multiplayer.p2p_onboarding_seen then return end
+    local settings = mem.multiplayer.p2p
+    local multiplayer_id = p2psession.validate_multiplayer_id(
+        settings.multiplayer_id)
+    while not multiplayer_id do
+        local entered = tk.input(_("Multiplayer ID:"),4,32,
+            _("Enter any short word or phrase here to distinguish your identify from other players. Players don't see your multiplayer ID."))
+        if not entered then return end
+        multiplayer_id=p2psession.validate_multiplayer_id(entered)
+        if not multiplayer_id then
+            tk.msg(_("Invalid Multiplayer ID"),
+                _("Enter a word or phrase from 4 to 32 characters."))
+        end
+    end
+    settings.multiplayer_id=multiplayer_id
+    settings.node_id=p2psession.derive_node_id(
+        player.name(),multiplayer_id)
     local enable_p2p = false
     vn.clear()
     vn.scene()
@@ -883,7 +918,13 @@ function load()
             servers = {},
         }
     end
-    mem.multiplayer.p2p = p2p_persistent_defaults(mem.multiplayer.p2p)
+    local identity_configured
+    mem.multiplayer.p2p, identity_configured =
+        p2p_event_defaults(mem.multiplayer.p2p)
+    if not identity_configured then
+        mem.multiplayer.p2p.enabled = false
+        mem.multiplayer.p2p_onboarding_seen = nil
+    end
     mem.multiplayer.p2p_hook_ids = mem.multiplayer.p2p_hook_ids or {}
     p2p_publish_config()
     evt.save()
