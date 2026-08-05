@@ -238,7 +238,20 @@ session._no_other_players_discovered=no_other_players_discovered
 session._refresh_time_controls=refresh_time_controls
 
 local function endpoint_valid ( endpoint )
-   return p2p_settings.normalize_endpoint(endpoint)==endpoint
+   return type(endpoint)=="string"
+      and p2p_settings.normalize_endpoint(endpoint)==endpoint
+end
+
+local function remote_endpoint_valid ( endpoint )
+   if not endpoint_valid(endpoint) then return false end
+   local host=endpoint:match("^([^:]+):")
+   return host~="0.0.0.0" and host~="*"
+end
+
+local function peer_endpoint ( peer, advertised )
+   local observed=peer and session.peers[peer]
+   if remote_endpoint_valid(observed) then return observed end
+   if remote_endpoint_valid(advertised) then return advertised end
 end
 
 local function endpoint_is_local_listener ( endpoint )
@@ -339,8 +352,14 @@ local function connect_known_peers ()
    for _index,endpoint in ipairs(session.settings.bootstrap) do
       connect_gameplay(endpoint)
    end
+   local stamp=now()
+   session.settings.recent=session.machine.topology:serialize_peers()
    for _index,entry in ipairs(session.settings.recent) do
-      connect_gameplay(entry.endpoint)
+      local last=session.recent_attempts[entry.endpoint] or -math.huge
+      if stamp-last>=p2p_settings.RECENT_REDIAL_INTERVAL then
+         session.recent_attempts[entry.endpoint]=stamp
+         connect_gameplay(entry.endpoint,entry.node)
+      end
    end
 end
 
@@ -2611,10 +2630,12 @@ local function handle_directory_message ( peer, message )
    end
    if not meta.verified or message.node~=meta.node then return end
    if message.type=="punch" and message.system==current_system()
+         and remote_endpoint_valid(message.endpoint)
          and message.peer~=session.settings.node_id then
       session.member_endpoints[message.peer]=message.endpoint
       connect_gameplay(message.endpoint,message.peer)
    elseif message.type=="hint" and message.system==current_system()
+         and remote_endpoint_valid(message.endpoint)
          and message.host~=session.settings.node_id
          and naev.claimTest(system.cur()) then
       session.member_endpoints[message.host]=message.endpoint
@@ -2679,11 +2700,10 @@ local function verify_gameplay_hello ( peer, message )
    meta.node=message.node
    meta.name=message.name
    meta.last_receive=now()
-   local observed=session.peers[peer]
-   local endpoint=endpoint_valid(observed) and observed or message.endpoint
-   if endpoint_valid(endpoint) then
+   local endpoint=peer_endpoint(peer,message.endpoint)
+   if endpoint then
       session.member_endpoints[message.node]=endpoint
-      session.machine.topology:add_peer(endpoint)
+      session.machine.topology:add_peer(endpoint,nil,message.node)
       session.settings.recent=session.machine.topology:serialize_peers()
    end
    refresh_time_controls()
@@ -2703,22 +2723,26 @@ end
 
 local remove_owner_population
 
-local function accept_claim_message ( message )
+local function accept_claim_message ( peer, message )
    if message.node==session.settings.node_id
          or message.system~=current_system() then return false end
    if not naev.claimTest(system.cur()) then return false end
    local old_state=session.machine.state
    local old_host=session.machine.host
    local old_claim=session.machine.claim
+   local endpoint=peer_endpoint(peer,message.endpoint)
    local candidate={
       node=message.node,system=message.system,visit=message.visit,
-      claim=message.epoch,endpoint=message.endpoint,
+      claim=message.epoch,endpoint=endpoint,
    }
    local accepted=session.machine:accept_claim(candidate)
    if not accepted then return false end
-   session.member_endpoints[message.node]=message.endpoint
-   session.machine.topology:remember_hint(
-      message.system,message.node,message.endpoint,message.epoch,now()+60)
+   if endpoint then
+      session.member_endpoints[message.node]=endpoint
+      session.machine.topology:remember_hint(
+         message.system,message.node,endpoint,message.epoch,now()+60)
+      session.settings.recent=session.machine.topology:serialize_peers()
+   end
    local changed=old_state~="guest" or old_host~=message.node
       or old_claim~=message.epoch
    if changed or (session.machine.state=="guest"
@@ -2939,7 +2963,7 @@ local function handle_gameplay_message ( peer, message )
             print("P2P: detected separate system host "..name)
          end
       end
-      accept_claim_message(message)
+      accept_claim_message(peer,message)
       return
    end
    local current=current_system()
@@ -2972,8 +2996,10 @@ local function handle_gameplay_message ( peer, message )
             and message.node==session.machine.host then
          session.recovering_from=nil
       end
-      if message.endpoint and endpoint_valid(message.endpoint) then
-         session.member_endpoints[message.node]=message.endpoint
+      local endpoint=peer_endpoint(peer,message.endpoint)
+      if endpoint then
+         session.member_endpoints[message.node]=endpoint
+         session.machine.topology:add_peer(endpoint,nil,message.node)
       end
       refresh_time_controls()
       return
@@ -3270,7 +3296,8 @@ local function redial_host_and_members ()
       end
    end
    for node,endpoint in pairs(session.member_endpoints) do
-      if node~=session.settings.node_id and not connected_node(node) then
+      if node~=session.settings.node_id and session.machine.members[node]
+            and not connected_node(node) then
          connect_gameplay(endpoint,node)
       end
    end
@@ -3302,6 +3329,7 @@ local function reconcile_participant_liveness ( stamp )
    end
    for _index,node in ipairs(stale) do
       session.machine:remove_member(node)
+      session.member_endpoints[node]=nil
       announce_player_leave(node)
       remove_owner_population(node,false)
       session.identities:remove(node)
@@ -3505,6 +3533,7 @@ function session.start ( settings )
    session.identities=identity.new(
       session.settings.node_id,local_player_name())
    session.member_endpoints={}
+   session.recent_attempts={}
    session.running=true
    session.ambient_spawning=true
    session.activity={}

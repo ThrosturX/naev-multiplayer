@@ -527,12 +527,26 @@ test("local-only player name aliases", function()
 end)
 
 test("peer cache persistence and bound", function()
-   local now=100
+   local now=40
    local t=topology.new("10",function() return now end)
    for i=1,40 do t:add_peer("127.0.0.1:"..i,i) end
    eq(#t.peers,32); eq(t.peers[1].endpoint,"127.0.0.1:40")
    local t2=topology.new("10",function() return now end); t2:load_peers(t:serialize_peers())
    eq(#t2.peers,32)
+end)
+
+test("automatic peer cache canonicalizes identities and expires", function()
+   local now=100
+   local peers=topology.new("a",function() return now end)
+   assert(not peers:add_peer("0.0.0.0:62001",nil,"10"))
+   assert(peers:add_peer("198.51.100.10:45000",nil,"10"))
+   assert(peers:add_peer("198.51.100.10:46000",nil,"10"))
+   local recent=peers:serialize_peers()
+   eq(#recent,1)
+   eq(recent[1].endpoint,"198.51.100.10:46000")
+   eq(recent[1].node,"10")
+   now=now+topology.AUTO_PEER_RETENTION+1
+   eq(#peers:serialize_peers(),0)
 end)
 
 test("stale host hints", function()
