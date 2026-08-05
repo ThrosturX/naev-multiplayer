@@ -9,11 +9,9 @@ local fmt = require "format"
 
 local communications = {}
 
-local SHORT_RANGE = 2
-local EXTENDED_RANGE = 5
-local WIDE_SYSTEM_CAP = 8
 local MAX_EVENTS_PER_UPDATE = 24
 local MAX_OUTBOX = 16
+local MAX_CAPABILITY_VALUE = 1024
 local DIRECTORY_REFRESH = 30
 local DIRECTORY_RECONNECT = 5
 local DIRECTORY_TIMEOUT = 8
@@ -25,15 +23,10 @@ local CAPABILITY_REFRESH = 1
 local CANONICAL_CHANNEL = 2
 local TRANSMITTER_SHIP = "Distress Beacon"
 
-local OUTFIT_SNIFFER = "Communications Sniffer"
-local OUTFIT_SHORT = "Short-Range Communications Sniffer"
-local OUTFIT_WIDE = "Wide-Area Communications Sniffer"
-local OUTFIT_SUITE = "Augmented Communications Suite"
-local OUTFIT_EXTENDED = "Extended Communications Suite"
-
 local runtime
 local remote_senders = {}
 local selected_systems = {}
+local outfit_capability_cache = {}
 
 local function now ()
    return naev.ticks()
@@ -43,6 +36,59 @@ local function display_text ( text )
    return tostring(text):gsub("#","＃")
 end
 
+local function tagged_value ( tags, field )
+   local prefix="multiplayer_"..field.."="
+   local value
+   for tag,enabled in pairs(tags) do
+      if enabled==true and type(tag)=="string"
+            and tag:sub(1,#prefix)==prefix then
+         local parsed=tonumber(tag:sub(#prefix+1))
+         if parsed and parsed==math.floor(parsed) and parsed>0
+               and parsed<=MAX_CAPABILITY_VALUE then
+            value=math.max(value or 0,parsed)
+         end
+      end
+   end
+   return value
+end
+
+local function outfit_capabilities ( o )
+   if not o then return end
+   local name=o:nameRaw()
+   local cached=outfit_capability_cache[name]
+   if cached~=nil then return cached or nil end
+   -- Outfit XML owns communications balance through multiplayer_* tags.
+   local tags=o:tags()
+   local capabilities={
+      receive_relay=tags.multiplayer_receive_relay==true,
+      receive_range=tagged_value(tags,"receive_range"),
+      send_range=tagged_value(tags,"send_range"),
+      wide_system_cap=tagged_value(tags,"wide_system_cap"),
+   }
+   if not capabilities.receive_relay and not capabilities.receive_range
+         and not capabilities.send_range and not capabilities.wide_system_cap then
+      outfit_capability_cache[name]=false
+      return
+   end
+   outfit_capability_cache[name]=capabilities
+   return capabilities
+end
+
+local function merge_capabilities ( target, source )
+   if source.receive_relay then target.receive_relay=true end
+   if source.receive_range then
+      target.receive_range=math.max(
+         target.receive_range or 0,source.receive_range)
+   end
+   if source.send_range then
+      target.send_range=math.max(target.send_range or 0,source.send_range)
+   end
+   if source.wide_system_cap then
+      target.wide_system_cap=math.max(
+         target.wide_system_cap or 0,source.wide_system_cap)
+   end
+end
+
 local function fitted_capabilities ()
    local p=player.pilot()
    if not p or not p:exists() then return end
@@ -50,43 +96,27 @@ local function fitted_capabilities ()
    local fitted=p:outfits()
    for slot in pairs(fitted) do
       local o=fitted[slot]
-      local name=o and o:nameRaw()
-      if name==OUTFIT_SNIFFER then
-         capabilities.receive_relay=true
-      elseif name==OUTFIT_SHORT then
-         capabilities.receive_range=math.max(
-            capabilities.receive_range or 0,SHORT_RANGE)
-      elseif name==OUTFIT_WIDE then
-         capabilities.receive_wide=true
-      elseif name==OUTFIT_SUITE then
-         capabilities.receive_range=math.max(
-            capabilities.receive_range or 0,SHORT_RANGE)
-         capabilities.send_range=math.max(
-            capabilities.send_range or 0,SHORT_RANGE)
-      elseif name==OUTFIT_EXTENDED then
-         capabilities.receive_range=math.max(
-            capabilities.receive_range or 0,EXTENDED_RANGE)
-         capabilities.send_range=math.max(
-            capabilities.send_range or 0,EXTENDED_RANGE)
-      end
+      local configured=outfit_capabilities(o)
+      if configured then merge_capabilities(capabilities,configured) end
    end
    local actives=p:actives()
    for index=1,#actives do
       local active=actives[index]
-      local name=active.outfit and active.outfit:nameRaw()
-      if active.active==true
-            and (name==OUTFIT_SUITE or name==OUTFIT_EXTENDED) then
+      local configured=outfit_capabilities(active.outfit)
+      if active.active==true and configured and configured.send_range then
          capabilities.transmit_active=true
       end
    end
    if next(capabilities) then return capabilities end
 end
 
+communications._fitted_capabilities=fitted_capabilities
+
 local function capability_key ( capabilities )
    return table.concat({
       capabilities.receive_relay and "1" or "0",
       tostring(capabilities.receive_range or 0),
-      capabilities.receive_wide and "1" or "0",
+      tostring(capabilities.wide_system_cap or 0),
       tostring(capabilities.send_range or 0),
    },":")
 end
@@ -151,7 +181,7 @@ function communications.observe ( message, direct_name, current_name )
       local distance=jump_distance(current_name,message.system)
       accepted=distance~=nil and distance<=capabilities.receive_range
    end
-   if not accepted and capabilities.receive_wide then
+   if not accepted and capabilities.wide_system_cap then
       accepted=selected_systems[message.system]==true
    end
    if not accepted then return false end
@@ -416,11 +446,12 @@ local function complete_selection ()
       capabilities.receive_range)
    for index=1,#ranged do wanted[ranged[index].system]=true end
 
-   if capabilities.receive_wide then
+   if capabilities.wide_system_cap then
       local count=0
       for index=1,#runtime.active_systems do
          local system_name=runtime.active_systems[index]
-         if system_name~=runtime.origin and count<WIDE_SYSTEM_CAP then
+         if system_name~=runtime.origin
+               and count<capabilities.wide_system_cap then
             if not wanted[system_name] then wanted[system_name]=true end
             count=count+1
          end

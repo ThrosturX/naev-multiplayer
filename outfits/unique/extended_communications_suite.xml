@@ -10,10 +10,15 @@
   <description>A five-jump transmitter and opportunistic receiver for communication between star systems.</description>
   <desc_extra>Extends the range of communication broadcasts by five jumps, allowing the user to communicate with pilots in other systems without dedicated equipment. May take a while to calibrate. Bounty hunters and rescuers alike consider it an invaluable tool.</desc_extra>
   <gfx_store>jammer1.avif</gfx_store>
+  <cpu>-24</cpu>
   <limit>communication_package</limit>
  </general>
  <specific type="modification">
   <lua>outfits/unique/communications_suite.lua</lua>
-  <energy_regen_malus>3</energy_regen_malus>
+  <energy_regen_malus>12</energy_regen_malus>
  </specific>
+ <tags>
+  <tag>multiplayer_receive_range=5</tag>
+  <tag>multiplayer_send_range=5</tag>
+ </tags>
 </outfit>

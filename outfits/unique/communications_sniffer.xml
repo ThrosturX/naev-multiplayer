@@ -13,4 +13,7 @@
   <limit>communication_package</limit>
  </general>
  <specific type="modification"/>
+ <tags>
+  <tag>multiplayer_receive_relay</tag>
+ </tags>
 </outfit>

@@ -13,6 +13,9 @@
   <limit>communication_package</limit>
  </general>
  <specific type="modification">
-  <energy_regen_malus>2</energy_regen_malus>
+  <energy_regen_malus>8</energy_regen_malus>
  </specific>
+ <tags>
+  <tag>multiplayer_wide_system_cap=8</tag>
+ </tags>
 </outfit>
