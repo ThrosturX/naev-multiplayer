@@ -3328,7 +3328,16 @@ local function reconcile_participant_liveness ( stamp )
 end
 
 local function liveness_tick ( stamp )
-   if not naev.claimTest(system.cur()) and session.machine.state=="guest" then
+   local active_system=system.cur()
+   local active_name=active_system:nameRaw()
+   local session_name=current_system()
+   if session_name and session_name~=active_name then
+      print("P2P: reconciling system transition from "
+         ..tostring(session_name).." to "..tostring(active_name))
+      session.enter(active_name)
+      return
+   end
+   if not naev.claimTest(active_system) and session.machine.state=="guest" then
       local system_name=current_system()
       print("P2P: local system claim requires hosting")
       session.leave()
