@@ -468,11 +468,6 @@ local function publish_directory_leave ( system_name )
    end
 end
 
-local function resource_get ( getter, name )
-   local ok,value=pcall(getter,name)
-   if ok then return value end
-end
-
 local function pilot_owned ( p )
    if p:withPlayer() then return true end
    local seen={}
@@ -1040,7 +1035,7 @@ local function owner_craft_faction ( owner )
    local fac=craft_factions[owner]
    if fac then return fac end
    local raw="P2P Craft "..owner
-   fac=resource_get(faction.get,raw)
+   fac=faction.exists(raw)
    if not fac then
       local display=session.identities
          and session.identities:display_name(owner) or owner
@@ -1052,7 +1047,7 @@ local function owner_craft_faction ( owner )
 end
 
 function session._replica_npc_faction ( message )
-   local fac=resource_get(faction.get,message.faction)
+   local fac=faction.exists(message.faction)
    if fac then return fac end
    local key=message.owner.."\0"..message.faction
    fac=session.npc_factions[key]
