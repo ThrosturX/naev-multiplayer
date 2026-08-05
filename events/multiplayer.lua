@@ -104,9 +104,10 @@ local function p2p_chat_available ()
     local pp = player.pilot()
     local nav_spob = pp:nav()
     local target = pp:target()
-    if target and target:ship():nameRaw() ~= "Signal Relay" then
-        local ok, disabled = pcall(function() return target:disabled() end)
-        if not ok or not disabled then return false end
+    if target and target:exists()
+            and target:ship():nameRaw() ~= "Signal Relay"
+            and not target:disabled() then
+        return false
     end
     return nav_spob == nil
 end
