@@ -61,11 +61,6 @@ local function ship_fallback_names ( s )
    return table.concat(names,",")
 end
 
-local function resource_get ( getter, name )
-   local ok,value=pcall(getter,name)
-   if ok then return value end
-end
-
 function manifest.player ( p, context )
    local current_ship=p:ship()
    local message=context.base
@@ -109,12 +104,12 @@ function manifest.authority ( p, entry, context )
 end
 
 function manifest.resolve_proxy_ship ( message )
-   if resource_get(ship.get,message.ship) then return message.ship,true end
+   if ship.exists(message.ship) then return message.ship,true end
    for encoded in (message.ship_fallbacks or ""):gmatch("([^,]+)") do
       local name=gameplay_codec.unescape(encoded)
-      if name and resource_get(ship.get,name) then return name,true end
+      if name and ship.exists(name) then return name,true end
    end
-   if resource_get(ship.get,"Plowshare") then return "Plowshare",false end
+   if ship.exists("Plowshare") then return "Plowshare",false end
 end
 
 local function replica_outfit_allowed ( o )

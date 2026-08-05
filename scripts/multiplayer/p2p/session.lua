@@ -1248,7 +1248,7 @@ local function spawn_entity_manifest ( message )
       return true
    end
    if existing then remove_replica(message.entity,false) end
-   if not resource_get(ship.get,message.ship) then return false end
+   if not ship.exists(message.ship) then return false end
    local fac
    if message.kind=="npc" then
       fac=session._replica_npc_faction(message)

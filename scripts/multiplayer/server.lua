@@ -168,11 +168,7 @@ local function _sanitize_name( suggest )
 end
 
 local function ok_shiptype ( shiptype )
-    if pcall( function() ship.get(shiptype) end ) then
-        return true
-    else
-        return false
-    end
+    return ship.exists(shiptype)
 end
 
 local MAX_NPCS = 8
